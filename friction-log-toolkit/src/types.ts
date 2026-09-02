@@ -14,12 +14,23 @@ export type Tag = WellKnownTag | (string & {});
 export const DEFAULT_TAG: Tag = "note";
 
 export interface LogEntry {
+  /**
+   * Short stable identifier used to target an entry with `edit`/`remove`, and
+   * to de-duplicate entries across files with `merge`. Entries created before
+   * this field existed are backfilled with one (and the file rewritten to
+   * persist it) the first time the log is read — see `store.ts`.
+   */
+  id: string;
   /** ISO-8601 timestamp, set at creation time and never modified. */
   timestamp: string;
   /** The free-text note the developer typed in the moment. */
   note: string;
   /** Tag used to group the entry in list output and the exported report. */
   tag: Tag;
+  /** Current branch name, captured automatically at `add` time if run inside a git repo. */
+  gitBranch?: string;
+  /** Short commit hash, captured automatically at `add` time if run inside a git repo. */
+  gitCommit?: string;
 }
 
 export interface LogFile {
