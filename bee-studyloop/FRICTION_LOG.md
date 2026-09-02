@@ -42,3 +42,59 @@ Notes captured while building the Bee StudyLoop submission, for the hackathon's 
 - Session-boundary detection from Bee itself (i.e., Bee already knowing "this was one continuous study session")
   would remove the one manual input (`title`, and implicitly "where does this session start/end") StudyLoop still
   asks a caller to provide.
+
+## Round 2: advanced features
+
+Notes from the second pass (idempotent ingestion, leech detection, topic search, adaptive ordering, incremental
+ingestion, portable export).
+
+### What worked well
+
+- Writing `leech.ts` and `priority.ts` as pure functions with the exact same discipline as `scheduler.ts` (explicit
+  `now`/state in, new state out, zero I/O) made both trivially unit-testable and meant `studyService.ts` stayed a
+  thin orchestration layer instead of accumulating scattered leech/priority logic inline in `recordReview` and
+  `listDueCards`.
+- Reusing the existing `FlashcardGenerator.generate()` seam for incremental ingestion — rather than inventing a
+  second "generate just the delta" method on the interface — meant `appendSessionSegments` needed zero changes to
+  `flashcardGenerator.ts` at all; the dedupe-by-front-text step alone was enough to make full-transcript
+  regeneration behave like delta generation from the caller's point of view.
+
+### Friction encountered
+
+1. **The leech "which grades count as a failure" question had no single right answer.** True SM-2 has one
+   pass/fail boundary (quality >= 3). The friendly four-point vocabulary (`again`/`hard`/`good`/`easy`) blurs that:
+   `hard` is technically a pass in `scheduler.ts`'s quality mapping, but it's clearly not a *confident* recall
+   either. The spec only says a "good"/"easy" grade should clear a leech, so I made `hard` a no-op for the leech
+   streak (neither advances nor resets it) rather than either treating it as a failure or a full clear — a
+   defensible middle ground, but genuinely underspecified, and a different reasonable implementation would treat
+   `hard` as clearing the streak too.
+2. **Designing a priority-score formula meant picking arbitrary-feeling weights with no usage data to tune
+   against.** Why is the leech bonus 10 and not 5 or 20? Why is the ease-factor multiplier 2 and not 1? There's no
+   principled answer without real review data to calibrate against — 10 was chosen because it comfortably
+   dominates the realistic range of `overdueDays` in a demo/test setting (single-digit days) without being so
+   large that overdue-ness stops mattering for leeches entirely. This is called out explicitly in the code comment
+   and README rather than dressed up as more rigorous than it is.
+3. **Testing the priority ordering over real HTTP turned out to be impractical, not just inconvenient.** Every
+   `POST /review/:cardId` call reschedules a card's `dueAt` at least one day into the future (SM-2's minimum
+   interval is 1 day, even after a failing grade) — so a card that was just made a leech is immediately *not* due
+   any more at the real wall-clock "now" the HTTP route uses, and there's no way to ask the running server "what
+   would `/review/due` return three days from now" without either sleeping the test for real days or adding a
+   test-only clock-injection endpoint (which would be worse: a code path that exists only for tests). Calling
+   `listDueCards(now)` directly — the exact function the route delegates to, with an injected future `now` — was
+   the honest way to test the real ordering logic without either compromise.
+4. **Incremental ingestion's "don't duplicate already-processed segments" requirement has a real tradeoff, not a
+   clean solution.** Regenerating over the *full* transcript on every `PATCH` (then dropping any candidate whose
+   front matches an existing card) correctly catches Q&A pairs and definitions that straddle the old/new segment
+   boundary, which a "only look at the new segments" approach would miss entirely. The cost: the generator's own
+   "no Q&A/definition matches found anywhere -> fall back to cloze deletion" tier only ever fires once per session,
+   on whichever ingest/append first produces zero tier-1/2 matches — a later append whose new content is pure
+   cloze-fallback material (no question, no "X is Y" statement) won't get a card at all if *any* earlier content
+   already tripped tier-1/2, because the generator never sees "zero cards so far" again. Documented rather than
+   silently accepted: a production version would need the fallback tier to reason about "new" vs "already covered"
+   content explicitly, not just "cards.length === 0 for this call."
+5. **Picking a portable export format meant weighing correctness (CSV) against convenience (TSV) for real study
+   content.** Flashcard fronts/backs are free text generated from lecture-style sentences, which routinely contain
+   commas — a proper CSV export would need quoting/escaping around every field, which is easy to get subtly wrong
+   (embedded quotes, embedded newlines). Tab-separated sidesteps that almost entirely since a literal tab is far
+   rarer in prose, at the cost of very rare tab characters getting silently stripped instead of escaped — an
+   acceptable simplification for a hackathon-scope export, called out in the README rather than hidden.

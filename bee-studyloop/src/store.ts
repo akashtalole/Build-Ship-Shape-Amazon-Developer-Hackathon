@@ -3,6 +3,7 @@ import type { Flashcard, StudySession } from "./types.js";
 const sessions = new Map<string, StudySession>();
 const flashcards = new Map<string, Flashcard>();
 const cardIdsBySession = new Map<string, string[]>();
+const sessionIdByIdempotencyKey = new Map<string, string>();
 
 export function saveSession(session: StudySession): void {
   sessions.set(session.id, session);
@@ -37,4 +38,14 @@ export function listFlashcardsBySession(sessionId: string): Flashcard[] {
 
 export function listAllFlashcards(): Flashcard[] {
   return [...flashcards.values()];
+}
+
+/** Looks up a previously ingested session by the caller-supplied idempotency key, if any. */
+export function getSessionIdForIdempotencyKey(key: string): string | undefined {
+  return sessionIdByIdempotencyKey.get(key);
+}
+
+/** Records which session a given idempotency key resolved to, for future retries. */
+export function setIdempotencyKey(key: string, sessionId: string): void {
+  sessionIdByIdempotencyKey.set(key, sessionId);
 }

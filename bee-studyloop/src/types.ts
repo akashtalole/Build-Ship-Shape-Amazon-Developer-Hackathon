@@ -25,6 +25,16 @@ export interface StudySession {
   createdAt: string; // ISO timestamp
   segments: TranscriptSegment[];
   summary: string;
+
+  // Heuristic topic tags extracted from the transcript (see topics.ts) —
+  // simple keyword frequency, NOT real NLP/topic modeling. Recomputed over
+  // the full transcript on ingest and on every incremental append.
+  topics: string[];
+
+  // Caller-supplied dedupe key for idempotent `POST /sessions` retries (see
+  // `ingestSession` in studyService.ts). Undefined when the caller didn't
+  // send one.
+  idempotencyKey?: string;
 }
 
 /** A simplified four-point recall grade, in place of raw SM-2's 0-5 scale. */
@@ -37,6 +47,11 @@ export interface Flashcard {
   back: string;
   createdAt: string; // ISO timestamp
 
+  // Inherited from the parent session's `topics` at the moment this card was
+  // generated (initial ingest or a later incremental append) — see
+  // `GET /flashcards/search?topic=`.
+  tags: string[];
+
   // Spaced-repetition scheduling state (see scheduler.ts).
   interval: number; // days until the next review
   easeFactor: number; // SM-2 "E-Factor", how quickly the interval grows
@@ -45,4 +60,10 @@ export interface Flashcard {
 
   lastReviewedAt?: string; // ISO timestamp
   lastGrade?: RecallGrade;
+
+  // Leech-detection state (see leech.ts). A card becomes a leech after
+  // enough consecutive failing grades in a row; a single good/easy grade
+  // clears it.
+  consecutiveFailures: number;
+  isLeech: boolean;
 }

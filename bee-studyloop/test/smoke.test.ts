@@ -12,6 +12,10 @@ import type { AddressInfo } from "node:net";
 import { createApp } from "../src/server.js";
 import { TemplateFlashcardGenerator } from "../src/flashcardGenerator.js";
 import { initialSchedulerState, scheduleReview } from "../src/scheduler.js";
+import { initialLeechState, LEECH_THRESHOLD, updateLeechState } from "../src/leech.js";
+import { priorityScore } from "../src/priority.js";
+import { extractTopics } from "../src/topics.js";
+import { listDueCards } from "../src/studyService.js";
 
 async function main() {
   const generator = new TemplateFlashcardGenerator();
@@ -19,6 +23,7 @@ async function main() {
   const httpServer = app.listen(0);
   const { port } = httpServer.address() as AddressInfo;
   const base = `http://127.0.0.1:${port}`;
+  const headers = { "Content-Type": "application/json" };
 
   // --- Ingest a study session transcript as diarized segments ---
   const transcript = [
@@ -167,6 +172,282 @@ async function main() {
   const hardAfterEasy = scheduleReview(easy, "hard", new Date("2026-01-02T00:00:00.000Z"));
   assert.ok(hardAfterEasy.easeFactor < easy.easeFactor, "a 'hard' grade decreases the ease factor");
   console.log("✓ scheduler.ts: direct unit checks of interval and ease-factor math pass");
+
+  // ===================================================================
+  // Advanced features
+  // ===================================================================
+
+  // --- Feature 1: idempotent session ingestion ---
+  const idemKey = "retry-key-123";
+  const idemTranscript = [
+    { text: "Osmoregulation is the process of maintaining fluid and electrolyte balance." },
+    { text: "What is osmoregulation?" },
+    { text: "It is the process that maintains fluid and electrolyte balance in an organism." },
+  ];
+  const firstIngestRes = await fetch(`${base}/sessions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Idempotency check", transcript: idemTranscript, idempotencyKey: idemKey }),
+  });
+  assert.equal(firstIngestRes.status, 201);
+  const firstIngestBody = await firstIngestRes.json();
+  assert.ok(firstIngestBody.flashcards.length >= 1, "the first ingest of the idempotency-key session generates flashcards");
+
+  const retryIngestRes = await fetch(`${base}/sessions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Idempotency check", transcript: idemTranscript, idempotencyKey: idemKey }),
+  });
+  assert.equal(retryIngestRes.status, 201);
+  const retryIngestBody = await retryIngestRes.json();
+  assert.equal(retryIngestBody.session.id, firstIngestBody.session.id, "retrying POST /sessions with the same idempotencyKey returns the original session id");
+  assert.deepEqual(
+    retryIngestBody.flashcards.map((c: { id: string }) => c.id).sort(),
+    firstIngestBody.flashcards.map((c: { id: string }) => c.id).sort(),
+    "retrying does not mint new/duplicate flashcard ids"
+  );
+  console.log("✓ POST /sessions with a repeated idempotencyKey returns the original session/flashcards instead of duplicating them");
+
+  const sessionAfterRetry = await (await fetch(`${base}/sessions/${firstIngestBody.session.id}`)).json();
+  assert.equal(
+    sessionAfterRetry.flashcards.length,
+    firstIngestBody.flashcards.length,
+    "the session's stored flashcard count is unaffected by the idempotent retry (no duplicates were persisted)"
+  );
+  console.log("✓ idempotent retries leave no duplicate flashcards behind in storage");
+
+  // --- Feature 2: leech detection ---
+  const leechIngestRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Leech test", transcript: "Entropy is a measure of disorder in a system." }),
+    })
+  ).json();
+  assert.ok(leechIngestRes.flashcards.length >= 1, "the leech-test session generates at least one flashcard");
+  const leechCard = leechIngestRes.flashcards[0];
+  assert.equal(leechCard.isLeech, false, "a freshly generated card is not a leech");
+  assert.equal(leechCard.consecutiveFailures, 0, "a freshly generated card has zero consecutive failures");
+
+  let lastLeechReview: { isLeech: boolean; consecutiveFailures: number } | undefined;
+  for (let i = 0; i < LEECH_THRESHOLD; i++) {
+    const r = await fetch(`${base}/review/${leechCard.id}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ grade: "again" }),
+    });
+    lastLeechReview = await r.json();
+  }
+  assert.equal(lastLeechReview!.consecutiveFailures, LEECH_THRESHOLD);
+  assert.equal(lastLeechReview!.isLeech, true, `a card should be flagged a leech after ${LEECH_THRESHOLD} consecutive "again" grades`);
+  console.log(`✓ a card failing ("again") ${LEECH_THRESHOLD} times in a row is flagged isLeech: true`);
+
+  const leechesRes = await (await fetch(`${base}/review/leeches`)).json();
+  assert.ok(leechesRes.some((c: { id: string }) => c.id === leechCard.id), "GET /review/leeches surfaces the flagged card");
+  console.log("✓ GET /review/leeches surfaces cards flagged as leeches");
+
+  const clearedRes = await (
+    await fetch(`${base}/review/${leechCard.id}`, { method: "POST", headers, body: JSON.stringify({ grade: "good" }) })
+  ).json();
+  assert.equal(clearedRes.isLeech, false, "a single 'good' grade clears the leech flag");
+  assert.equal(clearedRes.consecutiveFailures, 0, "a single 'good' grade resets the failure streak");
+  console.log('✓ a single "good" grade clears the leech flag and resets the failure streak');
+
+  const leechesAfterClear = await (await fetch(`${base}/review/leeches`)).json();
+  assert.ok(!leechesAfterClear.some((c: { id: string }) => c.id === leechCard.id), "cleared card no longer appears in the leech list");
+  console.log("✓ GET /review/leeches no longer lists a card once its leech flag is cleared");
+
+  // --- Feature 3: topic tagging + search across separate sessions ---
+  const topicSessionA = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Cell biology deep dive",
+        transcript:
+          "Ribosome is the cellular structure that synthesizes proteins. Ribosome activity increases during growth. What is a ribosome? Ribosome function is essential for protein synthesis.",
+      }),
+    })
+  ).json();
+  const topicSessionB = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Protein synthesis review",
+        transcript:
+          "The ribosome reads messenger RNA to build proteins. Ribosome structure includes two subunits. Ribosome complexes are found throughout the cytoplasm.",
+      }),
+    })
+  ).json();
+  assert.ok(
+    topicSessionA.session.topics.length >= 1 && topicSessionA.session.topics.length <= 3,
+    "each session gets 1-3 heuristic topic tags"
+  );
+  console.log("✓ POST /sessions extracts 1-3 heuristic topic tags per session, attached to its flashcards");
+
+  const searchRes = await (await fetch(`${base}/flashcards/search?topic=ribosome`)).json();
+  const searchSessionIds = new Set(searchRes.map((c: { sessionId: string }) => c.sessionId));
+  assert.ok(searchRes.length >= 2, "the topic search finds flashcards from the topic");
+  assert.ok(
+    searchSessionIds.has(topicSessionA.session.id) && searchSessionIds.has(topicSessionB.session.id),
+    "GET /flashcards/search?topic= finds matching flashcards across two different sessions"
+  );
+  console.log(`✓ GET /flashcards/search?topic=ribosome finds flashcards across ${searchSessionIds.size} separate sessions`);
+
+  const emptySearchRes = await fetch(`${base}/flashcards/search`);
+  assert.equal(emptySearchRes.status, 400, "a missing ?topic= query parameter is rejected with a 400");
+  console.log("✓ GET /flashcards/search without a topic query parameter returns a clean 400");
+
+  const directTopics = extractTopics([{ text: "Ribosome is important. Ribosome makes proteins. Ribosome ribosome ribosome." }]);
+  assert.ok(directTopics.includes("ribosome"), "extractTopics: the most frequent content word becomes a topic tag");
+  console.log("✓ topics.ts: direct unit check of the extractTopics frequency heuristic");
+
+  // --- Feature 4: adaptive review ordering ---
+  const orderingIngestRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Ordering test",
+        transcript: [
+          { text: "Valence is the combining power of an atom." },
+          { text: "What is valence?" },
+          { text: "It is the number of electrons an atom can lose gain or share." },
+          { text: "Isotopes are atoms of the same element with different neutron counts." },
+          { text: "What are isotopes?" },
+          { text: "They are atoms with the same proton count but different neutron counts." },
+        ],
+      }),
+    })
+  ).json();
+  assert.ok(orderingIngestRes.flashcards.length >= 2, "the ordering-test session yields at least two flashcards");
+  const [orderCardA, orderCardB] = orderingIngestRes.flashcards;
+
+  // Fail card A three times in a row to make it a leech (also drags its ease factor down).
+  for (let i = 0; i < LEECH_THRESHOLD; i++) {
+    await fetch(`${base}/review/${orderCardA.id}`, { method: "POST", headers, body: JSON.stringify({ grade: "again" }) });
+  }
+  const refreshedOrderSession = await (await fetch(`${base}/sessions/${orderingIngestRes.session.id}`)).json();
+  const refreshedOrderCardA = refreshedOrderSession.flashcards.find((c: { id: string }) => c.id === orderCardA.id);
+  assert.equal(refreshedOrderCardA.isLeech, true, "card A is now a leech");
+
+  // Card B is left untouched (never reviewed): still due immediately, baseline ease factor.
+  // listDueCards is the same pure function GET /review/due delegates to (with an
+  // injectable "now") — call it directly with a fixed future "now" far enough out that
+  // both cards are due again (card A's post-failure interval is only 1 day) so we can
+  // observe the actual ordering it produces without sleeping the test for real days.
+  const futureNow = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  const dueLater = listDueCards(futureNow);
+  const idxA = dueLater.findIndex((c) => c.id === orderCardA.id);
+  const idxB = dueLater.findIndex((c) => c.id === orderCardB.id);
+  assert.ok(idxA !== -1 && idxB !== -1, "both cards are due once enough time has passed");
+  assert.ok(idxA < idxB, "a leech card is ranked ahead of a non-leech card even though both are due");
+  console.log("✓ GET /review/due's ordering (listDueCards) ranks a leech/harder card ahead of an equally-due non-leech card");
+
+  // --- Feature 5: streaming/incremental ingestion ---
+  const streamInitial = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Streaming lecture",
+        transcript: [
+          { text: "Diffusion is the movement of molecules from high to low concentration." },
+          { text: "What is diffusion?" },
+          { text: "It is passive movement of particles down a concentration gradient." },
+        ],
+      }),
+    })
+  ).json();
+  const initialCardCount = streamInitial.flashcards.length;
+  assert.ok(initialCardCount >= 1, "the streaming-test session's initial batch yields flashcards");
+
+  const patchRes = await fetch(`${base}/sessions/${streamInitial.session.id}/segments`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({
+      segments: [
+        { text: "Active transport is the movement of molecules against a concentration gradient using energy." },
+        { text: "What is active transport?" },
+        { text: "It is movement against the gradient that requires ATP." },
+      ],
+    }),
+  });
+  assert.equal(patchRes.status, 200);
+  const patchBody = await patchRes.json();
+  assert.ok(patchBody.newFlashcards.length >= 1, "appending new segments generates at least one new flashcard");
+  console.log(`✓ PATCH /sessions/:id/segments generates ${patchBody.newFlashcards.length} new flashcard(s) from just the appended material`);
+
+  const afterPatch = await (await fetch(`${base}/sessions/${streamInitial.session.id}`)).json();
+  assert.equal(
+    afterPatch.flashcards.length,
+    initialCardCount + patchBody.newFlashcards.length,
+    "no duplicate flashcards were created for the segments that were already processed"
+  );
+  const originalIds = new Set(streamInitial.flashcards.map((c: { id: string }) => c.id));
+  assert.ok(
+    [...originalIds].every((id) => afterPatch.flashcards.some((c: { id: string }) => c.id === id)),
+    "the original flashcards are preserved after the append"
+  );
+  console.log("✓ appending segments via PATCH does not duplicate flashcards already generated from earlier segments");
+
+  assert.ok(afterPatch.session.segments.length > streamInitial.session.segments.length, "the session's segment list grows after an append");
+  assert.ok(afterPatch.session.summary.includes("Active transport"), "the session summary is updated to reflect the fuller transcript");
+  console.log("✓ PATCH /sessions/:id/segments updates the session's segment list and summary to reflect the fuller transcript");
+
+  const missingPatchRes = await fetch(`${base}/sessions/not-a-real-session-id/segments`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ segments: "more text" }),
+  });
+  assert.equal(missingPatchRes.status, 404);
+  console.log("✓ PATCH /sessions/:id/segments for an unknown session id returns a clean 404");
+
+  // --- Feature 6: portable export ---
+  const exportRes = await fetch(`${base}/sessions/${streamInitial.session.id}/export`);
+  assert.equal(exportRes.status, 200);
+  const exportText = await exportRes.text();
+  const exportLines = exportText.trim().split("\n");
+  assert.equal(exportLines[0], "front\tback\ttags", "the export has a header row with front/back/tags columns");
+  assert.equal(exportLines.length - 1, afterPatch.flashcards.length, "the export has exactly one row per flashcard in the session");
+  assert.equal(exportLines[1].split("\t").length, 3, "each export row has exactly three tab-separated columns");
+  console.log(`✓ GET /sessions/:id/export returns a well-formed TSV (header + ${exportLines.length - 1} row(s))`);
+
+  const globalExportRes = await fetch(`${base}/export`);
+  assert.equal(globalExportRes.status, 200);
+  const globalExportText = await globalExportRes.text();
+  assert.ok(globalExportText.startsWith("front\tback\ttags"), "the global export also has the header row");
+  console.log("✓ GET /export returns a global TSV export of flashcards across every session");
+
+  const missingExportRes = await fetch(`${base}/sessions/not-a-real-session-id/export`);
+  assert.equal(missingExportRes.status, 404);
+  console.log("✓ GET /sessions/:id/export for an unknown session id returns a clean 404");
+
+  // --- Direct unit-style checks: leech state machine ---
+  let leechState = initialLeechState();
+  for (let i = 0; i < LEECH_THRESHOLD - 1; i++) {
+    leechState = updateLeechState(leechState, "again");
+    assert.equal(leechState.isLeech, false, "not yet flagged before the threshold is reached");
+  }
+  leechState = updateLeechState(leechState, "again");
+  assert.equal(leechState.isLeech, true, `becomes a leech at exactly ${LEECH_THRESHOLD} consecutive failures`);
+  leechState = updateLeechState(leechState, "good");
+  assert.deepEqual(leechState, { consecutiveFailures: 0, isLeech: false }, "a 'good' grade clears the leech flag and resets the streak");
+  console.log("✓ leech.ts: direct unit checks of the leech state machine");
+
+  // --- Direct unit-style checks: priority-score formula ---
+  const priorityNow = new Date("2026-01-10T00:00:00.000Z");
+  const overdueNotLeech = priorityScore(
+    { dueAt: new Date(priorityNow.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString(), isLeech: false, easeFactor: 2.5 },
+    priorityNow
+  );
+  const barelyDueLeech = priorityScore({ dueAt: priorityNow.toISOString(), isLeech: true, easeFactor: 2.5 }, priorityNow);
+  assert.ok(barelyDueLeech > overdueNotLeech, "the leech bonus outweighs several days of plain overdue-ness");
+  const lowEaseCard = priorityScore({ dueAt: priorityNow.toISOString(), isLeech: false, easeFactor: 1.3 }, priorityNow);
+  const baselineEaseCard = priorityScore({ dueAt: priorityNow.toISOString(), isLeech: false, easeFactor: 2.5 }, priorityNow);
+  assert.ok(lowEaseCard > baselineEaseCard, "a lower ease factor (historically harder card) increases priority");
+  console.log("✓ priority.ts: direct unit checks of the priority-score formula");
 
   httpServer.close();
   console.log("\nAll StudyLoop smoke tests passed.");
