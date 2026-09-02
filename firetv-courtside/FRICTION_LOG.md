@@ -1,0 +1,85 @@
+# Friction Log — CourtSide
+
+Notes captured while building the Fire TV CourtSide submission, for the hackathon's optional friction-log bonus.
+
+## What worked well
+
+- Shaping `CommentaryProvider` around a Bedrock-style call (`system` + `instruction` + `context` in, text out) up
+  front made the interface obviously correct before writing any implementation — it's exactly what a real
+  `ConverseCommand` payload looks like, so `TemplateCommentaryProvider` and a future `BedrockCommentaryProvider`
+  are true drop-in siblings rather than the template implementation quietly baking in assumptions a real model call
+  couldn't share.
+- Testing over real HTTP (`fetch` against a live `http.Server`, not calling `gameService` functions directly) caught
+  a real bug: my first cut of `server.ts` had `handleError(err, res)` with the arguments swapped on one route
+  (copy-paste from a different call site) — a unit test calling the service layer directly would never have
+  exercised the Express error path and this would have silently 500'd (actually thrown, since `res` would have been
+  `undefined`) in the running server.
+- Deciding event validation should live in `gameService.ts` rather than `server.ts` paid off immediately: the same
+  validation (unknown event type, a `score` missing `points`) is exercised identically whether it arrives over HTTP
+  or gets called directly in a future unit test, and it's the one thing standing between a garbled CV detection and
+  a corrupted running score.
+
+## Friction encountered
+
+1. **"Reasonable template fallback" is genuinely a design decision, not a mechanical one.** Without an LLM, a
+   template has to decide how much personality to fake — too flat ("Score: home +2") reads as a log line, not
+   commentary; too much variety per event type risks feeling incoherent across a run. Settled on 2-3 seeded (not
+   truly random) phrasings per event type keyed off the event's own ID, so the output is varied across events but
+   deterministic for a given event — useful for asserting on it in tests without either flaky randomness or every
+   line reading identically.
+2. **Q&A template fallback can't actually understand a question, only pattern-match it.** A real Bedrock-backed
+   provider trivially handles "why did the ref call that?" or "is that a common foul in this league?", but the
+   template fallback only recognizes a handful of keyword buckets (score/foul/turnover/recap) and falls back to a
+   generic state summary otherwise. That's an honest limitation of the fallback, not the interface — the seam
+   itself doesn't restrict question complexity at all once a real LLM is behind it.
+3. **No real CV pipeline or sports data API to integrate against in this environment** — same shape of gap as the
+   sibling submissions not having Ring/Alexa device credentials. `POST /games/:id/events` deliberately mirrors the
+   generic shape (`type`, `team`/`player`, `points`/`description`) any such feed would produce, so a real CV
+   pipeline or a play-by-play API integration becomes a translation layer in front of this same endpoint rather
+   than a rewrite of the event model.
+
+## Round 2: advanced features
+
+1. **SSE with Express is mostly fine, but the test is the hard part, not the server code.** Writing the
+   `text/event-stream` route itself was ~15 lines (`writeHead` with the three standard headers, `res.write` a
+   `data: ...\n\n` line per push, unsubscribe on `req.on("close")`). The friction was entirely on the test side:
+   Node's `fetch()` resolves as soon as headers arrive, so the request/response cycle never "completes" while a
+   stream stays open, and you have to read the body as a `ReadableStream` via `.getReader()` and race it against a
+   timeout rather than just `await`ing a JSON body like every other test in this file. Worth the trouble — it's the
+   only way to prove the push actually fires, rather than just asserting the route returns 200 with the right
+   `Content-Type`.
+2. **Designing "notable" was the actual design decision here, and it's easy to either over- or under-scope it.** A
+   heuristic that escalates too much (e.g. "any score is notable") defeats the point of having a fast path at all;
+   one that escalates too little (e.g. "only game_end is notable") would silently flatten genuinely big moments
+   (a buzzer-beater go-ahead three) into the same generic template as a garbage-time free throw. Landed on
+   "does this event change who's winning, or is it flagged serious by its own description" — cheap to compute from
+   data already in hand (no new event fields, no separate classifier call), and it reads as an obviously correct
+   line to draw rather than an arbitrary one. The one thing it can't catch: a `description` that under-reports
+   severity (a feed that doesn't bother tagging a foul as "flagrant") — an honest limitation of a keyword heuristic,
+   same shape as the Q&A template's keyword-matching limitation noted above.
+3. **Resumable-feed cursor: ID vs. timestamp is a real tradeoff, not a formality.** A timestamp cursor is simpler to
+   reason about and works even if the client only ever logged "the time I last saw a line," but two commentary
+   lines generated in the same event-loop tick can land on the same millisecond, making a strict `createdAt >
+   since` comparison silently drop or double-return an entry at the boundary. An ID cursor sidesteps that
+   completely — it's resolved by *position* in the stored (newest-first) list, not by comparing clock values — but
+   it requires the client to have actually captured an ID rather than "just the last timestamp I have," and it
+   breaks if that specific entry is ever pruned. Shipped both (ID preferred, exact; timestamp as a documented, best
+   -effort fallback) rather than picking one, since a real Fire TV client is exactly the kind of consumer that would
+   reasonably have either on hand depending on how it persisted state before backgrounding.
+4. **Per-viewer rate limiting needs a key strategy decided up front, or it silently limits the wrong thing.** The
+   naive version — rate-limit by IP alone — would have let one viewer's spam exhaust the budget for every other
+   viewer behind the same NAT/proxy (a real risk for a shared living-room Fire TV, or several viewers on one home
+   network), while a version keyed only by `gameId` would let one viewer lock out everyone watching that game. Went
+   with `(gameId, viewerId)` when a viewer ID is available and `(gameId, IP)` as the fallback the route already had
+   to support (since `/ask` had no required viewer identity before this round) — which also meant threading an
+   optional `viewerId` through the existing `/ask` body rather than adding a new required field, so the endpoint's
+   old callers (no `viewerId` at all) keep working unchanged.
+
+## Feature requests
+
+- A minimal, published schema for a "generic play-by-play event" (type, team/player, timestamp, description) that
+  Fire TV sports hackathon entries could standardize against, so a CV pipeline built by one team and a commentary
+  backend built by another could interoperate without both re-inventing the same event shape.
+- A lightweight Fire OS/Vega overlay starter sample specifically for "poll an HTTP endpoint and render/speak
+  incoming text lines without blocking video" would have made the frontend integration point in this README more
+  concrete to describe precisely.
