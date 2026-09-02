@@ -25,6 +25,7 @@ Alexa+'s agent can call these tools, in combination, to complete multi-step requ
 | `set_budget` / `get_budget_status` | Set and check weekly budgets per category |
 | `generate_weekly_narrative` | Turn the week's data into a natural-language digest via **MCP sampling** |
 | `sync_household_calendar` | Sync tasks to a shared calendar, streaming **progress notifications** per task |
+| `run_morning_briefing` | **Compound tool**: chains tasks + assignment + stock + budget into one call, then narrates them |
 
 Beyond tools, the server also exposes:
 
@@ -64,6 +65,18 @@ Beyond tools, the server also exposes:
   `structuredContent` validated against a declared `outputSchema` alongside their text summary.
 - **Tool-use safety hints.** Every tool declares `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`
   annotations, the spec's mechanism for a client to decide which calls are safe to auto-approve.
+- **Resumable Streamable HTTP sessions.** The transport is backed by a custom `EventStore` (`src/eventStore.ts`).
+  If a client's connection drops mid-conversation, it can reconnect with a `Last-Event-ID` header and receive every
+  notification it missed — a task-completion or budget-alert push isn't silently lost to a flaky network. Verified
+  by hand against the running server: open the SSE stream, subscribe to a resource, trigger a change, kill the
+  connection, trigger a second change while "offline," then reconnect with `Last-Event-ID` and watch the missed
+  notification replay (see `docs`/commit history for the exact `curl` sequence).
+- **Idempotency-key protected spending.** `reorder_item` accepts an optional `idempotencyKey`; retrying the same
+  call with the same key (an agent replay after a timeout, a flaky connection) reorders **at most once** instead of
+  double-charging the household — the second call returns "already reordered" with no additional effect.
+- **A compound orchestration tool.** `run_morning_briefing` chains four internal operations (today's tasks, fair
+  chore assignment, low-stock check, budget status) into a single tool call, then narrates the result via sampling
+  — one round trip instead of four, which matters for a voice interaction where every tool call adds latency.
 
 The server holds a single demo household in memory, seeded with sample tasks and shopping items on startup — enough
 to drive a live demo without a database. Swapping in per-user persistence would mean keying `src/store.ts` off the
@@ -75,19 +88,21 @@ caller's identity instead of a single in-memory object.
 src/
   index.ts        Express app + Streamable HTTP transport, one MCP session per conversation
   server.ts        createHomeOpsServer() factory — wires resources, prompts, and all tools onto a fresh McpServer
-  store.ts         In-memory household data (tasks, shopping, expenses, budgets) + fair-rotation/budget logic
+  store.ts         In-memory household data (tasks, shopping, expenses, budgets) + fair-rotation/budget/idempotency logic
   resources.ts     homeops:// resources + subscribe/unsubscribe + notify() helper for push updates
+  eventStore.ts    InMemoryEventStore — Streamable HTTP resumability (replay after a dropped connection)
   prompts.ts       weekly_household_briefing prompt template
   types.ts         Shared data model
   tools/
     tasks.ts       list_upcoming_tasks, add_task, mark_task_done, suggest_assignee, sync_household_calendar
-    shopping.ts    list_low_stock_items, reorder_item (elicitation-backed confirmation)
+    shopping.ts    list_low_stock_items, reorder_item (elicitation-backed, idempotency-key protected)
     expenses.ts    add_expense, get_weekly_summary, set_budget, get_budget_status
-    insights.ts    generate_weekly_narrative (MCP sampling)
+    insights.ts    generate_weekly_narrative, run_morning_briefing (MCP sampling + compound orchestration)
 test/
   smoke.test.ts    End-to-end test: real MCP client + server, exercising every tool, resource (+ template,
-                   completion, subscribe/notify), prompt, elicitation round-trip, sampling call, and
-                   progress-streaming tool call
+                   completion, subscribe/notify), prompt, elicitation round-trip, sampling call,
+                   progress-streaming tool call, idempotent retry, compound tool, and a direct
+                   EventStore unit test
 ```
 
 ## Running it
@@ -137,21 +152,52 @@ npx @modelcontextprotocol/inspector
    - "Give me the weekly household briefing" (uses the `weekly_household_briefing` prompt + sampling-backed digest)
    - "Sync my tasks to the calendar" (streams progress notifications as each task syncs)
 
+## Verifying resumability by hand
+
+`npm test` unit-tests the `InMemoryEventStore` class directly; to see the full HTTP-level behavior, run the
+server (`npm run build && npm start`) and, in another shell:
+
+```bash
+SESSION=<mcp-session-id from your initialize response's headers>
+
+# 1. Subscribe to a resource, then open the standalone SSE stream.
+curl -N http://localhost:3333/mcp -H "Accept: text/event-stream" -H "mcp-session-id: $SESSION" &
+
+# 2. Trigger a change (note the "id: ...:000000000002"-style line the stream prints), then Ctrl-C the curl above
+#    to simulate a dropped connection.
+curl -X POST http://localhost:3333/mcp -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" -H "mcp-session-id: $SESSION" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_task","arguments":{"title":"Test A","dueDate":"2026-09-05"}}}'
+
+# 3. Trigger a second change while "offline" — a client that just reconnects fresh would miss this entirely.
+curl -X POST http://localhost:3333/mcp -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" -H "mcp-session-id: $SESSION" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"add_task","arguments":{"title":"Test B","dueDate":"2026-09-06"}}}'
+
+# 4. Reconnect with the last event ID you saw in step 1 — the missed notification from step 3 replays immediately.
+curl -N http://localhost:3333/mcp -H "Accept: text/event-stream" -H "mcp-session-id: $SESSION" \
+  -H "Last-Event-ID: <the id from step 1>"
+```
+
 ## Judging-criteria alignment
 
 - **Tech Implementation:** Real Streamable HTTP MCP transport (2025-11-25+ spec) with proper session lifecycle
-  (`Mcp-Session-Id` header, per-session `McpServer` instances, session cleanup on close) — plus resources (including
-  a completable resource template), prompts, elicitation, sampling, structured tool output, tool annotations, and
-  progress notifications: essentially the full breadth of the MCP spec rather than tools alone.
-- **Design:** Tools are scoped and composable so the agent can chain them (check → decide → act); the one
-  state-changing/spending tool (`reorder_item`) confirms through the protocol's own elicitation mechanism rather
-  than a bespoke flag, and every capability degrades gracefully when a client doesn't support it.
+  (`Mcp-Session-Id` header, per-session `McpServer` instances, session cleanup on close), backed by a custom
+  resumable `EventStore` — plus resources (including a completable resource template), prompts, elicitation,
+  sampling, structured tool output, tool annotations, and progress notifications: essentially the full breadth of
+  the MCP spec rather than tools alone.
+- **Design:** Tools are scoped and composable so the agent can chain them (check → decide → act), with
+  `run_morning_briefing` collapsing the common four-tool chain into one round trip for latency-sensitive voice
+  interactions. The one spending tool (`reorder_item`) confirms through the protocol's own elicitation mechanism
+  and is safe to retry via an idempotency key, and every capability degrades gracefully when a client doesn't
+  support it.
 - **Potential Impact:** A genuinely useful daily-use pattern (household coordination, fair chore-splitting, budget
-  awareness) rather than a novelty demo — the in-memory store is the only hackathon-specific shortcut; the tool,
-  resource, and prompt surface is production-shaped.
+  awareness) rather than a novelty demo, with production-grade concerns actually handled — safe retries on the
+  spending path, connection resumability — not just a happy-path demo. The in-memory store is the only
+  hackathon-specific shortcut; the tool, resource, and prompt surface is otherwise production-shaped.
 - **Quality of Idea:** Demonstrates multi-tool agentic orchestration *and* deep MCP protocol usage (resources with
-  live push updates, sampling instead of a bundled model key) — the actual differentiators between an "Agent
-  Skill" and a legacy single-intent Alexa Skill.
+  live push updates, sampling instead of a bundled model key, resumable transport, idempotent writes) — the actual
+  differentiators between an "Agent Skill" and a legacy single-intent Alexa Skill.
 
 ## Friction log
 

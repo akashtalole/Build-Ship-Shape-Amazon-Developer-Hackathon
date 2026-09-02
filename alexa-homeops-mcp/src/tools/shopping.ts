@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { findItemByName, itemsRunningLow, recordReorder } from "../store.js";
+import { findItemByName, itemsRunningLow, recordReorderIdempotent } from "../store.js";
 import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 
 export function registerShoppingTools(server: McpServer, notify: NotifyFn): void {
@@ -38,6 +38,13 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
           .boolean()
           .default(false)
           .describe("Skip the interactive confirmation and reorder immediately (only if already confirmed)."),
+        idempotencyKey: z
+          .string()
+          .optional()
+          .describe(
+            "Optional client-generated key (e.g. a UUID per user intent). Retrying this call with the " +
+              "same key is safe — the household is only charged/restocked once, even over a flaky connection."
+          ),
       },
       annotations: {
         title: "Reorder item",
@@ -47,7 +54,7 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
         openWorldHint: true,
       },
     },
-    async ({ itemName, confirm }) => {
+    async ({ itemName, confirm, idempotencyKey }) => {
       const item = findItemByName(itemName);
       if (!item) {
         return { content: [{ type: "text", text: `I don't track an item called "${itemName}".` }], isError: true };
@@ -95,11 +102,18 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
         }
       }
 
-      const updated = recordReorder(item.id)!;
-      await notify(RESOURCE_URIS.lowStock);
+      const { item: updated, replayed } = recordReorderIdempotent(item.id, idempotencyKey)!;
+      if (!replayed) {
+        await notify(RESOURCE_URIS.lowStock);
+      }
       return {
         content: [
-          { type: "text", text: `Reordered ${updated.name}. It now shows ${updated.quantityOnHand} on hand once delivered.` },
+          {
+            type: "text",
+            text: replayed
+              ? `Already reordered ${updated.name} for this request — no duplicate order placed.`
+              : `Reordered ${updated.name}. It now shows ${updated.quantityOnHand} on hand once delivered.`,
+          },
         ],
       };
     }

@@ -26,9 +26,24 @@ Notes captured while building the Alexa+ HomeOps submission, for the hackathon's
 3. **Simulating Alexa+ locally requires a public HTTPS endpoint.** For local iteration before wiring up the real
    Alexa+ web app simulator, a tunnel (ngrok or similar) was the only practical option, which adds a moving part to
    the inner dev loop compared to testing against the MCP Inspector directly.
+4. **`outputSchema` mismatches fail at call time, not registration time.** Declaring `outputSchema` and then
+   returning `structuredContent` with one extra field (in our case, forgetting `done` on a `Task`) doesn't error
+   until a client actually calls the tool — the SDK doesn't validate that the schema and the handler's return
+   shape agree when you register it. A `tsc`-time or registration-time check comparing the inferred return type
+   against `outputSchema` would have caught this instantly instead of via a failing integration test.
+5. **Testing Streamable HTTP resumability end-to-end is inherently manual.** The high-level `Client` class owns
+   the standalone SSE stream itself and reconnects transparently, which is great for real usage but makes it hard
+   to *observe* a drop-and-replay from the outside without bypassing the SDK's client entirely. We ended up
+   unit-testing the `EventStore` class directly (fast, deterministic) and separately verifying the full HTTP
+   behavior by hand with raw `curl` (see the README's "Verifying resumability by hand" section) — a documented,
+   scriptable way to simulate a mid-session drop from the client side would make this testable in CI too.
 
 ## Feature requests
 
 - A lightweight "confirmation required" annotation on `registerTool` metadata that clients (including Alexa+) could
   surface consistently, instead of every server inventing its own preview/confirm convention.
 - An official local-simulator mode for Alexa+ that doesn't require exposing a public HTTPS URL for early iteration.
+- A registration-time (or `tsc`-time) check that a tool's declared `outputSchema` actually matches what its handler
+  returns, instead of only surfacing a mismatch as a runtime `tools/call` error.
+- A documented way to simulate a dropped Streamable HTTP connection from `StreamableHTTPClientTransport` itself
+  (not just from a raw `fetch`), so resumability behavior is testable through the SDK's own client.

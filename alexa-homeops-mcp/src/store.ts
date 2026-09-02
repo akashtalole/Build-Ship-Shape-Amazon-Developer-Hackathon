@@ -107,6 +107,33 @@ export function recordReorder(itemId: string): ShoppingItem | undefined {
   return item;
 }
 
+// Caches the outcome of a spending action per idempotency key so a retried
+// request (a flaky connection, an agent replaying an unacknowledged call)
+// reorders at most once instead of double-spending. Keyed by item + caller
+// key so different items don't collide on the same key.
+const reorderIdempotencyCache = new Map<string, ShoppingItem>();
+
+export function recordReorderIdempotent(
+  itemId: string,
+  idempotencyKey?: string
+): { item: ShoppingItem; replayed: boolean } | undefined {
+  if (!idempotencyKey) {
+    const item = recordReorder(itemId);
+    return item && { item, replayed: false };
+  }
+
+  const cacheKey = `${itemId}:${idempotencyKey}`;
+  const cached = reorderIdempotencyCache.get(cacheKey);
+  if (cached) {
+    return { item: cached, replayed: true };
+  }
+
+  const item = recordReorder(itemId);
+  if (!item) return undefined;
+  reorderIdempotencyCache.set(cacheKey, { ...item });
+  return { item, replayed: false };
+}
+
 export function addExpense(description: string, amount: number, category: string): Expense {
   const expense: Expense = {
     id: randomUUID(),

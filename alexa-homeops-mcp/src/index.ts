@@ -3,6 +3,7 @@ import express, { type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createHomeOpsServer } from "./server.js";
+import { InMemoryEventStore } from "./eventStore.js";
 
 const PORT = Number(process.env.PORT ?? 3333);
 
@@ -13,6 +14,10 @@ app.use(express.json());
 // (2025-11-25+): a session is opened by an initialize request and reused
 // for the lifetime of the conversation via the Mcp-Session-Id header.
 const transports = new Map<string, StreamableHTTPServerTransport>();
+
+// Shared across sessions so a dropped-then-resumed connection can replay
+// missed messages even though it gets a fresh transport instance.
+const eventStore = new InMemoryEventStore();
 
 async function handleMcpRequest(req: Request, res: Response): Promise<void> {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
@@ -26,6 +31,7 @@ async function handleMcpRequest(req: Request, res: Response): Promise<void> {
   if (!sessionId && isInitializeRequest(req.body)) {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
+      eventStore,
       onsessioninitialized: (newSessionId) => {
         transports.set(newSessionId, transport);
       },

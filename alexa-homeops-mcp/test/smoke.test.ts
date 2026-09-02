@@ -17,11 +17,40 @@ import {
   ResourceUpdatedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createHomeOpsServer } from "../src/server.js";
+import { InMemoryEventStore } from "../src/eventStore.js";
+
+function testEventStore() {
+  const store = new InMemoryEventStore();
+  return (async () => {
+    const a1 = await store.storeEvent("stream-a", { jsonrpc: "2.0", method: "notifications/a1" } as any);
+    const a2 = await store.storeEvent("stream-a", { jsonrpc: "2.0", method: "notifications/a2" } as any);
+    await store.storeEvent("stream-b", { jsonrpc: "2.0", method: "notifications/b1" } as any); // different stream
+    const a3 = await store.storeEvent("stream-a", { jsonrpc: "2.0", method: "notifications/a3" } as any);
+
+    const replayed: string[] = [];
+    const resumedStreamId = await store.replayEventsAfter(a1, {
+      send: async (_id, message: any) => {
+        replayed.push(message.method);
+      },
+    });
+    assert.equal(resumedStreamId, "stream-a");
+    assert.deepEqual(replayed, ["notifications/a2", "notifications/a3"]);
+
+    const unknown = await store.replayEventsAfter("stream-a:not-a-real-id", { send: async () => {} });
+    assert.equal(unknown, "stream-a"); // extraction still works; no matching event to replay past
+
+    void a2;
+  })();
+}
 
 async function main() {
+  await testEventStore();
+  console.log("✓ InMemoryEventStore replays only same-stream events strictly after the given event ID");
+
   const app = express();
   app.use(express.json());
 
+  const eventStore = new InMemoryEventStore();
   const transports = new Map<string, StreamableHTTPServerTransport>();
   app.all("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
@@ -31,6 +60,7 @@ async function main() {
     }
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
+      eventStore,
       onsessioninitialized: (id) => transports.set(id, transport),
     });
     await createHomeOpsServer().connect(transport);
@@ -80,6 +110,7 @@ async function main() {
     "list_upcoming_tasks",
     "mark_task_done",
     "reorder_item",
+    "run_morning_briefing",
     "set_budget",
     "suggest_assignee",
     "sync_household_calendar",
@@ -88,7 +119,7 @@ async function main() {
   assert.equal(listTasksTool.annotations?.readOnlyHint, true);
   const addTaskTool = tools.tools.find((t) => t.name === "add_task")!;
   assert.equal(addTaskTool.annotations?.readOnlyHint, false);
-  console.log("✓ all 12 HomeOps tools discoverable, with read/write annotations");
+  console.log("✓ all 13 HomeOps tools discoverable, with read/write annotations");
 
   // --- Resources (static + a completable template) ---
   const resources = await client.listResources();
@@ -146,6 +177,39 @@ async function main() {
   const reorderText = (reorder.content as any)[0].text as string;
   assert.match(reorderText, /Reordered Dog food/);
   console.log("✓ reorder_item confirms via MCP elicitation, then executes");
+
+  // --- Idempotency-key protected retry ---
+  const extractQuantity = (text: string) => Number(text.match(/shows (\d+) on hand/)?.[1]);
+  const paperTowelsKey = randomUUID();
+  const firstAttempt = await client.callTool({
+    name: "reorder_item",
+    arguments: { itemName: "Paper towels", confirm: true, idempotencyKey: paperTowelsKey },
+  });
+  const retryAttempt = await client.callTool({
+    name: "reorder_item",
+    arguments: { itemName: "Paper towels", confirm: true, idempotencyKey: paperTowelsKey },
+  });
+  const freshReorder = await client.callTool({
+    name: "reorder_item",
+    arguments: { itemName: "Paper towels", confirm: true, idempotencyKey: randomUUID() },
+  });
+  assert.match((firstAttempt.content as any)[0].text, /Reordered Paper towels/);
+  assert.match((retryAttempt.content as any)[0].text, /Already reordered/);
+  const qtyAfterFirst = extractQuantity((firstAttempt.content as any)[0].text);
+  const qtyAfterFresh = extractQuantity((freshReorder.content as any)[0].text);
+  // Paper towels has reorderThreshold 2, so a real second reorder adds
+  // exactly 3 more. If the retried (same-key) call had double-restocked,
+  // this gap would be 6, not 3.
+  assert.equal(qtyAfterFresh - qtyAfterFirst, 3);
+  console.log("✓ reorder_item with a repeated idempotencyKey reorders exactly once, not twice");
+
+  // --- Compound orchestration tool ---
+  const briefing = await client.callTool({ name: "run_morning_briefing", arguments: {} });
+  assert.equal((briefing.content as any)[0].text, "Mock digest: everything looks under control this week.");
+  const briefingData = briefing.structuredContent as any;
+  assert.ok(typeof briefingData.suggestedAssignee === "string");
+  assert.ok(Array.isArray(briefingData.tasksToday));
+  console.log("✓ run_morning_briefing chains tasks + assignment + stock + budget into one call");
 
   // --- Budgets ---
   await client.callTool({ name: "set_budget", arguments: { category: "pets", amount: 50 } });
