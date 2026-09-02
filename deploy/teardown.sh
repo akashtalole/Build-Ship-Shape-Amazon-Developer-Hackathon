@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Tears down one service deployed by deploy.sh: deletes its App Runner
-# service and its ECR image repository. Run this as soon as you're done
-# demoing — App Runner bills for compute while a service is running, even
-# if nothing is calling it.
+# Tears down one service deployed by deploy.sh: deletes its ECS Express Mode
+# service (which also removes the ALB target group/listener rule, security
+# group, and auto-scaling policy it owns — Express Mode cleans those up
+# itself, unlike a plain `aws ecs delete-service`) and its ECR image
+# repository. Run this as soon as you're done demoing — the underlying
+# Fargate task and Application Load Balancer bill for as long as the
+# service exists, whether or not anything is calling it.
 #
-# The shared IAM role and auto scaling configuration deploy.sh creates are
-# left in place (other services may still be using them) — remove those
-# with teardown-shared.sh once every service has been torn down, or just
-# run teardown-all.sh which does both in the right order.
+# The two IAM roles deploy.sh creates are intentionally left alone here —
+# see teardown-shared.sh for why. The shared "hackathon-express" ECS
+# cluster is removed by teardown-shared.sh once it's empty.
 #
 # Usage:
 #   ./deploy/teardown.sh <service-dir> [aws-region]
@@ -35,22 +37,15 @@ require_cmd aws
 
 echo "==> Tearing down '$SERVICE_DIR' ('$APP_NAME') in $REGION"
 
-SERVICE_ARN="$(aws apprunner list-services --region "$REGION" \
-  --query "ServiceSummaryList[?ServiceName=='$APP_NAME'].ServiceArn | [0]" --output text 2>/dev/null || echo "None")"
+SERVICE_ARN="$(aws ecs describe-services --region "$REGION" --cluster "$CLUSTER_NAME" --services "$APP_NAME" \
+  --query "services[?status=='ACTIVE'].serviceArn | [0]" --output text 2>/dev/null || echo "None")"
 
-if [ "$SERVICE_ARN" != "None" ] && [ -n "$SERVICE_ARN" ]; then
-  echo "==> Deleting App Runner service"
-  aws apprunner delete-service --region "$REGION" --service-arn "$SERVICE_ARN" >/dev/null
-  echo "==> Waiting for deletion to finish..."
-  for _ in $(seq 1 60); do
-    STATUS="$(aws apprunner describe-service --region "$REGION" --service-arn "$SERVICE_ARN" \
-      --query 'Service.Status' --output text 2>/dev/null || echo "DELETED")"
-    echo "    status: $STATUS"
-    [ "$STATUS" = "DELETED" ] && break
-    sleep 10
-  done
+if [ "$SERVICE_ARN" != "None" ] && [ -n "$SERVICE_ARN" ] && [ "$SERVICE_ARN" != "null" ]; then
+  echo "==> Deleting ECS Express service (this also removes its ALB target group, listener rule,"
+  echo "    security group, and auto-scaling policy — usually a couple of minutes)"
+  aws ecs delete-express-gateway-service --region "$REGION" --service-arn "$SERVICE_ARN" --monitor-mode TEXT-ONLY
 else
-  echo "==> No App Runner service named '$APP_NAME' found — skipping"
+  echo "==> No ECS Express service named '$APP_NAME' found in cluster '$CLUSTER_NAME' — skipping"
 fi
 
 echo "==> Deleting ECR repository '$ECR_REPO' (and every image tag in it)"
@@ -61,7 +56,8 @@ else
 fi
 
 echo ""
-echo "==> Done. No further App Runner charges accrue for '$SERVICE_DIR'."
-echo "    (The shared 'AppRunnerECRAccessRole' IAM role and 'hackathon-single-instance' auto"
-echo "     scaling configuration were left in place in case other services still use them —"
-echo "     run ./deploy/teardown-shared.sh once ALL services are torn down to remove those too.)"
+echo "==> Done. No further charges accrue for '$SERVICE_DIR' specifically."
+echo "    (The shared 'hackathon-express' ECS cluster and the ecsTaskExecutionRole /"
+echo "     ecsInfrastructureRoleForExpressServices IAM roles were left in place in case other"
+echo "     services still use them — run ./deploy/teardown-shared.sh once ALL services are"
+echo "     torn down to clean up the cluster, and see that script's output for the IAM roles.)"
