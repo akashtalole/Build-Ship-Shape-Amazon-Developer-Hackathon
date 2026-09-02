@@ -10,6 +10,8 @@ const app = createApp(router);
 
 app.listen(PORT, () => {
   console.log(`Model router listening on http://localhost:${PORT}`);
-  console.log(`Classify a message: POST http://localhost:${PORT}/classify  { "text": "..." }`);
-  console.log(`View metrics:       GET  http://localhost:${PORT}/metrics`);
+  console.log(`Classify a message:        POST http://localhost:${PORT}/classify  { "text": "..." }`);
+  console.log(`Streamed classification:   POST http://localhost:${PORT}/classify/stream  { "text": "..." }`);
+  console.log(`Report classification feedback: POST http://localhost:${PORT}/feedback  { "requestId": "...", "correct": true }`);
+  console.log(`View metrics:              GET  http://localhost:${PORT}/metrics`);
 });

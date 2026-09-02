@@ -38,3 +38,63 @@ bonus.
    structurally and conceptually accurate rather than guaranteed byte-for-byte correct against the current SDK
    version — worth a real developer double-checking against `@aws-sdk/client-bedrock-runtime`'s current types before
    copy-pasting into production.
+
+## Round 2: advanced features (caching, circuit breaker, shadow mode, adaptive threshold, streaming, rate limiting)
+
+4. **Designing a deterministic way to simulate "the foundation model is down" was more design work than the
+   circuit-breaker logic itself.** A real outage is flaky and non-deterministic by nature, which is exactly the
+   opposite of what a reliable test needs. I ended up with two independent seams on purpose rather than one:
+   constructor flags on `MockBedrockProvider` (`alwaysFail`, `failFirstN`) for tests that need multi-call sequences
+   (e.g. "fail once, then recover" to exercise the half-open→closed transition), and a `FAILURE_TRIGGER` sentinel
+   substring for tests that want to force a failure via a single input string without touching how the provider was
+   constructed. Having both meant the circuit-breaker state machine itself (closed → open → half-open) could be
+   tested with real, controlled failure *sequences* instead of just "always fails" / "never fails," which is what
+   actually exercises the interesting transitions (a half-open trial failing re-opens the circuit immediately,
+   regardless of the consecutive-failure threshold — a case that's easy to get wrong and easy to miss without a
+   provider that can fail exactly once and then recover on command).
+5. **Real time (`Date.now()`, `setTimeout`) and deterministic tests actively fight each other for TTL/cooldown
+   logic.** My first instinct for testing the cache TTL and circuit-breaker cooldown was to use short real durations
+   and `await sleep(...)` in the test — which works, but makes the test suite slower and (worse) flaky under any
+   system load, since a "short" real delay is still a race against the wall clock. Threading an injectable
+   `now: () => number` clock through `ModelRouter`'s constructor instead (defaulting to `Date.now`) meant tests could
+   advance a fake clock by exactly `61_000` ms with zero real waiting and zero flakiness — a few extra lines in the
+   constructor bought a meaningfully more reliable test suite. In hindsight this should probably be the default way
+   I design anything with a TTL, not an afterthought.
+6. **A background "shadow" call that must never affect the caller's response is trickier to test than to write.**
+   The implementation itself is simple (`this.foundation.invoke(...).then(...).catch(...)`, never awaited by
+   `route()`), but *proving* in a test that it truly doesn't add latency or fail the caller's request needs either an
+   arbitrary `setTimeout` in the test (racy) or a way to deterministically wait for exactly the background work that
+   was kicked off. I added a small `flushShadowEvaluations()` method to `ModelRouter` purely for this — collecting
+   the fire-and-forget promises and exposing a way to await them on demand. It's not needed in production use (shadow
+   mode's whole point is not being awaited), but without it the shadow-mode tests would have had to guess how long
+   "long enough" is, which is exactly the kind of flakiness a test suite shouldn't tolerate.
+7. **Getting the sidecar and the foundation model's shadow-mode "opinions" to sometimes genuinely disagree, on
+   purpose, took more thought than expected.** If the foundation model's mock simply reused the sidecar's own
+   keyword list, shadow mode would trivially agree 100% of the time forever — which proves nothing about the
+   feature's plumbing versus just tautology. I gave `MockBedrockProvider` its own, deliberately different and
+   smaller keyword-hint list (single words rather than the sidecar's often-multi-word phrases), which is honestly
+   also more representative of two real, independently-trained models: they don't cluster on identical cues just
+   because they're solving the same problem. That difference let me hand-construct a test input where the sidecar
+   is confident about one label via a phrase-level keyword its own list has but the foundation model's list lacks,
+   while a completely incidental word elsewhere in the same sentence trips the foundation model's *own* independent
+   category — producing a disagreement that's deterministic (not random) but still genuinely a disagreement between
+   two different heuristics rather than a scripted "always agree" or "always disagree" toggle.
+8. **SSE mechanics in Express are simple in principle and easy to get subtly wrong.** `res.writeHead` with
+   `Content-Type: text/event-stream`, then repeated `res.write(...)`, then `res.end()` is the whole mechanism — but
+   it only actually streams (rather than silently buffering until the end and delivering everything at once) if
+   nothing upstream buffers it. `X-Accel-Buffering: no` matters for any reverse proxy in front of a real deployment,
+   and forgetting `res.end()` after the final event leaves the connection hanging exactly like the unclosed
+   `http.Server` bug from round 1's friction log — a similar "small mechanical detail with an outsized, silent
+   failure mode" shape. I also learned the hard way (a genuinely broken first test) that naively parsing SSE frames
+   with `text.split("data: ")[1]` is a landmine the moment a data payload's own JSON could theoretically contain that
+   substring — worth remembering that ad hoc SSE parsing in a test is not the same as a real EventSource client.
+9. **The adaptive-threshold heuristic is the single feature I'm least comfortable calling "correct," and I said so
+   directly in the code and the README rather than dressing it up.** Pooling shadow-agreement data and explicit
+   caller feedback into one accuracy estimate, then nudging a single global threshold up or down off of a minimum
+   sample count, has real, known problems: it doesn't correct for selection bias (only requests that got feedback or
+   ran a shadow eval count, which are not a random sample of traffic), it treats "the foundation model disagreed"
+   as equivalent to "the sidecar was wrong" (they could both be wrong, or the ambiguity could be genuine), and a
+   single fixed step size (±0.05) is an arbitrary choice with no tie to how much a given amount of evidence should
+   actually move a probability estimate. I kept it because the feature explicitly asked for "simple and illustrative,
+   not real statistical rigor," and documented every one of these caveats inline rather than let the number's
+   confident-looking presentation in `GET /metrics` imply more rigor than there is.

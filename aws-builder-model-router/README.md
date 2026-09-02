@@ -63,12 +63,13 @@ request always hit the foundation model directly, which is the concrete argument
 src/
   types.ts               Shared types: SidecarResult, FoundationResult, RouteResult, MetricsSnapshot
   sidecarClassifier.ts   SidecarClassifier interface + MockSidecarClassifier (keyword-based urgency heuristic)
-  foundationModel.ts     FoundationModelProvider interface + MockBedrockProvider (template-based richer answer)
-  router.ts              ModelRouter: routing decision + cumulative metrics — pure/importable, framework-agnostic
-  server.ts              Express app factory wrapping ModelRouter: POST /classify, GET /metrics
+  foundationModel.ts     FoundationModelProvider interface + MockBedrockProvider (template answer + simulated failures)
+  rateLimiter.ts         RateLimiter: in-memory, fixed-window, per-caller quota
+  router.ts              ModelRouter: routing decision, cache, circuit breaker, shadow eval, feedback, metrics
+  server.ts              Express app factory: POST /classify, POST /classify/stream, POST /feedback, GET /metrics
   index.ts               Entry point: wires up the mocks, creates the app, starts listening
 test/
-  smoke.test.ts          Unit-style router tests (no HTTP) + an end-to-end HTTP test via fetch()
+  smoke.test.ts          Unit-style router tests (no HTTP) + end-to-end HTTP tests via fetch(), covering every feature below
 ```
 
 ## Running it
@@ -108,6 +109,9 @@ curl -s -X POST localhost:4567/classify -H "Content-Type: application/json" -d '
 curl -s localhost:4567/metrics | python3 -m json.tool
 ```
 
+See [Advanced features](#advanced-features) below for `curl` examples of the cache, the forced-failure fallback path,
+and the streaming endpoint.
+
 ## Testing
 
 ```bash
@@ -120,10 +124,29 @@ npm test
    input escalates to the foundation model; the *same* borderline-confidence input (`confidence` 0.55) routes to the
    foundation model at the default threshold (0.7) but to the sidecar path at a lowered threshold (0.5); and
    cumulative metrics correctly track path counts plus the actual-cost-vs-always-foundation-cost math.
-2. **End-to-end HTTP test:** starts the real Express app via `createApp()` on an ephemeral port (`app.listen(0)`)
-   and drives it with real `fetch()` calls — a missing/empty `text` field and an out-of-range `threshold` both
-   return 400; the fast path and escalation path both work over real HTTP; a request-level `threshold` override
-   changes routing; and `GET /metrics` reflects the four prior `/classify` calls correctly.
+2. **Response cache (unit):** a repeated identical input within the TTL is served from cache (`cacheHit: true`)
+   without re-invoking either model; the escalation path is cached too; cache hits are folded into the cumulative
+   savings math; and an entry past its TTL (driven by an injectable clock, no real sleeping) is a fresh miss again.
+3. **Circuit breaker / fallback (unit):** an always-failing foundation provider trips the breaker open after
+   `circuitBreakerFailureThreshold` consecutive failures; every failure falls back to the sidecar's best-effort
+   answer (`fallbackUsed: true`, `path: "fallback"`) rather than failing the request; an open circuit fast-fails
+   further escalations without even attempting the call; and after the cooldown elapses, a successful half-open
+   trial call closes the circuit again. The `FAILURE_TRIGGER` sentinel string is also exercised as the alternate,
+   input-driven way to force a failure.
+4. **Shadow evaluation (unit):** a confident sidecar answer with `shadowMode: true` returns immediately (same cost
+   and latency as without shadow mode) while a background foundation-model call is kicked off; `flushShadowEvaluations()`
+   waits for it deterministically, and both an agreement and a deliberately engineered disagreement are checked
+   against `shadowAgreementRate`.
+5. **Adaptive threshold suggestion (unit):** with no feedback yet, `GET /metrics`-equivalent `getMetrics()` suggests
+   nothing; after several fast-path classifications are reported incorrect via `recordFeedback`, the suggested
+   threshold moves upward (more conservative) as expected.
+6. **End-to-end HTTP tests:** starts the real Express app via `createApp()` on an ephemeral port (`app.listen(0)`)
+   and drives it with real `fetch()` calls — the original validation/routing/metrics checks; a repeated request is
+   a cache hit over HTTP; `POST /feedback` accepts a known `requestId` (200) and rejects an unknown one (404);
+   `POST /classify/stream` delivers dozens of discrete SSE chunks ending in one `done` event; a simulated
+   foundation-model outage returns `200` with `fallbackUsed: true` instead of a server error; and a dedicated
+   rate-limiting test drives one caller to exactly their 5-request limit, confirms their 6th request gets `429`,
+   and confirms a different `X-Caller-Id` is unaffected.
 
 No external services or AWS credentials are required to run the tests.
 
@@ -191,8 +214,141 @@ production, an IAM role attached to whatever compute calls this code (Lambda, EC
 latency, once live, would come from CloudWatch metrics and the real per-call `Body`/`usage` fields instead of the
 constants in `router.ts`.
 
+**Streaming → `InvokeModelWithResponseStreamCommand`.** `POST /classify/stream` (see
+[Advanced features](#advanced-features) below) currently chunks `MockBedrockProvider`'s already-complete text after
+the fact, because there's no real streaming provider available in this environment. A live implementation swaps in
+`InvokeModelWithResponseStreamCommand` instead of `InvokeModelCommand`, and relays each event from the returned
+`response.body` async-iterable (`PartialModelResponse`/`chunk.bytes` events, decoded incrementally) straight to the
+caller as it arrives — that also improves real time-to-first-token, not just presentation, since the caller starts
+seeing text before the model has finished generating the rest of it.
+
 Everything else — `router.ts`, `server.ts`, the metrics math — is completely unaware it's talking to mocks; it only
 depends on the two interfaces in `sidecarClassifier.ts` and `foundationModel.ts`.
+
+## Advanced features
+
+Six production-grade additions on top of the base routing pattern, all genuinely implemented and covered by
+`test/smoke.test.ts` (not stubs) — see [Testing](#testing) above for exactly which checks cover which feature.
+
+### 1. Response caching
+
+`ModelRouter` caches each `RouteResult` by a key of `threshold + normalized input` (trimmed, lowercased) for a
+configurable TTL (`cacheTtlMs`, default 5 minutes). An identical repeat request within the TTL is served from cache
+— **skipping the sidecar and the foundation model entirely** — flagged with `cacheHit: true`. Cache hits are folded
+into `GET /metrics`'s cost-savings math: the hypothetical "always-foundation" baseline still charges a cache hit at
+full foundation-model cost, while the router's actual cost for that request is $0, so a cache-heavy workload shows a
+larger `estimatedSavingsUsd` than routing alone would produce.
+
+```bash
+# First call: a real classification
+curl -s -X POST localhost:4567/classify -H "Content-Type: application/json" \
+  -d '{"text": "There is smoke and fire in the kitchen, call 911 emergency!"}' | python3 -m json.tool
+# -> no "cacheHit" field
+
+# Identical call again within the TTL: served from cache, no model invoked
+curl -s -X POST localhost:4567/classify -H "Content-Type: application/json" \
+  -d '{"text": "There is smoke and fire in the kitchen, call 911 emergency!"}' | python3 -m json.tool
+# -> "cacheHit": true
+```
+
+### 2. Circuit breaker / fallback chain
+
+The router wraps every foundation-model call with a classic circuit-breaker state machine (`closed` →
+`open` → `half-open` → `closed`/`open`): after `circuitBreakerFailureThreshold` (default 3) consecutive failures it
+opens for `circuitBreakerCooldownMs` (default 30s), fast-failing further escalations without even attempting the
+call, then allows one half-open trial call once the cooldown elapses. Any failure (open circuit or a thrown error
+from the provider) falls back to **the sidecar's own best-effort answer**, even below its normal confidence
+threshold, rather than failing the request — marked `path: "fallback"`, `fallbackUsed: true`. `GET /metrics` exposes
+`fallbackRequests` and the current `circuitState`.
+
+Two deterministic ways to simulate a foundation-model outage for testing (see `src/foundationModel.ts`):
+`new MockBedrockProvider({ alwaysFail: true })` / `{ failFirstN: n }` as constructor flags, or embedding the
+`FAILURE_TRIGGER` sentinel string anywhere in the input text.
+
+```bash
+# The FAILURE_TRIGGER sentinel forces this specific call to fail, deterministically, without touching any config
+curl -s -X POST localhost:4567/classify -H "Content-Type: application/json" \
+  -d '{"text": "Can you check on things? __FORCE_FOUNDATION_FAILURE__"}' | python3 -m json.tool
+# -> "path": "fallback", "fallbackUsed": true, 200 OK (not a 500)
+```
+
+### 3. Shadow evaluation mode
+
+Passing `"shadowMode": true` (or setting `defaultShadowMode` on the `ModelRouter` constructor) makes a **confident,
+fast-path** request also kick off a foundation-model call in the background, purely to compare its implied label
+against the sidecar's — after the fast-path response has already been sent, so it adds zero latency and can never
+fail the caller's request. `GET /metrics` exposes `shadowEvaluations`, `shadowAgreements`, and
+`shadowAgreementRate` — a genuine ML-ops technique for finding out whether a cheap classifier's confident answers
+actually match what the expensive model would have said, without paying the expensive model's latency on the happy
+path.
+
+```bash
+curl -s -X POST localhost:4567/classify -H "Content-Type: application/json" \
+  -d '{"text": "There is smoke and fire in the kitchen, call 911 emergency!", "shadowMode": true}' | python3 -m json.tool
+# -> the fast-path "sidecar" response, same latency/cost as without shadowMode
+
+curl -s localhost:4567/metrics | python3 -m json.tool
+# -> "shadowEvaluations": 1, "shadowAgreements": 1, "shadowAgreementRate": 1
+```
+
+### 4. Adaptive threshold suggestion
+
+`GET /metrics` also reports `suggestedThreshold` and `thresholdSuggestionReason`, computed from a pool of "was the
+sidecar's trusted (fast-path) answer actually right?" samples drawn from two sources: shadow-mode agreement (feature
+3) and explicit caller feedback via `POST /feedback`, keyed by the `requestId` every `/classify` response already
+returns. With too few samples it suggests nothing rather than react to noise; otherwise low observed accuracy at the
+current threshold nudges the suggestion up (more conservative), and very high accuracy over enough samples nudges it
+down (fewer unnecessary escalations). **This is a deliberately simple, illustrative heuristic** — no confidence
+intervals, no bias correction — documented as such in `router.ts`, not real statistical rigor.
+
+```bash
+# Report that a past classification (by its requestId) was wrong
+curl -s -X POST localhost:4567/feedback -H "Content-Type: application/json" \
+  -d '{"requestId": "<a requestId from an earlier /classify response>", "correct": false}'
+
+curl -s localhost:4567/metrics | python3 -m json.tool
+# -> e.g. "currentThreshold": 0.7, "suggestedThreshold": 0.75,
+#    "thresholdSuggestionReason": "Current threshold 0.70, but observed sidecar accuracy at that
+#     threshold is only 33.3% over 3 sample(s) — below the 95% target. Consider raising the
+#     threshold to 0.75. (Illustrative heuristic, not real statistical rigor...)"
+```
+
+### 5. Simulated streaming foundation-model responses
+
+`POST /classify/stream` runs the same routing decision as `/classify`, but for an escalation-path (foundation-model)
+result it relays the answer as a sequence of Server-Sent Events — one `chunk` event per word — instead of one JSON
+blob, ending in a single `done` event carrying the full result. See
+[Streaming → InvokeModelWithResponseStreamCommand](#swapping-in-the-real-aws-services) above for what a live,
+truly-incremental version would change.
+
+```bash
+curl -N -s -X POST localhost:4567/classify/stream -H "Content-Type: application/json" \
+  -d '{"text": "Can you check on things when you get a chance?"}'
+# -> a stream of "event: chunk\ndata: {\"token\":\"...\"}\n\n" events, one per word,
+#    ending in "event: done\ndata: {...full RouteResult...}\n\n"
+```
+
+### 6. Per-caller rate limiting / quota
+
+`RateLimiter` (`src/rateLimiter.ts`) is a small in-memory, fixed-window limiter keyed by the `X-Caller-Id` request
+header (an unset header falls back to a shared `"anonymous"` bucket rather than skipping enforcement). It guards
+both `/classify` and `/classify/stream`. Exceeding the window's quota returns `429` with a clear message and
+`Retry-After`/`X-RateLimit-*` headers; a different caller id is completely unaffected. The default is a generous 60
+requests/minute — any real deployment sharing a metered AWS resource (a SageMaker endpoint, a Bedrock model) across
+callers needs *some* quota story, and this is the simplest version of that story that's still genuinely enforcing a
+limit.
+
+```bash
+# Six rapid requests from the same caller, with the default limit lowered for illustration —
+# in this demo's default config (60/min) you'd need 61 requests to see this:
+for i in $(seq 1 6); do
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:4567/classify \
+    -H "Content-Type: application/json" -H "X-Caller-Id: demo-caller" \
+    -d "{\"text\": \"request $i\"}"
+done
+# -> 200 200 200 200 200 200  (all succeed under the default 60/min limit — lower it via a custom
+#    RateLimiter passed to createApp() to see a 429 sooner, as the smoke test does)
+```
 
 ## A stackable pattern, not a one-off feature
 
@@ -217,10 +373,18 @@ described above — the router, metrics, and HTTP layer need no changes.
 
 - **Tech Implementation:** A working, tested TypeScript library with two AWS-SDK-shaped interfaces, a
   framework-agnostic router with real routing logic (not a stub), an Express API, and a smoke test suite exercising
-  both the library directly and the full HTTP surface. Zero TypeScript errors under `strict: true`.
+  both the library directly and the full HTTP surface. Zero TypeScript errors under `strict: true`. Beyond the base
+  routing decision, six genuinely-working production-grade features (see [Advanced features](#advanced-features)):
+  a TTL response cache, a circuit breaker with a sidecar-fallback chain, background shadow evaluation, a
+  feedback-driven adaptive-threshold suggestion, simulated SSE streaming, and per-caller rate limiting — each with
+  its own passing test coverage, not stubbed.
 - **Design:** The interfaces mirror the real `@aws-sdk/client-sagemaker-runtime` / `@aws-sdk/client-bedrock-runtime`
   request/response shapes closely enough that going live is a class-body swap, not a redesign — the architectural
-  seam is the deliverable, not just working code behind it.
+  seam is the deliverable, not just working code behind it. The advanced features are each standard, named
+  production patterns (circuit breaker, shadow deployment, quota management) applied to *this specific* seam rather
+  than bolted on generically, and each is honestly scoped: the adaptive-threshold heuristic and the streaming
+  endpoint's chunking-after-the-fact are both explicitly documented as illustrative simplifications, not claims of
+  statistical rigor or true incremental generation.
 - **Potential Impact:** This is a genuinely reusable AWS architecture pattern, not tied to one feature — any track
   with an AI feature that mostly handles predictable cases (which is most of them) can drop this router in front of
   its own model calls and get a concrete, measurable cost/latency win, as `GET /metrics` demonstrates numerically.
