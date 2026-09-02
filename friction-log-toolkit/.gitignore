@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.env
+
+# .friction-log.json is the per-project log store this CLI creates in
+# whatever directory you run it from (typically your own hackathon project's
+# root). It is a runtime artifact of USING this tool, not something the
+# friction-log-toolkit repo itself should ever commit.
+.friction-log.json
