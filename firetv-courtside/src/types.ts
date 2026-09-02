@@ -39,6 +39,13 @@ export interface IncomingGameEvent {
   description?: string; // free-text detail, e.g. "reaching-in foul" or "traveling"
   period?: number; // if the feed reports the current period alongside the play
   clock?: string; // if the feed reports the game clock alongside the play, e.g. "8:42"
+  /**
+   * Optional idempotency key from the upstream feed (its own event/play ID).
+   * Re-posting the same `externalEventId` for the same game is a no-op: no
+   * duplicate commentary, no duplicate state mutation. Protects against a
+   * flaky CV pipeline or webhook double-posting the same play.
+   */
+  externalEventId?: string;
 }
 
 export interface GameEvent extends IncomingGameEvent {
@@ -82,10 +89,30 @@ export interface CommentaryLine {
 
 export interface AskQuestionInput {
   question: string;
+  /** Optional viewer ID: enables per-viewer rate limiting and answer personalization. */
+  viewerId?: string;
 }
 
 export interface AskQuestionResult {
   question: string;
   answer: string;
   answeredAt: string;
+}
+
+/**
+ * Per-viewer commentary preferences (`POST /games/:id/viewers/:viewerId/preferences`).
+ * Applied at read time on top of the shared, generated commentary/answers —
+ * see `personalizeText` in `commentaryProvider.ts`.
+ */
+export interface ViewerPreferences {
+  /** Team name (or "home"/"away") this viewer is rooting for; adds a fan-perspective note when it matches a team in the game. */
+  favoriteTeam?: string;
+  /** "concise" (default behavior, no change) or "detailed" (appends period/clock/score context). */
+  verbosity?: "concise" | "detailed";
+}
+
+/** Per-game counters for the fast-path/escalated commentary split. See `GET /games/:id/metrics`. */
+export interface GameMetrics {
+  fastPathCount: number;
+  escalatedCount: number;
 }

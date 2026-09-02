@@ -1,6 +1,19 @@
 import express, { type Express } from "express";
 import type { CommentaryProvider } from "./commentaryProvider.js";
-import { askQuestion, getCommentary, ingestEvent, requireGame, startGame, NotFoundError, ValidationError } from "./gameService.js";
+import {
+  askQuestion,
+  getCommentary,
+  getGameMetrics,
+  getPreferences,
+  ingestEvent,
+  requireGame,
+  setPreferences,
+  startGame,
+  NotFoundError,
+  ValidationError,
+} from "./gameService.js";
+import { subscribe, type StreamEvent } from "./pubsub.js";
+import { checkRateLimit, ASK_RATE_LIMIT_MAX, ASK_RATE_LIMIT_WINDOW_MS } from "./rateLimiter.js";
 
 /**
  * Builds the CourtSide Express app. Kept as a factory (rather than a
@@ -17,10 +30,14 @@ export function createApp(provider: CommentaryProvider): Express {
   app.post("/games/:id/events", async (req, res) => {
     try {
       const result = await ingestEvent(req.params.id, req.body ?? {}, provider);
-      res.status(201).json({
+      // A replayed externalEventId is a clean no-op: 200 (nothing new was
+      // created) instead of 201, but otherwise the same successful shape.
+      res.status(result.duplicate ? 200 : 201).json({
         event: result.event,
         commentary: result.commentary,
         state: result.game,
+        duplicate: result.duplicate ?? false,
+        path: result.path,
       });
     } catch (err) {
       handleError(res, err);
@@ -47,20 +64,104 @@ export function createApp(provider: CommentaryProvider): Express {
   });
 
   // What a Fire TV overlay polls to render/speak new commentary lines.
+  // `?since=<commentary-id-or-ISO-timestamp>` resumes a feed instead of
+  // re-fetching full history (e.g. after the app comes back from the
+  // background). `?viewerId=<id>` personalizes the returned text per that
+  // viewer's stored preferences.
   app.get("/games/:id/commentary", (req, res) => {
     try {
-      res.json(getCommentary(req.params.id));
+      const since = typeof req.query.since === "string" ? req.query.since : undefined;
+      const viewerId = typeof req.query.viewerId === "string" ? req.query.viewerId : undefined;
+      res.json(getCommentary(req.params.id, since, viewerId));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Live push companion to the polling endpoint above: an SSE stream that
+  // emits `data: {"type":"commentary","commentary":...,"state":...}\n\n`
+  // the instant a new event produces commentary, so a connected overlay
+  // reacts immediately instead of waiting for its next poll.
+  app.get("/games/:id/stream", (req, res) => {
+    try {
+      requireGame(req.params.id); // 404s cleanly for an unknown game, same as the other read routes
+    } catch (err) {
+      handleError(res, err);
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+    res.write(": connected\n\n"); // comment line: opens the stream immediately, nothing for clients to parse
+
+    const unsubscribe = subscribe(req.params.id, (payload: StreamEvent) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    });
+
+    req.on("close", () => {
+      unsubscribe();
+    });
+  });
+
+  // Per-game commentary-generation cost/latency metrics: how many events
+  // took the fast template path vs. escalated to the full provider. See
+  // `isNotableEvent` in gameService.ts for the routing heuristic.
+  app.get("/games/:id/metrics", (req, res) => {
+    try {
+      const metrics = getGameMetrics(req.params.id);
+      res.json({
+        gameId: req.params.id,
+        fastPathCount: metrics.fastPathCount,
+        escalatedCount: metrics.escalatedCount,
+        total: metrics.fastPathCount + metrics.escalatedCount,
+      });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Sets a viewer's commentary preferences (favorite team, verbosity),
+  // applied at read time by /commentary?viewerId=... and /ask.
+  app.post("/games/:id/viewers/:viewerId/preferences", (req, res) => {
+    try {
+      const preferences = setPreferences(req.params.id, req.params.viewerId, req.body ?? {});
+      res.status(200).json({ viewerId: req.params.viewerId, preferences });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.get("/games/:id/viewers/:viewerId/preferences", (req, res) => {
+    try {
+      const preferences = getPreferences(req.params.id, req.params.viewerId) ?? {};
+      res.json({ viewerId: req.params.viewerId, preferences });
     } catch (err) {
       handleError(res, err);
     }
   });
 
   // On-demand viewer Q&A ("what's the score?", "why was that a foul?"),
-  // triggered by remote/voice input on the Fire TV overlay.
+  // triggered by remote/voice input on the Fire TV overlay. Rate-limited
+  // per (game, viewer) — or per (game, IP) when no viewerId is given — to
+  // protect the Q&A path from abuse/spam.
   app.post("/games/:id/ask", async (req, res) => {
     try {
-      const { question } = req.body ?? {};
-      const result = await askQuestion(req.params.id, question, provider);
+      const { question, viewerId } = req.body ?? {};
+      const rateLimitKey = `${req.params.id}:${viewerId || req.ip}`;
+      const rateLimit = checkRateLimit(rateLimitKey);
+      if (!rateLimit.allowed) {
+        res.status(429).json({
+          error: `Too many questions for this game — limit is ${ASK_RATE_LIMIT_MAX} per ${
+            ASK_RATE_LIMIT_WINDOW_MS / 1000
+          }s. Try again shortly.`,
+          retryAfterMs: rateLimit.retryAfterMs,
+        });
+        return;
+      }
+      const result = await askQuestion(req.params.id, question, provider, viewerId);
       res.json(result);
     } catch (err) {
       handleError(res, err);

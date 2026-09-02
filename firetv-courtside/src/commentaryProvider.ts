@@ -1,4 +1,4 @@
-import type { EventType, GameEvent, GameState } from "./types.js";
+import type { EventType, GameEvent, GameState, ViewerPreferences } from "./types.js";
 
 /**
  * The seam between CourtSide's game logic and whatever actually generates
@@ -115,6 +115,50 @@ function describeEvent(event: GameEvent): string {
 
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+// --- Per-viewer personalization ------------------------------------------
+
+/**
+ * Applies a viewer's preferences on top of an already-generated line of
+ * commentary or Q&A answer. Deliberately a post-processing decorator rather
+ * than something baked into generation: commentary is generated once per
+ * event and shared across every viewer of a game (a broadcast, not a
+ * per-viewer LLM call), so personalization happens at serve time — in
+ * `gameService.getCommentary`/`askQuestion` — for whichever viewer asked.
+ * Works uniformly on top of either provider's output (template or a real
+ * LLM's), since it only touches the returned text.
+ */
+export function personalizeText(text: string, game: GameState, prefs: ViewerPreferences | undefined): string {
+  if (!prefs) return text;
+  let out = text;
+
+  const favoriteTeam = resolveFavoriteTeam(game, prefs.favoriteTeam);
+  if (favoriteTeam) {
+    const favoriteScore = favoriteTeam === game.homeTeam ? game.homeScore : game.awayScore;
+    const otherScore = favoriteTeam === game.homeTeam ? game.awayScore : game.homeScore;
+    const diff = favoriteScore - otherScore;
+    const perspective =
+      diff > 0 ? `up by ${diff}` : diff < 0 ? `down by ${-diff}` : "tied up";
+    out += ` (${favoriteTeam} fan view: ${perspective}.)`;
+  }
+
+  if (prefs.verbosity === "detailed") {
+    out += ` [${capitalize(game.periodLabel)} ${game.period}, ${game.clock} remaining, ${scoreLine(game)}.]`;
+  }
+
+  return out;
+}
+
+/** Resolves a viewer's `favoriteTeam` preference ("home"/"away"/a team name) to an actual team name in this game, or undefined if it doesn't match either side. */
+function resolveFavoriteTeam(game: GameState, favoriteTeam?: string): string | undefined {
+  if (!favoriteTeam?.trim()) return undefined;
+  const f = favoriteTeam.trim().toLowerCase();
+  if (f === "home") return game.homeTeam;
+  if (f === "away") return game.awayTeam;
+  if (game.homeTeam.toLowerCase() === f) return game.homeTeam;
+  if (game.awayTeam.toLowerCase() === f) return game.awayTeam;
+  return undefined;
 }
 
 // --- Template generation, keyed off structured data --------------------

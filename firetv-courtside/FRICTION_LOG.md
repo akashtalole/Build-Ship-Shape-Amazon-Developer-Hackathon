@@ -38,6 +38,43 @@ Notes captured while building the Fire TV CourtSide submission, for the hackatho
    pipeline or a play-by-play API integration becomes a translation layer in front of this same endpoint rather
    than a rewrite of the event model.
 
+## Round 2: advanced features
+
+1. **SSE with Express is mostly fine, but the test is the hard part, not the server code.** Writing the
+   `text/event-stream` route itself was ~15 lines (`writeHead` with the three standard headers, `res.write` a
+   `data: ...\n\n` line per push, unsubscribe on `req.on("close")`). The friction was entirely on the test side:
+   Node's `fetch()` resolves as soon as headers arrive, so the request/response cycle never "completes" while a
+   stream stays open, and you have to read the body as a `ReadableStream` via `.getReader()` and race it against a
+   timeout rather than just `await`ing a JSON body like every other test in this file. Worth the trouble — it's the
+   only way to prove the push actually fires, rather than just asserting the route returns 200 with the right
+   `Content-Type`.
+2. **Designing "notable" was the actual design decision here, and it's easy to either over- or under-scope it.** A
+   heuristic that escalates too much (e.g. "any score is notable") defeats the point of having a fast path at all;
+   one that escalates too little (e.g. "only game_end is notable") would silently flatten genuinely big moments
+   (a buzzer-beater go-ahead three) into the same generic template as a garbage-time free throw. Landed on
+   "does this event change who's winning, or is it flagged serious by its own description" — cheap to compute from
+   data already in hand (no new event fields, no separate classifier call), and it reads as an obviously correct
+   line to draw rather than an arbitrary one. The one thing it can't catch: a `description` that under-reports
+   severity (a feed that doesn't bother tagging a foul as "flagrant") — an honest limitation of a keyword heuristic,
+   same shape as the Q&A template's keyword-matching limitation noted above.
+3. **Resumable-feed cursor: ID vs. timestamp is a real tradeoff, not a formality.** A timestamp cursor is simpler to
+   reason about and works even if the client only ever logged "the time I last saw a line," but two commentary
+   lines generated in the same event-loop tick can land on the same millisecond, making a strict `createdAt >
+   since` comparison silently drop or double-return an entry at the boundary. An ID cursor sidesteps that
+   completely — it's resolved by *position* in the stored (newest-first) list, not by comparing clock values — but
+   it requires the client to have actually captured an ID rather than "just the last timestamp I have," and it
+   breaks if that specific entry is ever pruned. Shipped both (ID preferred, exact; timestamp as a documented, best
+   -effort fallback) rather than picking one, since a real Fire TV client is exactly the kind of consumer that would
+   reasonably have either on hand depending on how it persisted state before backgrounding.
+4. **Per-viewer rate limiting needs a key strategy decided up front, or it silently limits the wrong thing.** The
+   naive version — rate-limit by IP alone — would have let one viewer's spam exhaust the budget for every other
+   viewer behind the same NAT/proxy (a real risk for a shared living-room Fire TV, or several viewers on one home
+   network), while a version keyed only by `gameId` would let one viewer lock out everyone watching that game. Went
+   with `(gameId, viewerId)` when a viewer ID is available and `(gameId, IP)` as the fallback the route already had
+   to support (since `/ask` had no required viewer identity before this round) — which also meant threading an
+   optional `viewerId` through the existing `/ask` body rather than adding a new required field, so the endpoint's
+   old callers (no `viewerId` at all) keep working unchanged.
+
 ## Feature requests
 
 - A minimal, published schema for a "generic play-by-play event" (type, team/player, timestamp, description) that
