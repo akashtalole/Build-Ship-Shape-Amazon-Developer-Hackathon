@@ -16,6 +16,7 @@ export function registerInsightTools(server: McpServer): void {
         "Generate a short, natural-language weekly household digest (tasks, low stock, budget) " +
         "by asking the connected model to narrate the raw data, via MCP sampling.",
       inputSchema: {},
+      annotations: { title: "Generate weekly narrative", readOnlyHint: true, openWorldHint: true },
     },
     async () => {
       const tasks = listUpcomingTasks(7);

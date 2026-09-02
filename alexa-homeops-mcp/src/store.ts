@@ -81,6 +81,14 @@ export function markTaskDone(taskId: string): Task | undefined {
   return task;
 }
 
+export function getTaskById(taskId: string): Task | undefined {
+  return household.tasks.find((t) => t.id === taskId);
+}
+
+export function listTaskIds(): string[] {
+  return household.tasks.map((t) => t.id);
+}
+
 export function findItemByName(name: string): ShoppingItem | undefined {
   const needle = name.trim().toLowerCase();
   return household.shoppingItems.find((i) => i.name.toLowerCase() === needle);

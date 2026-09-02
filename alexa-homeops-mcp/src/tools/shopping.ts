@@ -11,14 +11,17 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
         "List household items that are running low and may need reordering. " +
         "Use this to answer 'what's running low' or before offering to reorder anything.",
       inputSchema: {},
+      outputSchema: {
+        items: z.array(
+          z.object({ id: z.string(), name: z.string(), quantityOnHand: z.number(), reorderThreshold: z.number() })
+        ),
+      },
+      annotations: { title: "List low-stock items", readOnlyHint: true, openWorldHint: false },
     },
     async () => {
       const items = itemsRunningLow();
-      if (items.length === 0) {
-        return { content: [{ type: "text", text: "Everything is well stocked." }] };
-      }
-      const lines = items.map((i) => `- ${i.name} (${i.quantityOnHand} on hand)`);
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      const text = items.length === 0 ? "Everything is well stocked." : items.map((i) => `- ${i.name} (${i.quantityOnHand} on hand)`).join("\n");
+      return { content: [{ type: "text", text }], structuredContent: { items } };
     }
   );
 
@@ -35,6 +38,13 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
           .boolean()
           .default(false)
           .describe("Skip the interactive confirmation and reorder immediately (only if already confirmed)."),
+      },
+      annotations: {
+        title: "Reorder item",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
       },
     },
     async ({ itemName, confirm }) => {

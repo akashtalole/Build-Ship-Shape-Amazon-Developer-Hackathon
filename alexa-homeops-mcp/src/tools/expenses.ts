@@ -3,6 +3,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { addExpense, expensesThisWeek, getBudgetStatus, setBudget } from "../store.js";
 import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 
+const budgetStatusShape = {
+  category: z.string(),
+  budget: z.number(),
+  spentThisWeek: z.number(),
+  remaining: z.number(),
+  overBudget: z.boolean(),
+};
+
 export function registerExpenseTools(server: McpServer, notify: NotifyFn): void {
   server.registerTool(
     "add_expense",
@@ -18,6 +26,7 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn): void 
           .min(1)
           .describe("Category, e.g. 'groceries', 'utilities', 'maintenance'."),
       },
+      annotations: { title: "Add expense", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     async ({ description, amount, category }) => {
       const expense = addExpense(description, amount, category);
@@ -44,6 +53,7 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn): void 
         "Summarize household activity for the past week: total spend by category. " +
         "Use this to answer 'how are we doing this week' or 'what have we spent on'.",
       inputSchema: {},
+      annotations: { title: "Get weekly summary", readOnlyHint: true, openWorldHint: false },
     },
     async () => {
       const expenses = expensesThisWeek();
@@ -70,6 +80,7 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn): void 
         category: z.string().min(1).describe("Category to budget, e.g. 'groceries'."),
         amount: z.number().nonnegative().describe("Weekly budget amount for that category."),
       },
+      annotations: { title: "Set budget", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ category, amount }) => {
       setBudget(category, amount);
@@ -83,18 +94,22 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn): void 
     {
       description: "Show spend vs. budget for every tracked category this week, flagging anything over budget.",
       inputSchema: {},
+      outputSchema: { budgets: z.array(z.object(budgetStatusShape)) },
+      annotations: { title: "Get budget status", readOnlyHint: true, openWorldHint: false },
     },
     async () => {
       const statuses = getBudgetStatus();
-      if (statuses.length === 0) {
-        return { content: [{ type: "text", text: "No budgets set yet. Use set_budget to add one." }] };
-      }
-      const lines = statuses.map(
-        (b) =>
-          `- ${b.category}: ${b.spentThisWeek.toFixed(2)} / ${b.budget.toFixed(2)}` +
-          (b.overBudget ? " ⚠️ over budget" : "")
-      );
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      const text =
+        statuses.length === 0
+          ? "No budgets set yet. Use set_budget to add one."
+          : statuses
+              .map(
+                (b) =>
+                  `- ${b.category}: ${b.spentThisWeek.toFixed(2)} / ${b.budget.toFixed(2)}` +
+                  (b.overBudget ? " ⚠️ over budget" : "")
+              )
+              .join("\n");
+      return { content: [{ type: "text", text }], structuredContent: { budgets: statuses } };
     }
   );
 }

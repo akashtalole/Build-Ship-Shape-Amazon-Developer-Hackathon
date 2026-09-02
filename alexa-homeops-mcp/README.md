@@ -24,13 +24,21 @@ Alexa+'s agent can call these tools, in combination, to complete multi-step requ
 | `get_weekly_summary` | Total spend by category over the past 7 days |
 | `set_budget` / `get_budget_status` | Set and check weekly budgets per category |
 | `generate_weekly_narrative` | Turn the week's data into a natural-language digest via **MCP sampling** |
+| `sync_household_calendar` | Sync tasks to a shared calendar, streaming **progress notifications** per task |
 
 Beyond tools, the server also exposes:
 
 - **Resources** (`homeops://tasks/upcoming`, `homeops://shopping/low-stock`, `homeops://budget/status`) that a
   client can subscribe to and get pushed `notifications/resources/updated` events for, instead of polling.
+- **A resource template** (`homeops://tasks/{taskId}`) with argument completion, so a client can look up one task
+  by ID and get autocomplete suggestions for valid IDs as the user types.
 - **A prompt** (`weekly_household_briefing`) — a ready-made template a client can pull instead of hand-assembling
   one from raw tool output.
+- **Tool annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on every tool, so a
+  client can decide what needs a confirmation prompt without parsing descriptions.
+- **Structured output** (`outputSchema` + `structuredContent`) on the read-heavy tools (`list_upcoming_tasks`,
+  `list_low_stock_items`, `get_budget_status`), so a client can render its own UI from typed JSON instead of
+  reparsing the text summary.
 
 ### Advanced/unique features
 
@@ -49,6 +57,13 @@ Beyond tools, the server also exposes:
   *why* before assigning.
 - **Proactive budget alerts.** Categories carry a weekly budget; `add_expense` checks against it immediately and
   surfaces an over-budget warning in the same response, with `homeops://budget/status` updated for subscribers.
+- **Progress-streaming long operations.** `sync_household_calendar` reports `notifications/progress` per task as
+  it "syncs" (simulated latency), so a client can show a live progress bar instead of a spinner with no feedback.
+- **Discoverable, typed resources.** A `ResourceTemplate` (`homeops://tasks/{taskId}`) supplies autocomplete
+  suggestions for its `taskId` argument via the MCP completion capability, and read-heavy tools return
+  `structuredContent` validated against a declared `outputSchema` alongside their text summary.
+- **Tool-use safety hints.** Every tool declares `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`
+  annotations, the spec's mechanism for a client to decide which calls are safe to auto-approve.
 
 The server holds a single demo household in memory, seeded with sample tasks and shopping items on startup — enough
 to drive a live demo without a database. Swapping in per-user persistence would mean keying `src/store.ts` off the
@@ -65,13 +80,14 @@ src/
   prompts.ts       weekly_household_briefing prompt template
   types.ts         Shared data model
   tools/
-    tasks.ts       list_upcoming_tasks, add_task, mark_task_done, suggest_assignee
+    tasks.ts       list_upcoming_tasks, add_task, mark_task_done, suggest_assignee, sync_household_calendar
     shopping.ts    list_low_stock_items, reorder_item (elicitation-backed confirmation)
     expenses.ts    add_expense, get_weekly_summary, set_budget, get_budget_status
     insights.ts    generate_weekly_narrative (MCP sampling)
 test/
-  smoke.test.ts    End-to-end test: real MCP client + server, exercising tools, resources, prompts,
-                   elicitation, and sampling
+  smoke.test.ts    End-to-end test: real MCP client + server, exercising every tool, resource (+ template,
+                   completion, subscribe/notify), prompt, elicitation round-trip, sampling call, and
+                   progress-streaming tool call
 ```
 
 ## Running it
@@ -119,12 +135,14 @@ npx @modelcontextprotocol/inspector
    - "Is anything running low?" → "Yes, go ahead and reorder the dog food" (Alexa+ surfaces the elicitation form)
    - "Log $60 for dog food under pets" (triggers the over-budget warning if the pets budget is set below that)
    - "Give me the weekly household briefing" (uses the `weekly_household_briefing` prompt + sampling-backed digest)
+   - "Sync my tasks to the calendar" (streams progress notifications as each task syncs)
 
 ## Judging-criteria alignment
 
 - **Tech Implementation:** Real Streamable HTTP MCP transport (2025-11-25+ spec) with proper session lifecycle
-  (`Mcp-Session-Id` header, per-session `McpServer` instances, session cleanup on close) — plus resources,
-  prompts, elicitation, and sampling, the full breadth of the MCP spec rather than tools alone.
+  (`Mcp-Session-Id` header, per-session `McpServer` instances, session cleanup on close) — plus resources (including
+  a completable resource template), prompts, elicitation, sampling, structured tool output, tool annotations, and
+  progress notifications: essentially the full breadth of the MCP spec rather than tools alone.
 - **Design:** Tools are scoped and composable so the agent can chain them (check → decide → act); the one
   state-changing/spending tool (`reorder_item`) confirms through the protocol's own elicitation mechanism rather
   than a bespoke flag, and every capability degrades gracefully when a client doesn't support it.

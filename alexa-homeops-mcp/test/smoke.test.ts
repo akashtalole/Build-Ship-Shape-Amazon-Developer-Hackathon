@@ -82,10 +82,15 @@ async function main() {
     "reorder_item",
     "set_budget",
     "suggest_assignee",
+    "sync_household_calendar",
   ]);
-  console.log("✓ all 11 HomeOps tools discoverable");
+  const listTasksTool = tools.tools.find((t) => t.name === "list_upcoming_tasks")!;
+  assert.equal(listTasksTool.annotations?.readOnlyHint, true);
+  const addTaskTool = tools.tools.find((t) => t.name === "add_task")!;
+  assert.equal(addTaskTool.annotations?.readOnlyHint, false);
+  console.log("✓ all 12 HomeOps tools discoverable, with read/write annotations");
 
-  // --- Resources ---
+  // --- Resources (static + a completable template) ---
   const resources = await client.listResources();
   const resourceUris = resources.resources.map((r) => r.uri).sort();
   assert.deepEqual(resourceUris, [
@@ -94,7 +99,10 @@ async function main() {
     "homeops://tasks/upcoming",
   ]);
   await client.subscribeResource({ uri: "homeops://tasks/upcoming" });
-  console.log("✓ resources listed and subscribable");
+
+  const templates = await client.listResourceTemplates();
+  assert.ok(templates.resourceTemplates.some((t) => t.uriTemplate === "homeops://tasks/{taskId}"));
+  console.log("✓ resources listed and subscribable, task-detail template discoverable");
 
   // --- Prompts ---
   const prompt = await client.getPrompt({ name: "weekly_household_briefing", arguments: { tone: "concise" } });
@@ -117,6 +125,22 @@ async function main() {
   assert.ok(resourceUpdates > 0);
   console.log("✓ add_task auto-assigns via fair rotation and notifies the subscribed tasks resource");
 
+  // --- Structured tool output ---
+  const listed = await client.callTool({ name: "list_upcoming_tasks", arguments: {} });
+  assert.ok(Array.isArray((listed.structuredContent as any)?.tasks));
+  console.log("✓ list_upcoming_tasks returns structuredContent alongside the text summary");
+
+  // --- Resource template + argument completion ---
+  const completion = await client.complete({
+    ref: { type: "ref/resource", uri: "homeops://tasks/{taskId}" },
+    argument: { name: "taskId", value: "" },
+  });
+  assert.ok(completion.completion.values.length > 0);
+  const someTaskId = completion.completion.values[0];
+  const taskResource = await client.readResource({ uri: `homeops://tasks/${someTaskId}` });
+  assert.ok((taskResource.contents[0].text as string).includes(someTaskId));
+  console.log("✓ homeops://tasks/{taskId} template resolves via completion + direct read");
+
   // --- Elicitation-backed reorder ---
   const reorder = await client.callTool({ name: "reorder_item", arguments: { itemName: "Dog food" } });
   const reorderText = (reorder.content as any)[0].text as string;
@@ -136,13 +160,26 @@ async function main() {
   const budgetStatus = await client.callTool({ name: "get_budget_status", arguments: {} });
   const budgetText = (budgetStatus.content as any)[0].text as string;
   assert.match(budgetText, /over budget/);
-  console.log("✓ get_budget_status surfaces the overage");
+  assert.ok(Array.isArray((budgetStatus.structuredContent as any)?.budgets));
+  console.log("✓ get_budget_status surfaces the overage, with structured budgets[] alongside the text");
 
   // --- Sampling-backed narrative ---
   const narrative = await client.callTool({ name: "generate_weekly_narrative", arguments: {} });
   const narrativeText = (narrative.content as any)[0].text as string;
   assert.equal(narrativeText, "Mock digest: everything looks under control this week.");
   console.log("✓ generate_weekly_narrative uses MCP sampling against the client's model");
+
+  // --- Progress notifications on a long-running tool ---
+  const progressUpdates: number[] = [];
+  await client.callTool(
+    { name: "sync_household_calendar", arguments: {} },
+    undefined,
+    {
+      onprogress: (p) => progressUpdates.push(p.progress),
+    }
+  );
+  assert.ok(progressUpdates.length > 0);
+  console.log(`✓ sync_household_calendar streamed ${progressUpdates.length} progress notification(s)`);
 
   await client.close();
   httpServer.close();
