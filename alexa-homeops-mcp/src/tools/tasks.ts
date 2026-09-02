@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { addTask, listUpcomingTasks, markTaskDone } from "../store.js";
+import { addTask, listUpcomingTasks, markTaskDone, openTaskCounts, suggestAssignee } from "../store.js";
+import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 
-export function registerTaskTools(server: McpServer): void {
+export function registerTaskTools(server: McpServer, notify: NotifyFn): void {
   server.registerTool(
     "list_upcoming_tasks",
     {
@@ -34,20 +35,29 @@ export function registerTaskTools(server: McpServer): void {
   server.registerTool(
     "add_task",
     {
-      description: "Add a new household task with a due date and optional assignee.",
+      description:
+        "Add a new household task with a due date. If no assignee is given, one is picked " +
+        "automatically using fair chore rotation (whoever currently has the fewest open tasks).",
       inputSchema: {
         title: z.string().min(1).describe("Short description of the task."),
         dueDate: z.string().describe("Due date in YYYY-MM-DD format."),
-        assignee: z.string().optional().describe("Household member responsible, if known."),
+        assignee: z
+          .string()
+          .optional()
+          .describe("Household member responsible. Omit to auto-assign fairly."),
       },
     },
     async ({ title, dueDate, assignee }) => {
+      const wasAutoAssigned = !assignee;
       const task = addTask(title, dueDate, assignee);
+      await notify(RESOURCE_URIS.upcomingTasks);
       return {
         content: [
           {
             type: "text",
-            text: `Added "${task.title}" due ${task.dueDate}${assignee ? ` for ${assignee}` : ""}.`,
+            text: `Added "${task.title}" due ${task.dueDate} for ${task.assignee}${
+              wasAutoAssigned ? " (auto-assigned by workload)" : ""
+            }.`,
           },
         ],
       };
@@ -67,7 +77,27 @@ export function registerTaskTools(server: McpServer): void {
       if (!task) {
         return { content: [{ type: "text", text: `No task found with ID ${taskId}.` }], isError: true };
       }
+      await notify(RESOURCE_URIS.upcomingTasks);
       return { content: [{ type: "text", text: `Marked "${task.title}" as done.` }] };
+    }
+  );
+
+  server.registerTool(
+    "suggest_assignee",
+    {
+      description:
+        "Suggest which household member should take the next chore, based on who currently " +
+        "has the fewest open tasks. Use this before assigning a new task to keep chores balanced.",
+      inputSchema: {},
+    },
+    async () => {
+      const suggestion = suggestAssignee();
+      const counts = openTaskCounts()
+        .map((c) => `${c.member}: ${c.openTasks} open`)
+        .join(", ");
+      return {
+        content: [{ type: "text", text: `Suggest ${suggestion} (current workload — ${counts}).` }],
+      };
     }
   );
 }

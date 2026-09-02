@@ -15,16 +15,40 @@ Alexa+'s agent can call these tools, in combination, to complete multi-step requ
 | Tool | Purpose |
 |---|---|
 | `list_upcoming_tasks` | Household to-dos due within N days |
-| `add_task` | Add a task with a due date and optional assignee |
+| `add_task` | Add a task; auto-assigns fairly if no assignee is given |
 | `mark_task_done` | Mark a task complete |
+| `suggest_assignee` | Recommend who should take the next chore, by current open-task load |
 | `list_low_stock_items` | Items running low that might need reordering |
-| `reorder_item` | Reorder an item — **previews first**, only executes with `confirm: true` |
-| `add_expense` | Log a household expense with an amount and category |
+| `reorder_item` | Reorder an item — confirms via **MCP elicitation** before spending |
+| `add_expense` | Log a household expense; warns if it pushes a category over budget |
 | `get_weekly_summary` | Total spend by category over the past 7 days |
+| `set_budget` / `get_budget_status` | Set and check weekly budgets per category |
+| `generate_weekly_narrative` | Turn the week's data into a natural-language digest via **MCP sampling** |
 
-**Design note:** `reorder_item` is a spending action, so it never buys anything on the first call. It returns a
-preview ("X has Y on hand, confirm the reorder?") and only restocks once called again with `confirm: true` —
-mirroring how Alexa+ should confirm with the user before it takes a real-world, money-spending action.
+Beyond tools, the server also exposes:
+
+- **Resources** (`homeops://tasks/upcoming`, `homeops://shopping/low-stock`, `homeops://budget/status`) that a
+  client can subscribe to and get pushed `notifications/resources/updated` events for, instead of polling.
+- **A prompt** (`weekly_household_briefing`) — a ready-made template a client can pull instead of hand-assembling
+  one from raw tool output.
+
+### Advanced/unique features
+
+- **Elicitation-backed confirmation.** `reorder_item` doesn't rely on a hand-rolled `confirm` boolean flag — it
+  calls `server.server.elicitInput(...)` to have the *client* prompt the user directly via a real MCP form
+  request, the protocol-correct way to gate a spending action. If the connected client hasn't declared the
+  elicitation capability, it gracefully falls back to a preview-then-confirm flow instead of failing.
+- **Sampling instead of a bundled LLM key.** `generate_weekly_narrative` has no API key or model of its own — it
+  sends a `createMessage` sampling request to the *connected client's* model (Alexa+'s own LLM) to narrate the raw
+  household data, and falls back to a templated digest if the client doesn't support sampling.
+- **Live resources with push updates.** Task, shopping, and budget state are exposed as MCP resources, and
+  `add_task`, `reorder_item`, `add_expense`, and `set_budget` all fire `notifications/resources/updated` to any
+  subscriber — a client can watch the household passively instead of re-polling tools.
+- **Fair chore rotation.** `add_task` auto-assigns to whichever household member currently has the fewest open
+  tasks when no assignee is given, and `suggest_assignee` exposes that logic directly so the agent can explain
+  *why* before assigning.
+- **Proactive budget alerts.** Categories carry a weekly budget; `add_expense` checks against it immediately and
+  surfaces an over-budget warning in the same response, with `homeops://budget/status` updated for subscribers.
 
 The server holds a single demo household in memory, seeded with sample tasks and shopping items on startup — enough
 to drive a live demo without a database. Swapping in per-user persistence would mean keying `src/store.ts` off the
@@ -35,15 +59,19 @@ caller's identity instead of a single in-memory object.
 ```
 src/
   index.ts        Express app + Streamable HTTP transport, one MCP session per conversation
-  server.ts        createHomeOpsServer() factory — registers all tools on a fresh McpServer
-  store.ts         In-memory household data (tasks, shopping items, expenses) + seed data
+  server.ts        createHomeOpsServer() factory — wires resources, prompts, and all tools onto a fresh McpServer
+  store.ts         In-memory household data (tasks, shopping, expenses, budgets) + fair-rotation/budget logic
+  resources.ts     homeops:// resources + subscribe/unsubscribe + notify() helper for push updates
+  prompts.ts       weekly_household_briefing prompt template
   types.ts         Shared data model
   tools/
-    tasks.ts       list_upcoming_tasks, add_task, mark_task_done
-    shopping.ts    list_low_stock_items, reorder_item
-    expenses.ts    add_expense, get_weekly_summary
+    tasks.ts       list_upcoming_tasks, add_task, mark_task_done, suggest_assignee
+    shopping.ts    list_low_stock_items, reorder_item (elicitation-backed confirmation)
+    expenses.ts    add_expense, get_weekly_summary, set_budget, get_budget_status
+    insights.ts    generate_weekly_narrative (MCP sampling)
 test/
-  smoke.test.ts    End-to-end test: spins up the server, connects a real MCP client, exercises every tool
+  smoke.test.ts    End-to-end test: real MCP client + server, exercising tools, resources, prompts,
+                   elicitation, and sampling
 ```
 
 ## Running it
@@ -67,9 +95,11 @@ npm run dev
 npm test
 ```
 
-This starts the server on an ephemeral port, connects an MCP `Client` over `StreamableHTTPClientTransport`, lists
-the tools, and drives a full scenario (check tasks → spot low stock → preview a reorder → confirm it → log an
-expense → pull the weekly summary). No external services required.
+This starts the server on an ephemeral port, connects a real MCP `Client` over `StreamableHTTPClientTransport`
+(with elicitation- and sampling-handling stubs wired in), and drives a full scenario: list tools/resources/prompts →
+get a fair-rotation suggestion → add a task and confirm its resource-update notification arrives → reorder an item
+through a live elicitation round-trip → log an expense and see the over-budget warning → generate a
+sampling-backed narrative. No external services required.
 
 You can also point the [MCP Inspector](https://modelcontextprotocol.io/legacy/tools/inspector) at the running
 server for interactive exploration:
@@ -85,19 +115,24 @@ npx @modelcontextprotocol/inspector
 2. In the Alexa+ Agent Skill / web app simulator, register the MCP server endpoint (`https://<host>/mcp`).
 3. Try prompts such as:
    - "What's due around the house this week?"
-   - "Is anything running low?" → "Yes, go ahead and reorder the dog food" (exercises the preview → confirm flow)
-   - "Log $42.50 for dog food under pets"
-   - "How are we doing on spending this week?"
+   - "Who should take out the trash?" (fair chore rotation)
+   - "Is anything running low?" → "Yes, go ahead and reorder the dog food" (Alexa+ surfaces the elicitation form)
+   - "Log $60 for dog food under pets" (triggers the over-budget warning if the pets budget is set below that)
+   - "Give me the weekly household briefing" (uses the `weekly_household_briefing` prompt + sampling-backed digest)
 
 ## Judging-criteria alignment
 
 - **Tech Implementation:** Real Streamable HTTP MCP transport (2025-11-25+ spec) with proper session lifecycle
-  (`Mcp-Session-Id` header, per-session `McpServer` instances, session cleanup on close).
-- **Design:** Tools are scoped and composable so the agent can chain them (check → decide → act), and the one
-  state-changing/spending tool (`reorder_item`) requires an explicit confirmation step rather than acting silently.
-- **Potential Impact:** A genuinely useful daily-use pattern (household coordination) rather than a novelty demo —
-  the in-memory store is the only hackathon-specific shortcut; the tool surface itself is production-shaped.
-- **Quality of Idea:** Demonstrates multi-tool agentic orchestration, the actual differentiator between an "Agent
+  (`Mcp-Session-Id` header, per-session `McpServer` instances, session cleanup on close) — plus resources,
+  prompts, elicitation, and sampling, the full breadth of the MCP spec rather than tools alone.
+- **Design:** Tools are scoped and composable so the agent can chain them (check → decide → act); the one
+  state-changing/spending tool (`reorder_item`) confirms through the protocol's own elicitation mechanism rather
+  than a bespoke flag, and every capability degrades gracefully when a client doesn't support it.
+- **Potential Impact:** A genuinely useful daily-use pattern (household coordination, fair chore-splitting, budget
+  awareness) rather than a novelty demo — the in-memory store is the only hackathon-specific shortcut; the tool,
+  resource, and prompt surface is production-shaped.
+- **Quality of Idea:** Demonstrates multi-tool agentic orchestration *and* deep MCP protocol usage (resources with
+  live push updates, sampling instead of a bundled model key) — the actual differentiators between an "Agent
   Skill" and a legacy single-intent Alexa Skill.
 
 ## Friction log

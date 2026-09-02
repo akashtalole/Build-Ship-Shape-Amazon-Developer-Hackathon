@@ -25,7 +25,17 @@ export interface Expense {
 export interface Household {
   id: string;
   name: string;
+  members: string[];
   tasks: Task[];
   shoppingItems: ShoppingItem[];
   expenses: Expense[];
+  budgets: Record<string, number>; // category -> weekly budget
+}
+
+export interface BudgetStatus {
+  category: string;
+  budget: number;
+  spentThisWeek: number;
+  remaining: number;
+  overBudget: boolean;
 }

@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { findItemByName, itemsRunningLow, recordReorder } from "../store.js";
+import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 
-export function registerShoppingTools(server: McpServer): void {
+export function registerShoppingTools(server: McpServer, notify: NotifyFn): void {
   server.registerTool(
     "list_low_stock_items",
     {
@@ -25,15 +26,15 @@ export function registerShoppingTools(server: McpServer): void {
     "reorder_item",
     {
       description:
-        "Reorder a household item by name. This is a spending action: call it once with " +
-        "confirm=false (or omitted) to preview what would happen, and only call it again " +
-        "with confirm=true after the user has explicitly approved the purchase.",
+        "Reorder a household item by name. This is a spending action: it will ask the user " +
+        "to confirm via MCP elicitation before purchasing. Pass confirm=true directly only if " +
+        "the user has already confirmed in this conversation and the client doesn't support elicitation.",
       inputSchema: {
         itemName: z.string().min(1).describe("The item to reorder, e.g. 'dog food'."),
         confirm: z
           .boolean()
           .default(false)
-          .describe("Set to true only after the user has explicitly confirmed the reorder."),
+          .describe("Skip the interactive confirmation and reorder immediately (only if already confirmed)."),
       },
     },
     async ({ itemName, confirm }) => {
@@ -42,26 +43,53 @@ export function registerShoppingTools(server: McpServer): void {
         return { content: [{ type: "text", text: `I don't track an item called "${itemName}".` }], isError: true };
       }
 
-      if (!confirm) {
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `${item.name} has ${item.quantityOnHand} on hand. ` +
-                `Reordering will restock it. Confirm the reorder to proceed?`,
+      let approved = confirm === true;
+
+      if (!approved) {
+        try {
+          // Prefer asking the client to elicit confirmation directly from
+          // the user, rather than relying on a hand-rolled confirm flag.
+          const elicited = await server.server.elicitInput({
+            mode: "form",
+            message: `${item.name} has ${item.quantityOnHand} on hand. Reorder it now?`,
+            requestedSchema: {
+              type: "object",
+              properties: {
+                confirmReorder: {
+                  type: "boolean",
+                  title: "Confirm reorder",
+                  default: true,
+                },
+              },
+              required: ["confirmReorder"],
             },
-          ],
-        };
+          });
+
+          if (elicited.action !== "accept" || !elicited.content?.confirmReorder) {
+            return { content: [{ type: "text", text: `Okay, I won't reorder ${item.name}.` }] };
+          }
+          approved = true;
+        } catch {
+          // Client hasn't declared the elicitation capability — fall back
+          // to a two-step preview so the tool still degrades gracefully.
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `${item.name} has ${item.quantityOnHand} on hand. ` +
+                  `Call reorder_item again with confirm=true once the user approves.`,
+              },
+            ],
+          };
+        }
       }
 
-      const updated = recordReorder(item.id);
+      const updated = recordReorder(item.id)!;
+      await notify(RESOURCE_URIS.lowStock);
       return {
         content: [
-          {
-            type: "text",
-            text: `Reordered ${updated!.name}. It now shows ${updated!.quantityOnHand} on hand once delivered.`,
-          },
+          { type: "text", text: `Reordered ${updated.name}. It now shows ${updated.quantityOnHand} on hand once delivered.` },
         ],
       };
     }

@@ -1,12 +1,15 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { addExpense, expensesThisWeek } from "../store.js";
+import { addExpense, expensesThisWeek, getBudgetStatus, setBudget } from "../store.js";
+import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 
-export function registerExpenseTools(server: McpServer): void {
+export function registerExpenseTools(server: McpServer, notify: NotifyFn): void {
   server.registerTool(
     "add_expense",
     {
-      description: "Log a household expense with an amount and category.",
+      description:
+        "Log a household expense with an amount and category. Warns if this pushes the " +
+        "category over its weekly budget (see set_budget / get_budget_status).",
       inputSchema: {
         description: z.string().min(1).describe("What the expense was for."),
         amount: z.number().positive().describe("Amount spent, in the household's local currency."),
@@ -18,12 +21,17 @@ export function registerExpenseTools(server: McpServer): void {
     },
     async ({ description, amount, category }) => {
       const expense = addExpense(description, amount, category);
+      await notify(RESOURCE_URIS.budgetStatus);
+
+      const status = getBudgetStatus().find((b) => b.category === expense.category);
+      const warning =
+        status?.overBudget
+          ? ` Heads up: ${status.category} is now ${(status.spentThisWeek - status.budget).toFixed(2)} over its weekly budget of ${status.budget}.`
+          : "";
+
       return {
         content: [
-          {
-            type: "text",
-            text: `Logged ${expense.amount} for "${expense.description}" under ${expense.category}.`,
-          },
+          { type: "text", text: `Logged ${expense.amount} for "${expense.description}" under ${expense.category}.${warning}` },
         ],
       };
     }
@@ -51,6 +59,42 @@ export function registerExpenseTools(server: McpServer): void {
       return {
         content: [{ type: "text", text: `Total spent this week: ${total.toFixed(2)}\n${lines.join("\n")}` }],
       };
+    }
+  );
+
+  server.registerTool(
+    "set_budget",
+    {
+      description: "Set (or update) the weekly budget for a spending category.",
+      inputSchema: {
+        category: z.string().min(1).describe("Category to budget, e.g. 'groceries'."),
+        amount: z.number().nonnegative().describe("Weekly budget amount for that category."),
+      },
+    },
+    async ({ category, amount }) => {
+      setBudget(category, amount);
+      await notify(RESOURCE_URIS.budgetStatus);
+      return { content: [{ type: "text", text: `Set the weekly ${category.toLowerCase()} budget to ${amount}.` }] };
+    }
+  );
+
+  server.registerTool(
+    "get_budget_status",
+    {
+      description: "Show spend vs. budget for every tracked category this week, flagging anything over budget.",
+      inputSchema: {},
+    },
+    async () => {
+      const statuses = getBudgetStatus();
+      if (statuses.length === 0) {
+        return { content: [{ type: "text", text: "No budgets set yet. Use set_budget to add one." }] };
+      }
+      const lines = statuses.map(
+        (b) =>
+          `- ${b.category}: ${b.spentThisWeek.toFixed(2)} / ${b.budget.toFixed(2)}` +
+          (b.overBudget ? " ⚠️ over budget" : "")
+      );
+      return { content: [{ type: "text", text: lines.join("\n") }] };
     }
   );
 }
