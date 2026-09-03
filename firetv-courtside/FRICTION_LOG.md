@@ -75,6 +75,51 @@ Notes captured while building the Fire TV CourtSide submission, for the hackatho
    optional `viewerId` through the existing `/ask` body rather than adding a new required field, so the endpoint's
    old callers (no `viewerId` at all) keep working unchanged.
 
+## Round 3: archive, alerts, watchlist
+
+1. **Reusing `isNotableEvent` instead of a second "highlight-worthy" concept was the right call, but it meant
+   changing what gets persisted, not just what gets read.** The tempting shortcut for `GET /games/:id/highlights`
+   was to filter `GameState.recentEvents` at read time — but that list is capped at 15 and newest-first for the live
+   overlay's benefit, not built to be a full-game archive. A high-scoring game blows past 15 events well before it
+   ends, silently dropping early highlights from a "recap" that's supposed to cover the whole game. The actual fix
+   was to give notable events their own uncapped, append-only store (`notableEventsByGame` in `store.ts`), populated
+   at the exact moment `ingestEvent` already computes `isNotableEvent` — so the detection logic itself is reused
+   byte-for-byte (one call site, one heuristic), only the *persistence* is new. Worth calling out because "reuse the
+   heuristic" and "reuse the data structure it happens to write into" turned out to be two different decisions.
+2. **Fire-and-forget webhook delivery is simple to say and slightly fiddly to get right without an unhandled
+   rejection or an accidental await creeping back in.** `notifySubscribers` has to return before any HTTP call
+   resolves (the whole point is not to slow down event ingestion), but every `deliverWithRetry` call inside it is
+   still a real `async` function — call it without `void` and a linter (or a future reviewer) reasonably assumes a
+   dropped promise is a bug. Settled on making `notifySubscribers` itself synchronous (it only decides rate limits
+   and starts deliveries) and explicitly `void`-ing each `deliverWithRetry` call, with `deliverWithRetry` guaranteed
+   to swallow every failure internally (network errors *and* non-2xx responses both just count as "try again") so
+   there's never an unhandled rejection to chase down from a detached promise.
+3. **Retry backoff timing is a real tradeoff between "prove it works" and "don't make the test suite slow."** A
+   production-grade backoff (1s, 2s, 4s...) is the right call for a real receiver having a bad few seconds, but
+   baking those delays into constants the test suite can't override would make a full `npm test` run take many
+   extra seconds for a code path that, in the test's own local-HTTP-listener setup, virtually never actually fails.
+   Went with short, still-genuinely-exponential backoff (150ms, then 300ms) rather than parameterizing it for tests
+   the way `checkRateLimit` already is — the smoke suite's webhook receiver is always up, so retries basically never
+   trigger there; the honest tradeoff being made is that this constant is tuned for "demo-fast" rather than
+   "production-realistic," and a real deployment would want it configurable or at least larger.
+4. **The rate-cap policy (drop vs. batch) has a real answer once you ask "what's the source of truth."** Batching
+   sounded appealing at first — collapse a burst into one alert instead of silently losing information — but it
+   means either delaying every alert until a batching window closes (adding latency to the *first* alert too, not
+   just the excess ones) or holding an unbounded queue per subscription, which just moves the "what if the receiver
+   never catches up" problem instead of solving it. Landed on dropping excess deliveries outright, and specifically
+   because `GET /games/:id/highlights` already exists as the durable, uncapped record of every notable event: the
+   webhook is explicitly a *best-effort, live* nudge, not the archive, so a receiver that wants the full picture
+   after a burst can always reconcile against `/highlights` instead of the webhook stream. That framing — "the
+   webhook can lose events, the archive never does" — made the tradeoff easy to defend rather than arbitrary, and is
+   worth keeping in mind if a future round adds a "replay missed alerts" endpoint instead of just documenting the
+   gap.
+5. **Reusing `checkRateLimit` for a completely different key space (subscriptions, not viewers) than it was written
+   for was a good sign the round-2 design held up.** It already took `max`/`windowMs` as parameters "for tests," but
+   that same parameterization made it trivially reusable for the webhook cap with a different key prefix
+   (`webhook:<subscriptionId>` vs. `<gameId>:<viewerId or IP>`) and different constants, with zero changes to
+   `rateLimiter.ts` itself — a small confirmation that keeping that module's interface generic instead of hardcoding
+   the `/ask` constants into its logic paid for itself a round later.
+
 ## Feature requests
 
 - A minimal, published schema for a "generic play-by-play event" (type, team/player, timestamp, description) that

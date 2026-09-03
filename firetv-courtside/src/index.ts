@@ -16,4 +16,7 @@ app.listen(PORT, () => {
   console.log(`Fast/escalated split GET  http://localhost:${PORT}/games/:id/metrics`);
   console.log(`Set preferences:     POST http://localhost:${PORT}/games/:id/viewers/:viewerId/preferences  { "favoriteTeam": "Hawks", "verbosity": "detailed" }`);
   console.log(`Ask a question:      POST http://localhost:${PORT}/games/:id/ask  { "question": "what's the score?" }`);
+  console.log(`Game highlights:     GET  http://localhost:${PORT}/games/:id/highlights`);
+  console.log(`Subscribe to alerts: POST http://localhost:${PORT}/games/:id/subscriptions  { "callbackUrl": "https://..." }`);
+  console.log(`Multi-game watchlist GET  http://localhost:${PORT}/watchlist?viewerId=...`);
 });

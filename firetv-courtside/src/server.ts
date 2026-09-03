@@ -4,11 +4,14 @@ import {
   askQuestion,
   getCommentary,
   getGameMetrics,
+  getHighlights,
   getPreferences,
+  getWatchlist,
   ingestEvent,
   requireGame,
   setPreferences,
   startGame,
+  subscribeToGame,
   NotFoundError,
   ValidationError,
 } from "./gameService.js";
@@ -163,6 +166,42 @@ export function createApp(provider: CommentaryProvider): Express {
       }
       const result = await askQuestion(req.params.id, question, provider, viewerId);
       res.json(result);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Shareable recap of a game's notable moments (see `isNotableEvent` in
+  // gameService.ts) — works for a game that's still in progress
+  // (highlights-so-far) or one that has already received a `game_end` event.
+  app.get("/games/:id/highlights", (req, res) => {
+    try {
+      res.json(getHighlights(req.params.id));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Registers a webhook to receive a signed POST whenever a notable event
+  // happens in this game. Idempotent on (gameId, callbackUrl) — see
+  // `subscribeToGame`. 201 for a new registration, 200 (`duplicate: true`)
+  // when the same callback was already registered for this game.
+  app.post("/games/:id/subscriptions", (req, res) => {
+    try {
+      const { subscription, created } = subscribeToGame(req.params.id, req.body ?? {});
+      res.status(created ? 201 : 200).json({ subscription, duplicate: !created });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Cross-game "what did I miss?" view: notable events across every game a
+  // viewer has interacted with (asked a question on, or set preferences
+  // for), newest first regardless of which game they happened in.
+  app.get("/watchlist", (req, res) => {
+    try {
+      const viewerId = typeof req.query.viewerId === "string" ? req.query.viewerId : "";
+      res.json(getWatchlist(viewerId));
     } catch (err) {
       handleError(res, err);
     }

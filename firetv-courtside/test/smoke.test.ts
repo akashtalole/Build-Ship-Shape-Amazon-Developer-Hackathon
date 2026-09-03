@@ -6,6 +6,8 @@
  * `npm test`.
  */
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { TemplateCommentaryProvider } from "../src/commentaryProvider.js";
 import { createApp } from "../src/server.js";
@@ -292,6 +294,217 @@ async function main() {
   const otherViewerAsk = await postJson(`/games/${rateLimitGame.id}/ask`, { question: "what's the score?", viewerId: "rl-viewer-2" });
   assert.equal(otherViewerAsk.status, 200);
   console.log("✓ the rate limit is scoped per viewer (a different viewerId is not affected)");
+
+  // ======================================================================
+  // Round 3 features: game archive & highlights, outbound score-alert
+  // subscriptions (signed + retried + rate-capped), multi-game watchlist.
+  // ======================================================================
+
+  // --- 7. Game archive & highlights: reuses isNotableEvent — only notable
+  // events show up, both for a game still in progress and after it ends. ---
+  const highlightGame = (await postJson("/games", { homeTeam: "Nuggets", awayTeam: "Timberwolves" })).body;
+
+  await postJson(`/games/${highlightGame.id}/events`, { type: "rebound", team: "home", player: "Gobert" }); // routine
+  const goAhead = await postJson(`/games/${highlightGame.id}/events`, { type: "score", team: "home", points: 2 }); // notable: 0-0 -> lead
+  assert.equal(goAhead.body.path, "escalated");
+  await postJson(`/games/${highlightGame.id}/events`, { type: "foul", team: "away", description: "reaching-in foul" }); // routine
+  const flagrant = await postJson(`/games/${highlightGame.id}/events`, {
+    type: "foul",
+    team: "away",
+    description: "flagrant foul, hard contact",
+  }); // notable
+  assert.equal(flagrant.body.path, "escalated");
+
+  const highlightsInProgress = await (await fetch(`${base}/games/${highlightGame.id}/highlights`)).json();
+  assert.equal(highlightsInProgress.status, "in_progress");
+  assert.equal(highlightsInProgress.highlights.length, 2, "only the 2 notable events should appear, not the 2 routine ones");
+  assert.equal(highlightsInProgress.highlights[0].event.id, flagrant.body.event.id, "highlights are newest-first");
+  console.log("✓ GET /games/:id/highlights returns only notable events (highlights-so-far) while a game is still in progress");
+
+  const gameEndRes = await postJson(`/games/${highlightGame.id}/events`, { type: "game_end" });
+  assert.equal(gameEndRes.body.path, "escalated", "game_end always escalates/is notable");
+
+  const highlightsFinal = await (await fetch(`${base}/games/${highlightGame.id}/highlights`)).json();
+  assert.equal(highlightsFinal.status, "final");
+  assert.equal(highlightsFinal.highlights.length, 3, "game_end joins the highlight reel once the game ends");
+  assert.equal(highlightsFinal.highlights[0].event.type, "game_end");
+  console.log("✓ GET /games/:id/highlights includes game_end and reflects final status once the game has ended");
+
+  const missingHighlights = await fetch(`${base}/games/does-not-exist/highlights`);
+  assert.equal(missingHighlights.status, 404);
+  console.log("✓ GET /games/:id/highlights for an unknown game returns a clean 404 error");
+
+  // --- Helpers for the webhook-subscription tests below: a tiny local HTTP
+  // listener standing in for a client's registered callback endpoint. ---
+  interface WebhookHit {
+    headers: http.IncomingHttpHeaders;
+    body: string;
+  }
+  function startWebhookListener(): Promise<{ port: number; received: WebhookHit[]; close: () => Promise<void> }> {
+    const received: WebhookHit[] = [];
+    return new Promise((resolve) => {
+      const listener = http.createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+          received.push({ headers: req.headers, body: Buffer.concat(chunks).toString("utf8") });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end('{"ok":true}');
+        });
+      });
+      listener.listen(0, "127.0.0.1", () => {
+        const { port } = listener.address() as AddressInfo;
+        resolve({ port, received, close: () => new Promise((r) => listener.close(() => r())) });
+      });
+    });
+  }
+  async function waitFor(predicate: () => boolean, timeoutMs = 3000, intervalMs = 20): Promise<void> {
+    const start = Date.now();
+    while (!predicate()) {
+      if (Date.now() - start > timeoutMs) throw new Error("waitFor(): condition never became true within the timeout");
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+
+  // --- 8. Outbound score-alert subscriptions: a registered webhook gets a
+  // correctly HMAC-signed POST the moment a notable event is ingested — and
+  // never for a routine one. ---
+  const subGame = (await postJson("/games", { homeTeam: "Thunder", awayTeam: "Rockets" })).body;
+  const webhook = await startWebhookListener();
+
+  const subscribeRes = await postJson(`/games/${subGame.id}/subscriptions`, {
+    callbackUrl: `http://127.0.0.1:${webhook.port}/alerts`,
+    viewerId: "sub-viewer",
+  });
+  assert.equal(subscribeRes.status, 201);
+  assert.equal(subscribeRes.body.duplicate, false);
+  const { subscription } = subscribeRes.body;
+  assert.ok(subscription.id);
+  assert.ok(subscription.secret, "the registration response must expose the signing secret");
+  console.log("✓ POST /games/:id/subscriptions registers a webhook and returns its id + signing secret");
+
+  const notableForWebhook = await postJson(`/games/${subGame.id}/events`, {
+    type: "foul",
+    team: "away",
+    player: "Sengun",
+    description: "flagrant foul, hard contact",
+  });
+  assert.equal(notableForWebhook.body.path, "escalated");
+
+  await waitFor(() => webhook.received.length >= 1);
+  assert.equal(webhook.received.length, 1, "exactly the one notable event should have fired a delivery so far");
+  const delivered = webhook.received[0];
+  const sigHeader = String(delivered.headers["x-courtside-signature"] ?? "");
+  assert.match(sigHeader, /^sha256=[0-9a-f]{64}$/, "the signature header should be a hex-encoded sha256 HMAC");
+  const expectedSig = createHmac("sha256", subscription.secret).update(delivered.body).digest("hex");
+  assert.equal(sigHeader, `sha256=${expectedSig}`, "the receiver must be able to verify the payload with the returned secret");
+  const deliveredPayload = JSON.parse(delivered.body);
+  assert.equal(deliveredPayload.type, "notable_event");
+  assert.equal(deliveredPayload.gameId, subGame.id);
+  assert.equal(deliveredPayload.event.id, notableForWebhook.body.event.id);
+  console.log("✓ a notable event triggers a webhook POST correctly HMAC-SHA256-signed, verifiable with the returned secret");
+
+  await postJson(`/games/${subGame.id}/events`, { type: "rebound", team: "home", player: "Holmgren" }); // routine
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(webhook.received.length, 1, "a routine (non-notable) event must not trigger a webhook delivery");
+  console.log("✓ routine events do not trigger score-alert webhook deliveries, only notable ones do");
+
+  // --- 9. Idempotent subscription registration: the same callbackUrl for
+  // the same game is a no-op, not a second subscription. ---
+  const duplicateSubscribeRes = await postJson(`/games/${subGame.id}/subscriptions`, {
+    callbackUrl: `http://127.0.0.1:${webhook.port}/alerts`,
+  });
+  assert.equal(duplicateSubscribeRes.status, 200);
+  assert.equal(duplicateSubscribeRes.body.duplicate, true);
+  assert.equal(
+    duplicateSubscribeRes.body.subscription.id,
+    subscription.id,
+    "re-registering the same callbackUrl must return the original subscription, not a new one"
+  );
+  assert.equal(duplicateSubscribeRes.body.subscription.secret, subscription.secret);
+  console.log("✓ POST /games/:id/subscriptions is idempotent — the same callbackUrl for the same game never creates a duplicate");
+
+  const badSubscribeRes = await postJson(`/games/${subGame.id}/subscriptions`, {});
+  assert.equal(badSubscribeRes.status, 400);
+  console.log("✓ registering a subscription with no callbackUrl is rejected with 400");
+
+  // --- 10. Per-subscription rate cap: a burst of notable events beyond the
+  // cap is dropped for that subscription rather than flooding the receiver. ---
+  const rateCapGame = (await postJson("/games", { homeTeam: "Wolves", awayTeam: "Grizzlies" })).body;
+  const rateCapWebhook = await startWebhookListener();
+
+  const rateCapSubscribeRes = await postJson(`/games/${rateCapGame.id}/subscriptions`, {
+    callbackUrl: `http://127.0.0.1:${rateCapWebhook.port}/alerts`,
+  });
+  assert.equal(rateCapSubscribeRes.status, 201);
+
+  const BURST_SIZE = 8; // deliberately > the 5/min per-subscription cap
+  for (let i = 0; i < BURST_SIZE; i++) {
+    const res = await postJson(`/games/${rateCapGame.id}/events`, {
+      type: "foul",
+      team: "home",
+      description: "flagrant foul, hard contact", // always notable, regardless of score state — keeps the burst simple
+    });
+    assert.equal(res.body.path, "escalated");
+  }
+
+  await new Promise((r) => setTimeout(r, 400)); // let every not-dropped delivery land
+  assert.equal(
+    rateCapWebhook.received.length,
+    5,
+    `subscription should receive only the rate-capped 5 of ${BURST_SIZE} notable-event alerts, the rest dropped`
+  );
+  console.log("✓ a burst of notable events beyond the per-subscription rate cap (5/min) is dropped, not flooding the receiver");
+
+  const rateCapHighlights = await (await fetch(`${base}/games/${rateCapGame.id}/highlights`)).json();
+  assert.equal(
+    rateCapHighlights.highlights.length,
+    BURST_SIZE,
+    "the delivery rate cap must only drop webhook alerts — the archived highlight history keeps every notable event"
+  );
+  console.log("✓ the webhook rate cap never drops events from the highlight/archive history, only excess deliveries");
+
+  await webhook.close();
+  await rateCapWebhook.close();
+
+  // --- 11. Multi-game watchlist: aggregates notable events across every
+  // game a viewer has interacted with, newest-first across games. ---
+  const wlGameA = (await postJson("/games", { homeTeam: "Bucks", awayTeam: "Pacers" })).body;
+  const wlGameB = (await postJson("/games", { homeTeam: "Knicks", awayTeam: "76ers" })).body;
+  const wlViewer = "watchlist-viewer";
+
+  // Interacting via a question on game A, and via preferences on game B —
+  // both count, per spec ("asked a question on, or set preferences for").
+  await postJson(`/games/${wlGameA.id}/ask`, { question: "what's the score?", viewerId: wlViewer });
+  await postJson(`/games/${wlGameB.id}/viewers/${wlViewer}/preferences`, { verbosity: "detailed" });
+
+  const wlEventA = await postJson(`/games/${wlGameA.id}/events`, { type: "foul", team: "away", description: "technical foul" });
+  assert.equal(wlEventA.body.path, "escalated");
+  await new Promise((r) => setTimeout(r, 5)); // guarantee a distinct, later occurredAt for the ordering assertion below
+  const wlEventB = await postJson(`/games/${wlGameB.id}/events`, { type: "foul", team: "home", description: "flagrant foul" });
+  assert.equal(wlEventB.body.path, "escalated");
+
+  const watchlistRes = await fetch(`${base}/watchlist?viewerId=${wlViewer}`);
+  assert.equal(watchlistRes.status, 200);
+  const watchlist = await watchlistRes.json();
+  assert.equal(watchlist.gameIds.length, 2);
+  assert.ok(watchlist.gameIds.includes(wlGameA.id) && watchlist.gameIds.includes(wlGameB.id));
+  assert.equal(watchlist.highlights.length, 2, "the watchlist should include the one notable event from each of the viewer's two games");
+  assert.equal(watchlist.highlights[0].event.id, wlEventB.body.event.id, "watchlist entries are newest-first across games");
+  assert.equal(watchlist.highlights[0].gameId, wlGameB.id);
+  assert.equal(watchlist.highlights[1].event.id, wlEventA.body.event.id);
+  console.log("✓ GET /watchlist?viewerId=... aggregates notable events across every game the viewer interacted with, newest-first");
+
+  const emptyWatchlistRes = await fetch(`${base}/watchlist?viewerId=nobody-yet`);
+  assert.equal(emptyWatchlistRes.status, 200);
+  const emptyWatchlist = await emptyWatchlistRes.json();
+  assert.equal(emptyWatchlist.gameIds.length, 0);
+  assert.equal(emptyWatchlist.highlights.length, 0);
+  console.log("✓ GET /watchlist?viewerId=... for a viewer with no interactions yet returns an empty (not error) watchlist");
+
+  const missingViewerWatchlist = await fetch(`${base}/watchlist`);
+  assert.equal(missingViewerWatchlist.status, 400);
+  console.log("✓ GET /watchlist with no viewerId is rejected with 400");
 
   httpServer.close();
   console.log("\nAll CourtSide smoke tests passed.");
