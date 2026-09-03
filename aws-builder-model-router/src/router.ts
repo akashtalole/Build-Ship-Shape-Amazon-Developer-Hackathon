@@ -2,10 +2,27 @@ import { randomUUID } from "node:crypto";
 import type { SidecarClassifier } from "./sidecarClassifier.js";
 import type { FoundationModelProvider } from "./foundationModel.js";
 import { inferLabelFromFoundationText } from "./foundationModel.js";
-import type { CircuitState, MetricsSnapshot, RoutePath, RouteResult, SidecarResult, CostEstimate } from "./types.js";
+import type { CircuitState, MetricsSnapshot, RouteResult, SidecarResult, CostEstimate, FoundationResult } from "./types.js";
+import { BudgetTracker, type BudgetStatus } from "./budgetTracker.js";
+import { loadMetricsState, saveMetricsState, type PersistedMetricsState } from "./metricsPersistence.js";
 
 /** Confidence at/above which the sidecar's own answer is trusted, unless the caller overrides it per request. */
 export const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
+
+/**
+ * Confidence *below* which an escalation skips the reviewer tier entirely and
+ * goes straight to the full foundation model. The three-tier cascade's
+ * borderline band is therefore `[reviewerConfidenceThreshold, threshold)`:
+ * confident enough that a second, cheaper opinion is worth paying for, but
+ * not confident enough to trust outright. Below `reviewerConfidenceThreshold`
+ * the sidecar has essentially no real signal (e.g. zero keyword hits), and a
+ * second small/cheap model is unlikely to do meaningfully better than the
+ * first one on a genuinely ambiguous input — so there's no point paying its
+ * cost too, and the router pays for the full model's stronger language
+ * understanding directly instead. See README's "Three-tier cascade" section
+ * for the worked example.
+ */
+export const DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD = 0.6;
 
 // Simulated, illustrative unit economics — NOT real AWS pricing. They exist
 // to make the router's cost/latency tradeoff concrete and demoable without
@@ -14,6 +31,8 @@ export const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
 // and SageMaker pricing pages for the specific instance type / model chosen.
 export const SIDECAR_COST_USD = 0.0001; // ~ a small SageMaker real-time endpoint, per invocation
 export const SIDECAR_LATENCY_MS = 45;
+export const REVIEWER_COST_USD = 0.002; // ~ a smaller/cheaper Bedrock model (e.g. a "lite"/Haiku-class model), per invocation
+export const REVIEWER_LATENCY_MS = 250;
 export const FOUNDATION_COST_USD = 0.012; // ~ a mid-size Bedrock foundation model call, per invocation
 export const FOUNDATION_LATENCY_MS = 850;
 
@@ -34,6 +53,9 @@ const FEEDBACK_LOG_MAX_ENTRIES = 500;
 const THRESHOLD_SUGGESTION_MIN_SAMPLES = 3;
 const THRESHOLD_SUGGESTION_TARGET_ACCURACY = 0.95;
 const THRESHOLD_SUGGESTION_STEP = 0.05;
+
+// --- Persistent metrics (round 3) ---
+const DEFAULT_PERSIST_EVERY_N_REQUESTS = 20;
 
 export interface RouteOptions {
   threshold?: number;
@@ -58,6 +80,20 @@ export interface ModelRouterOptions {
   circuitBreakerCooldownMs?: number;
   /** Router-level default for shadow mode when a request doesn't specify one. Default false. */
   defaultShadowMode?: boolean;
+  /**
+   * The mid-tier "reviewer" model provider (three-tier cascade). Optional —
+   * when omitted, the router behaves exactly like the original two-tier
+   * (sidecar / foundation) router: a borderline-confidence request escalates
+   * straight to the full foundation model, same as before this feature
+   * existed.
+   */
+  reviewer?: FoundationModelProvider;
+  /** Lower bound of the reviewer band — see `DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD`'s doc comment. Ignored when `reviewer` isn't provided. */
+  reviewerConfidenceThreshold?: number;
+  /** File path to persist cumulative metrics to (feature: persistent metrics). Omit to disable persistence entirely (in-memory only, the original behavior). */
+  metricsPersistPath?: string;
+  /** Auto-save cadence: persist after this many `route()` calls. Default 20. Ignored when `metricsPersistPath` isn't set. */
+  persistEveryNRequests?: number;
 }
 
 interface CacheEntry {
@@ -67,7 +103,7 @@ interface CacheEntry {
 }
 
 interface FeedbackEntry {
-  path: RoutePath;
+  path: RouteResult["path"];
   correct?: boolean;
 }
 
@@ -82,11 +118,23 @@ interface FeedbackEntry {
  *   2. A circuit breaker around the foundation model with a sidecar-fallback path.
  *   3. Opt-in background shadow evaluation of the foundation model against confident sidecar answers.
  *   4. A feedback log + a simple, illustrative adaptive-threshold suggestion.
+ *   5. An optional three-tier cascade: a cheaper/faster "reviewer" model sits
+ *      between the sidecar and the full foundation model for borderline
+ *      confidence scores.
+ *   6. Cost-budget enforcement: once cumulative spend on paid tiers (reviewer
+ *      + foundation) hits a configured per-period limit, further escalation
+ *      is auto-throttled back to the sidecar's best-effort answer.
+ *   7. Demo-grade file persistence of cumulative metrics across restarts.
  */
 export class ModelRouter {
   private sidecarPathRequests = 0;
+  private reviewerPathRequests = 0;
   private foundationPathRequests = 0;
   private fallbackRequests = 0;
+  private budgetThrottledRequests = 0;
+
+  /** Running total of actual (non-cache-hit) spend across every tier a request actually reached. Replaces recomputing cost from path counts × constants, which stopped being accurate once a single request could incur sidecar+reviewer+foundation cost in one go. */
+  private cumulativeActualCostUsd = 0;
 
   private readonly cache = new Map<string, CacheEntry>();
   private cacheHits = 0;
@@ -109,6 +157,18 @@ export class ModelRouter {
   private readonly feedbackLog = new Map<string, FeedbackEntry>();
   private lastThresholdUsed = DEFAULT_CONFIDENCE_THRESHOLD;
 
+  // --- Three-tier cascade ---
+  private readonly reviewerProvider?: FoundationModelProvider;
+  private readonly reviewerConfidenceThreshold: number;
+
+  // --- Cost-budget enforcement ---
+  private readonly budget: BudgetTracker;
+
+  // --- Persistent metrics ---
+  private readonly metricsPersistPath?: string;
+  private readonly persistEveryNRequests: number;
+  private requestsSincePersist = 0;
+
   constructor(
     private readonly sidecar: SidecarClassifier,
     private readonly foundation: FoundationModelProvider,
@@ -119,18 +179,45 @@ export class ModelRouter {
     this.circuitFailureThreshold = options.circuitBreakerFailureThreshold ?? DEFAULT_CIRCUIT_FAILURE_THRESHOLD;
     this.circuitCooldownMs = options.circuitBreakerCooldownMs ?? DEFAULT_CIRCUIT_COOLDOWN_MS;
     this.defaultShadowMode = options.defaultShadowMode ?? false;
+
+    this.reviewerProvider = options.reviewer;
+    this.reviewerConfidenceThreshold = options.reviewerConfidenceThreshold ?? DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD;
+
+    this.budget = new BudgetTracker(this.now);
+
+    this.metricsPersistPath = options.metricsPersistPath;
+    this.persistEveryNRequests = options.persistEveryNRequests ?? DEFAULT_PERSIST_EVERY_N_REQUESTS;
+    if (this.metricsPersistPath) {
+      this.hydrateFromDisk(this.metricsPersistPath);
+    }
   }
 
   /**
    * Classifies `input`, always running the sidecar first (unless an
    * unexpired cache entry already answers this exact input+threshold pair).
-   * If its confidence meets `threshold`, its answer is returned directly
-   * (fast/cheap path). Otherwise the foundation model is invoked for a
-   * fuller answer (slow/expensive path) — or, if the foundation model is
-   * unavailable (simulated failure, or an open circuit breaker), the router
-   * falls back to the sidecar's best-effort answer rather than failing the
-   * request. Both calls' simulated cost/latency roll up into the result's
-   * totals.
+   *
+   * Three-tier cascade (when a `reviewer` provider is configured):
+   *   - confidence >= `threshold`                                -> sidecar tier, trusted directly
+   *   - `reviewerConfidenceThreshold` <= confidence < `threshold` -> mid tier: the cheaper reviewer
+   *     model is consulted; if its guess agrees with the sidecar's label, that resolves the request
+   *     (tier "reviewer"); if it disagrees (or the reviewer call itself fails), the router escalates
+   *     once more to the full foundation model, exactly as it would have without a reviewer configured
+   *   - confidence < `reviewerConfidenceThreshold`                -> top tier directly (skips the
+   *     reviewer — see `DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD`'s doc comment for why)
+   *
+   * Without a `reviewer` configured, this collapses to the original two-tier
+   * behavior: anything below `threshold` escalates straight to the full
+   * foundation model.
+   *
+   * Before any paid-tier call (reviewer or foundation), a configured cost
+   * budget is checked; once exhausted for the current period, the router
+   * auto-throttles and returns the sidecar's best-effort answer instead
+   * (`path: "sidecar"`, `budgetExceeded: true`) — see `setBudget()`.
+   *
+   * If the foundation model is unavailable (simulated failure, or an open
+   * circuit breaker) once actually reached, the router falls back to the
+   * sidecar's best-effort answer rather than failing the request. Every
+   * leg's simulated cost/latency rolls up into the result's totals.
    *
    * `thresholdOrOptions` accepts either a bare number (legacy shorthand for
    * `{ threshold }`) or a full `RouteOptions` object.
@@ -154,9 +241,10 @@ export class ModelRouter {
           cacheHit: true,
           explanation: `${cached.result.explanation} (Served from cache — an identical input and threshold were classified within the last ${Math.round(
             this.cacheTtlMs / 1000
-          )}s, so neither model was invoked this time.)`,
+          )}s, so no model was invoked this time.)`,
         };
         this.recordForFeedback(result);
+        this.notePersist();
         return result;
       }
       this.cache.delete(cacheKey); // expired
@@ -169,6 +257,7 @@ export class ModelRouter {
       costUsd: SIDECAR_COST_USD,
       latencyMs: SIDECAR_LATENCY_MS,
     };
+    const signalDescription = this.describeSidecarSignal(sidecarRecord);
 
     let cacheable: Omit<RouteResult, "requestId" | "cacheHit">;
 
@@ -182,7 +271,7 @@ export class ModelRouter {
         confidence: sidecarResult.confidence,
         explanation: `Sidecar classified this as "${sidecarResult.label}" with confidence ${sidecarResult.confidence.toFixed(
           2
-        )}, meeting the ${threshold.toFixed(2)} threshold — no escalation needed.`,
+        )} (${signalDescription}), meeting the ${threshold.toFixed(2)} threshold — no escalation needed.`,
         sidecar: sidecarRecord,
         totalCostUsd: SIDECAR_COST_USD,
         totalLatencyMs: SIDECAR_LATENCY_MS,
@@ -193,65 +282,165 @@ export class ModelRouter {
         // fail) the response we're about to return.
         this.runShadowEvaluation(input, sidecarResult);
       }
+    } else if (this.budget.isExceeded()) {
+      // Auto-throttle: escalation is needed, but the configured cost budget
+      // for this period is already exhausted. Stop paying for *any* tier
+      // beyond the sidecar and return its best-effort answer instead.
+      this.budgetThrottledRequests += 1;
+      cacheable = this.buildBudgetCappedResult(input, threshold, sidecarRecord, signalDescription, SIDECAR_COST_USD, SIDECAR_LATENCY_MS);
+    } else if (this.reviewerProvider && sidecarResult.confidence >= this.reviewerConfidenceThreshold) {
+      cacheable = await this.runReviewerTier(input, threshold, sidecarResult, sidecarRecord, signalDescription, now);
     } else {
-      const prompt = `Classify the urgency of this household message as urgent, routine, or informational, and explain why:\n\n"${input}"`;
-
-      if (this.circuitIsOpen(now)) {
-        this.fallbackRequests += 1;
-        cacheable = this.buildFallbackResult(
-          input,
-          threshold,
-          sidecarRecord,
-          "the circuit breaker is open after repeated foundation-model failures, so the call was skipped",
-          OPEN_CIRCUIT_FALLBACK_LATENCY_MS
-        );
-      } else {
-        try {
-          const foundationResult = await this.foundation.invoke(prompt);
-          this.onFoundationSuccess();
-          this.foundationPathRequests += 1;
-          const foundationRecord = {
-            ...foundationResult,
-            costUsd: FOUNDATION_COST_USD,
-            latencyMs: FOUNDATION_LATENCY_MS,
-          };
-          cacheable = {
-            input,
-            threshold,
-            path: "foundation",
-            label: sidecarResult.label,
-            confidence: sidecarResult.confidence,
-            explanation: `Sidecar confidence ${sidecarResult.confidence.toFixed(2)} was below the ${threshold.toFixed(
-              2
-            )} threshold, so the request was escalated to the foundation model for a fuller answer.`,
-            sidecar: sidecarRecord,
-            foundation: foundationRecord,
-            totalCostUsd: SIDECAR_COST_USD + FOUNDATION_COST_USD,
-            totalLatencyMs: SIDECAR_LATENCY_MS + FOUNDATION_LATENCY_MS,
-          };
-        } catch (err) {
-          this.onFoundationFailure(now);
-          this.fallbackRequests += 1;
-          const reason = err instanceof Error ? err.message : String(err);
-          cacheable = this.buildFallbackResult(
-            input,
-            threshold,
-            sidecarRecord,
-            `the foundation model call failed (${reason})`,
-            FAILED_CALL_FALLBACK_LATENCY_MS
-          );
-        }
-      }
+      cacheable = await this.escalateToFoundation(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, {
+        priorCostUsd: SIDECAR_COST_USD,
+        priorLatencyMs: SIDECAR_LATENCY_MS,
+      });
     }
 
     const result: RouteResult = { ...cacheable, requestId: randomUUID() };
     this.cache.set(cacheKey, { result: cacheable, expiresAt: now + this.cacheTtlMs });
     this.evictOldestCacheEntryIfOverCapacity();
     this.recordForFeedback(result);
+    this.cumulativeActualCostUsd += cacheable.totalCostUsd;
+    this.notePersist();
     return result;
   }
 
-  // --- Circuit breaker internals ---
+  private promptFor(input: string): string {
+    return `Classify the urgency of this household message as urgent, routine, or informational, and explain why:\n\n"${input}"`;
+  }
+
+  // --- Explainability ---
+
+  /** Human-readable summary of which keyword(s) drove the sidecar's classification, for the `explanation` field. */
+  private describeSidecarSignal(sidecarRecord: SidecarResult): string {
+    const matches = sidecarRecord.matchedKeywords ?? [];
+    if (matches.length === 0) return "no keyword signal matched, so this is a low-confidence default guess";
+    return `matched signal(s): ${matches.map((m) => `"${m}"`).join(", ")}`;
+  }
+
+  // --- Three-tier cascade internals ---
+
+  private async runReviewerTier(
+    input: string,
+    threshold: number,
+    sidecarResult: SidecarResult,
+    sidecarRecord: SidecarResult & CostEstimate,
+    signalDescription: string,
+    now: number
+  ): Promise<Omit<RouteResult, "requestId" | "cacheHit">> {
+    const prompt = this.promptFor(input);
+    let reviewerRecord: (FoundationResult & CostEstimate) | undefined;
+    let reviewerAgrees = false;
+    let reviewerFailed = false;
+
+    try {
+      const reviewerAnswer = await this.reviewerProvider!.invoke(prompt);
+      reviewerRecord = { ...reviewerAnswer, costUsd: REVIEWER_COST_USD, latencyMs: REVIEWER_LATENCY_MS };
+      const reviewerGuess = inferLabelFromFoundationText(reviewerAnswer.text);
+      reviewerAgrees = reviewerGuess !== null && reviewerGuess === sidecarResult.label;
+    } catch {
+      // The reviewer call itself failed (not just "unsure") — fail open to
+      // the top tier rather than back to the sidecar, since we already know
+      // the sidecar wasn't confident enough on its own. Not billed, same
+      // "a failed call isn't charged" convention as the foundation model's
+      // own failure path.
+      reviewerFailed = true;
+    }
+
+    if (!reviewerFailed && reviewerAgrees) {
+      // Mid tier resolves it: the cheaper model confirmed the sidecar's label.
+      this.reviewerPathRequests += 1;
+      this.budget.record(REVIEWER_COST_USD);
+      return {
+        input,
+        threshold,
+        path: "reviewer",
+        label: sidecarResult.label,
+        confidence: sidecarResult.confidence,
+        explanation:
+          `Sidecar confidence ${sidecarResult.confidence.toFixed(2)} (${signalDescription}) fell in the reviewer band ` +
+          `[${this.reviewerConfidenceThreshold.toFixed(2)}, ${threshold.toFixed(2)}), so the cheaper/faster reviewer model was ` +
+          `consulted — it confirmed "${sidecarResult.label}", resolving the request without needing the full foundation model.`,
+        sidecar: sidecarRecord,
+        reviewer: reviewerRecord,
+        totalCostUsd: SIDECAR_COST_USD + REVIEWER_COST_USD,
+        totalLatencyMs: SIDECAR_LATENCY_MS + REVIEWER_LATENCY_MS,
+      };
+    }
+
+    // The reviewer is also unsure (disagreed) or its call failed outright —
+    // escalate once more to the full foundation model.
+    if (!reviewerFailed) this.budget.record(REVIEWER_COST_USD);
+    const priorCostUsd = SIDECAR_COST_USD + (reviewerFailed ? 0 : REVIEWER_COST_USD);
+    const priorLatencyMs = SIDECAR_LATENCY_MS + (reviewerFailed ? 0 : REVIEWER_LATENCY_MS);
+    const reviewerNote = reviewerFailed
+      ? "the reviewer model call itself failed, so the router escalated straight to the full foundation model"
+      : "the reviewer model's own guess did not confirm the sidecar's label, so the router escalated to the full foundation model for a fuller read";
+
+    if (this.budget.isExceeded()) {
+      // The reviewer's own cost (if it ran) just used up the remaining
+      // budget — stop here rather than also attempting the foundation call.
+      this.budgetThrottledRequests += 1;
+      return this.buildBudgetCappedResult(input, threshold, sidecarRecord, signalDescription, priorCostUsd, priorLatencyMs, reviewerRecord, reviewerNote);
+    }
+
+    return this.escalateToFoundation(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, {
+      priorCostUsd,
+      priorLatencyMs,
+      reviewerRecord,
+      reviewerNote,
+    });
+  }
+
+  // --- Cost-budget internals ---
+
+  /** Configures (or replaces) the per-period spend cap. See `budgetTracker.ts` for why this is a fixed-window dollar cap. */
+  setBudget(limitUsd: number, periodMs: number): void {
+    this.budget.configure(limitUsd, periodMs);
+  }
+
+  /** Disables budget enforcement — escalations are never throttled until `setBudget` is called again. */
+  clearBudget(): void {
+    this.budget.clear();
+  }
+
+  /** Current spend vs. limit and time remaining in the period. `enabled: false` when no budget has been configured. */
+  getBudgetStatus(): BudgetStatus {
+    return this.budget.status();
+  }
+
+  private buildBudgetCappedResult(
+    input: string,
+    threshold: number,
+    sidecarRecord: SidecarResult & CostEstimate,
+    signalDescription: string,
+    priorCostUsd: number,
+    priorLatencyMs: number,
+    reviewerRecord?: FoundationResult & CostEstimate,
+    reviewerNote?: string
+  ): Omit<RouteResult, "requestId" | "cacheHit"> {
+    const status = this.budget.status();
+    return {
+      input,
+      threshold,
+      path: "sidecar",
+      label: sidecarRecord.label,
+      confidence: sidecarRecord.confidence,
+      explanation:
+        `Escalation was needed (sidecar confidence ${sidecarRecord.confidence.toFixed(2)} — ${signalDescription} — below the ` +
+        `${threshold.toFixed(2)} threshold)${reviewerNote ? `, and ${reviewerNote}` : ""}, but the configured cost budget ` +
+        `($${status.limitUsd?.toFixed(4)} per ${Math.round((status.periodMs ?? 0) / 1000)}s) is exhausted for the current period, so the ` +
+        `router auto-throttled and returned the sidecar's best-effort answer instead of paying for another model call.`,
+      sidecar: sidecarRecord,
+      reviewer: reviewerRecord,
+      budgetExceeded: true,
+      totalCostUsd: priorCostUsd,
+      totalLatencyMs: priorLatencyMs,
+    };
+  }
+
+  // --- Circuit breaker / foundation-escalation internals ---
 
   private circuitIsOpen(now: number): boolean {
     if (this.circuitState !== "open") return false;
@@ -279,12 +468,84 @@ export class ModelRouter {
     }
   }
 
+  /** Attempts the full foundation-model call, wrapped in the circuit breaker, given whatever cost/latency has already been incurred by earlier tiers (sidecar alone, or sidecar+reviewer). */
+  private async escalateToFoundation(
+    input: string,
+    threshold: number,
+    sidecarResult: SidecarResult,
+    sidecarRecord: SidecarResult & CostEstimate,
+    signalDescription: string,
+    now: number,
+    prior: { priorCostUsd: number; priorLatencyMs: number; reviewerRecord?: FoundationResult & CostEstimate; reviewerNote?: string }
+  ): Promise<Omit<RouteResult, "requestId" | "cacheHit">> {
+    const prompt = this.promptFor(input);
+    const cascadeNote = prior.reviewerNote ? ` (${prior.reviewerNote})` : "";
+
+    if (this.circuitIsOpen(now)) {
+      this.fallbackRequests += 1;
+      return this.buildFallbackResult(
+        input,
+        threshold,
+        sidecarRecord,
+        signalDescription,
+        `the circuit breaker is open after repeated foundation-model failures, so the call was skipped${cascadeNote}`,
+        OPEN_CIRCUIT_FALLBACK_LATENCY_MS,
+        prior.priorCostUsd,
+        prior.priorLatencyMs,
+        prior.reviewerRecord
+      );
+    }
+
+    try {
+      const foundationResult = await this.foundation.invoke(prompt);
+      this.onFoundationSuccess();
+      this.foundationPathRequests += 1;
+      this.budget.record(FOUNDATION_COST_USD);
+      const foundationRecord = { ...foundationResult, costUsd: FOUNDATION_COST_USD, latencyMs: FOUNDATION_LATENCY_MS };
+      return {
+        input,
+        threshold,
+        path: "foundation",
+        label: sidecarResult.label,
+        confidence: sidecarResult.confidence,
+        explanation:
+          `Sidecar confidence ${sidecarResult.confidence.toFixed(2)} (${signalDescription}) was below the ${threshold.toFixed(
+            2
+          )} threshold${cascadeNote}, so the request was escalated to the full foundation model for a fuller answer.`,
+        sidecar: sidecarRecord,
+        reviewer: prior.reviewerRecord,
+        foundation: foundationRecord,
+        totalCostUsd: prior.priorCostUsd + FOUNDATION_COST_USD,
+        totalLatencyMs: prior.priorLatencyMs + FOUNDATION_LATENCY_MS,
+      };
+    } catch (err) {
+      this.onFoundationFailure(now);
+      this.fallbackRequests += 1;
+      const reason = err instanceof Error ? err.message : String(err);
+      return this.buildFallbackResult(
+        input,
+        threshold,
+        sidecarRecord,
+        signalDescription,
+        `the foundation model call failed (${reason})${cascadeNote}`,
+        FAILED_CALL_FALLBACK_LATENCY_MS,
+        prior.priorCostUsd,
+        prior.priorLatencyMs,
+        prior.reviewerRecord
+      );
+    }
+  }
+
   private buildFallbackResult(
     input: string,
     threshold: number,
     sidecarRecord: SidecarResult & CostEstimate,
+    signalDescription: string,
     reason: string,
-    extraLatencyMs: number
+    extraLatencyMs: number,
+    priorCostUsd: number = SIDECAR_COST_USD,
+    priorLatencyMs: number = SIDECAR_LATENCY_MS,
+    reviewerRecord?: FoundationResult & CostEstimate
   ): Omit<RouteResult, "requestId" | "cacheHit"> {
     return {
       input,
@@ -293,14 +554,15 @@ export class ModelRouter {
       label: sidecarRecord.label,
       confidence: sidecarRecord.confidence,
       explanation:
-        `Escalation was needed (sidecar confidence ${sidecarRecord.confidence.toFixed(2)} was below the ${threshold.toFixed(
+        `Escalation was needed (sidecar confidence ${sidecarRecord.confidence.toFixed(2)} — ${signalDescription} — was below the ${threshold.toFixed(
           2
         )} threshold), but ${reason}. Rather than fail the request, the router fell back to the sidecar's ` +
         `best-effort classification below its normal confidence bar.`,
       sidecar: sidecarRecord,
+      reviewer: reviewerRecord,
       fallbackUsed: true,
-      totalCostUsd: SIDECAR_COST_USD,
-      totalLatencyMs: SIDECAR_LATENCY_MS + extraLatencyMs,
+      totalCostUsd: priorCostUsd,
+      totalLatencyMs: priorLatencyMs + extraLatencyMs,
     };
   }
 
@@ -315,7 +577,7 @@ export class ModelRouter {
   // --- Shadow evaluation internals ---
 
   private runShadowEvaluation(input: string, sidecarResult: SidecarResult): void {
-    const prompt = `Classify the urgency of this household message as urgent, routine, or informational, and explain why:\n\n"${input}"`;
+    const prompt = this.promptFor(input);
     const evaluation = this.foundation
       .invoke(prompt)
       .then((foundationResult) => {
@@ -445,10 +707,7 @@ export class ModelRouter {
   /** Cumulative metrics across every request this router instance has handled. */
   getMetrics(): MetricsSnapshot {
     const totalRequests = this.cacheHits + this.cacheMisses;
-    const actualCostUsd =
-      this.sidecarPathRequests * SIDECAR_COST_USD +
-      this.foundationPathRequests * (SIDECAR_COST_USD + FOUNDATION_COST_USD) +
-      this.fallbackRequests * SIDECAR_COST_USD; // a failed/skipped foundation call is not billed
+    const actualCostUsd = this.cumulativeActualCostUsd;
     const allFoundationCostUsd = totalRequests * FOUNDATION_COST_USD; // hypothetical: every request, including cache hits, always hit the foundation model
     const estimatedSavingsUsd = allFoundationCostUsd - actualCostUsd;
     const { suggestedThreshold, reason } = this.computeThresholdSuggestion();
@@ -479,14 +738,20 @@ export class ModelRouter {
       currentThreshold: this.lastThresholdUsed,
       suggestedThreshold,
       thresholdSuggestionReason: reason,
+      reviewerPathRequests: this.reviewerPathRequests,
+      reviewerPathRate: totalRequests === 0 ? 0 : this.reviewerPathRequests / totalRequests,
+      budgetThrottledRequests: this.budgetThrottledRequests,
     };
   }
 
-  /** Resets cumulative metrics (and the cache/circuit-breaker/feedback state) to a fresh start. Mainly useful for tests. */
+  /** Resets cumulative metrics (and the cache/circuit-breaker/feedback/budget state) to a fresh start. Mainly useful for tests. */
   resetMetrics(): void {
     this.sidecarPathRequests = 0;
+    this.reviewerPathRequests = 0;
     this.foundationPathRequests = 0;
     this.fallbackRequests = 0;
+    this.budgetThrottledRequests = 0;
+    this.cumulativeActualCostUsd = 0;
     this.cache.clear();
     this.cacheHits = 0;
     this.cacheMisses = 0;
@@ -498,5 +763,64 @@ export class ModelRouter {
     this.pendingShadowEvaluations = [];
     this.feedbackLog.clear();
     this.lastThresholdUsed = DEFAULT_CONFIDENCE_THRESHOLD;
+    this.budget.clear();
+    this.requestsSincePersist = 0;
+  }
+
+  // --- Persistent metrics internals ---
+
+  private hydrateFromDisk(path: string): void {
+    const state = loadMetricsState(path);
+    if (!state) return; // missing/corrupt file -> start fresh, same as a brand-new router
+    this.sidecarPathRequests = state.sidecarPathRequests;
+    this.reviewerPathRequests = state.reviewerPathRequests;
+    this.foundationPathRequests = state.foundationPathRequests;
+    this.fallbackRequests = state.fallbackRequests;
+    this.budgetThrottledRequests = state.budgetThrottledRequests;
+    this.cacheHits = state.cacheHits;
+    this.cacheMisses = state.cacheMisses;
+    this.cumulativeActualCostUsd = state.cumulativeActualCostUsd;
+    this.circuitState = state.circuitState;
+    this.consecutiveFoundationFailures = state.consecutiveFoundationFailures;
+    this.circuitOpenedAt = state.circuitOpenedAt;
+    this.shadowEvaluations = state.shadowEvaluations;
+    this.shadowAgreements = state.shadowAgreements;
+    this.lastThresholdUsed = state.lastThresholdUsed;
+    this.budget.hydrate(state.budget);
+  }
+
+  private exportPersistableState(): Omit<PersistedMetricsState, "version" | "savedAt"> {
+    return {
+      sidecarPathRequests: this.sidecarPathRequests,
+      reviewerPathRequests: this.reviewerPathRequests,
+      foundationPathRequests: this.foundationPathRequests,
+      fallbackRequests: this.fallbackRequests,
+      budgetThrottledRequests: this.budgetThrottledRequests,
+      cacheHits: this.cacheHits,
+      cacheMisses: this.cacheMisses,
+      cumulativeActualCostUsd: this.cumulativeActualCostUsd,
+      circuitState: this.circuitState,
+      consecutiveFoundationFailures: this.consecutiveFoundationFailures,
+      circuitOpenedAt: this.circuitOpenedAt,
+      shadowEvaluations: this.shadowEvaluations,
+      shadowAgreements: this.shadowAgreements,
+      lastThresholdUsed: this.lastThresholdUsed,
+      budget: this.budget.exportState(),
+    };
+  }
+
+  /** Writes cumulative metrics to `metricsPersistPath` right now. A no-op when persistence isn't configured. Call this on graceful shutdown (e.g. a SIGINT/SIGTERM handler in index.ts) as well as relying on the periodic auto-save. */
+  persistMetricsNow(): void {
+    if (!this.metricsPersistPath) return;
+    saveMetricsState(this.metricsPersistPath, this.exportPersistableState());
+  }
+
+  private notePersist(): void {
+    if (!this.metricsPersistPath) return;
+    this.requestsSincePersist += 1;
+    if (this.requestsSincePersist >= this.persistEveryNRequests) {
+      this.requestsSincePersist = 0;
+      this.persistMetricsNow();
+    }
   }
 }
