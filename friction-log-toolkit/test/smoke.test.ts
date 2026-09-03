@@ -6,12 +6,13 @@
  * no mocks. Run `npm run build` before this (or just `npm test`, which does
  * both).
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import { handleWatchLine } from "../dist/watch.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const CLI_PATH = join(__dirname, "..", "dist", "cli.js");
@@ -28,6 +29,21 @@ function runCli(cwd: string, args: string[]): { stdout: string; status: number }
     const stdout = execFileSync("node", [CLI_PATH, ...args], {
       cwd,
       encoding: "utf8",
+    });
+    return { stdout, status: 0 };
+  } catch (err) {
+    const e = err as { stdout?: string; status?: number | null };
+    return { stdout: e.stdout ?? "", status: e.status ?? 1 };
+  }
+}
+
+/** Same as runCli, but pipes `input` to the child's stdin — used for `watch`. */
+function runCliWithInput(cwd: string, args: string[], input: string): { stdout: string; status: number } {
+  try {
+    const stdout = execFileSync("node", [CLI_PATH, ...args], {
+      cwd,
+      encoding: "utf8",
+      input,
     });
     return { stdout, status: 0 };
   } catch (err) {
@@ -460,5 +476,227 @@ withTempDir((dirA) => {
     });
   });
 });
+
+// --- Feature: `search` ---
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  runCli(dir, ["add", "Alexa+ schema validation errors had no line numbers", "--tag", "friction"]);
+  runCli(dir, ["add", "Ring API sandbox mode made local testing painless", "--tag", "worked-well"]);
+  runCli(dir, ["add", "OAuth token refresh docs were split across three pages", "--tag", "friction"]);
+
+  const hit = runCli(dir, ["search", "line numbers"]);
+  check("search finds a known entry by case-insensitive substring", () => {
+    assert.equal(hit.status, 0);
+    assert.match(hit.stdout, /Alexa\+ schema validation errors had no line numbers/);
+  });
+  check("search excludes non-matching entries", () => {
+    assert.doesNotMatch(hit.stdout, /Ring API sandbox mode/);
+    assert.doesNotMatch(hit.stdout, /OAuth token refresh/);
+  });
+
+  const caseInsensitive = runCli(dir, ["search", "LINE NUMBERS"]);
+  check("search matching is case-insensitive", () => {
+    assert.match(caseInsensitive.stdout, /Alexa\+ schema validation errors had no line numbers/);
+  });
+
+  const narrowed = runCli(dir, ["search", "docs", "--tag", "friction"]);
+  check("search --tag narrows to the matching tag", () => {
+    assert.match(narrowed.stdout, /OAuth token refresh docs were split across three pages/);
+  });
+
+  const narrowedMiss = runCli(dir, ["search", "docs", "--tag", "worked-well"]);
+  check("search --tag excludes a textual match outside the requested tag", () => {
+    assert.doesNotMatch(narrowedMiss.stdout, /OAuth token refresh/);
+    assert.match(narrowedMiss.stdout, /No entries matching/);
+  });
+
+  const noMatch = runCli(dir, ["search", "no-such-substring-anywhere"]);
+  check("search with no matches exits zero and says so", () => {
+    assert.equal(noMatch.status, 0);
+    assert.match(noMatch.stdout, /No entries matching/);
+  });
+});
+
+// --- Feature: `--since`/`--until` date-range filtering on list/export/stats ---
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  runCli(dir, ["add", "In-range entry one", "--tag", "friction"]);
+  runCli(dir, ["add", "In-range entry two", "--tag", "worked-well"]);
+
+  // Backdate one entry far in the past and one far in the future by editing
+  // the log file directly (the CLI has no way to set a timestamp, and these
+  // are real ISO-8601 boundaries a --since/--until filter must actually
+  // respect, not something a mocked clock would exercise more honestly).
+  const raw = readLogFileRaw(dir);
+  raw.entries[0].timestamp = "2020-01-01T00:00:00.000Z";
+  raw.entries[0].note = "Ancient out-of-range entry";
+  writeFileSync(join(dir, ".friction-log.json"), JSON.stringify(raw, null, 2) + "\n", "utf8");
+  runCli(dir, ["add", "Future out-of-range entry", "--tag", "feature-request"]);
+  const raw2 = readLogFileRaw(dir);
+  raw2.entries[raw2.entries.length - 1].timestamp = "2099-01-01T00:00:00.000Z";
+  writeFileSync(join(dir, ".friction-log.json"), JSON.stringify(raw2, null, 2) + "\n", "utf8");
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const sinceUntilToday = runCli(dir, ["list", "--since", today, "--until", today]);
+  check("list --since/--until narrows to entries within today's range", () => {
+    assert.match(sinceUntilToday.stdout, /In-range entry two/);
+    assert.doesNotMatch(sinceUntilToday.stdout, /Ancient out-of-range entry/);
+    assert.doesNotMatch(sinceUntilToday.stdout, /Future out-of-range entry/);
+  });
+
+  const sinceFuture = runCli(dir, ["list", "--since", "2099-06-01"]);
+  check("list --since excludes everything before the given date", () => {
+    assert.match(sinceFuture.stdout, /No entries logged yet in range/);
+  });
+
+  const untilPast = runCli(dir, ["list", "--until", "2019-01-01"]);
+  check("list --until excludes everything after the given date", () => {
+    assert.match(untilPast.stdout, /No entries logged yet in range/);
+  });
+
+  const exportRanged = runCli(dir, ["export", "--since", today, "--until", today]);
+  check("export --since/--until filters entries before grouping into sections", () => {
+    assert.match(exportRanged.stdout, /In-range entry two/);
+    assert.doesNotMatch(exportRanged.stdout, /Ancient out-of-range entry/);
+    assert.doesNotMatch(exportRanged.stdout, /Future out-of-range entry/);
+  });
+
+  const statsRanged = runCli(dir, ["stats", "--since", today, "--until", today]);
+  check("stats --since/--until reports totals only for entries in range", () => {
+    assert.match(statsRanged.stdout, /Total entries: 1/);
+  });
+
+  const statsUnranged = runCli(dir, ["stats"]);
+  check("stats with no --since/--until still counts every entry", () => {
+    assert.match(statsUnranged.stdout, /Total entries: 3/);
+  });
+
+  const badDate = runCli(dir, ["list", "--since", "not-a-real-date"]);
+  check("an unparseable --since fails clearly instead of silently matching everything", () => {
+    assert.notEqual(badDate.status, 0);
+  });
+});
+
+// --- Feature: `watch` — the pure line-handling logic, tested directly (as the actual CLI uses it) ---
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+
+  const logged = handleWatchLine(dir, "Docs page 404'd on first click");
+  check("handleWatchLine logs a plain line with the default tag", () => {
+    assert.equal(logged.kind, "logged");
+    if (logged.kind === "logged") {
+      assert.equal(logged.entry.tag, "note");
+      assert.equal(logged.entry.note, "Docs page 404'd on first click");
+    }
+  });
+
+  const tagged = handleWatchLine(dir, "Schema errors had no line numbers #friction");
+  check("handleWatchLine strips a trailing #tag and applies it as the entry's tag", () => {
+    assert.equal(tagged.kind, "logged");
+    if (tagged.kind === "logged") {
+      assert.equal(tagged.entry.tag, "friction");
+      assert.equal(tagged.entry.note, "Schema errors had no line numbers");
+    }
+  });
+
+  const blank = handleWatchLine(dir, "   ");
+  check('handleWatchLine treats a blank line as "end the loop", not a logged entry', () => {
+    assert.equal(blank.kind, "empty");
+  });
+
+  const exitWord = handleWatchLine(dir, "exit");
+  check('handleWatchLine treats "exit" as an end-of-loop signal', () => {
+    assert.equal(exitWord.kind, "exit");
+  });
+
+  const quitWord = handleWatchLine(dir, "QUIT");
+  check('handleWatchLine treats "quit" (any case) as an end-of-loop signal', () => {
+    assert.equal(quitWord.kind, "exit");
+  });
+
+  const afterAll = readLogFileRaw(dir);
+  check("handleWatchLine actually persisted exactly the two logged entries, not the exit/blank lines", () => {
+    assert.equal(afterAll.entries.length, 2);
+  });
+});
+
+// --- Feature: `watch` — the real CLI command end to end, piping lines into its stdin ---
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  const watchResult = runCliWithInput(
+    dir,
+    ["watch"],
+    "First rapid-fire note\nSecond note tagged inline #feature-request\n\n"
+  );
+  check("friction-log watch exits zero after its input ends", () => {
+    assert.equal(watchResult.status, 0);
+  });
+  check("friction-log watch echoes a confirmation for each logged line", () => {
+    assert.match(watchResult.stdout, /✓ Logged \[note\] First rapid-fire note/);
+    assert.match(watchResult.stdout, /✓ Logged \[feature-request\] Second note tagged inline/);
+  });
+  const entries = readLogFileRaw(dir).entries;
+  check("friction-log watch persisted both lines as real entries, correctly tagged", () => {
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0].tag, "note");
+    assert.equal(entries[1].tag, "feature-request");
+    assert.equal(entries[1].note, "Second note tagged inline");
+  });
+});
+
+// --- Feature: `serve` — a real HTTP server on an ephemeral port ---
+await (async () => {
+  const dir = mkdtempSync(join(tmpdir(), "friction-log-test-"));
+  let child: ReturnType<typeof spawn> | undefined;
+  try {
+    runCli(dir, ["init"]);
+    runCli(dir, ["add", "Fire TV emulator has no --reset flag", "--tag", "feature-request"]);
+    runCli(dir, ["add", "Ring OAuth sandbox worked first try", "--tag", "worked-well"]);
+
+    child = spawn("node", [CLI_PATH, "serve", "--port", "0"], { cwd: dir });
+    const port = await new Promise<number>((resolvePort, rejectPort) => {
+      let buffer = "";
+      const onData = (chunk: Buffer) => {
+        buffer += chunk.toString("utf8");
+        const match = buffer.match(/http:\/\/localhost:(\d+)\//);
+        if (match) {
+          child!.stdout!.off("data", onData);
+          resolvePort(Number(match[1]));
+        }
+      };
+      child!.stdout!.on("data", onData);
+      child!.on("error", rejectPort);
+      setTimeout(() => rejectPort(new Error("friction-log serve did not print a URL in time")), 5000);
+    });
+
+    const response = await fetch(`http://localhost:${port}/`);
+    const html = await response.text();
+    check("serve responds 200 with HTML containing a known entry's text", () => {
+      assert.equal(response.status, 200);
+      assert.match(html, /Fire TV emulator has no --reset flag/);
+      assert.match(html, /Ring OAuth sandbox worked first try/);
+    });
+
+    const filteredResponse = await fetch(`http://localhost:${port}/?tag=feature-request`);
+    const filteredHtml = await filteredResponse.text();
+    check("serve's tag filter narrows the rendered entries", () => {
+      assert.match(filteredHtml, /Fire TV emulator has no --reset flag/);
+      assert.doesNotMatch(filteredHtml, /Ring OAuth sandbox worked first try/);
+    });
+
+    runCli(dir, ["add", "Added after the server was already running", "--tag", "note"]);
+    const liveResponse = await fetch(`http://localhost:${port}/`);
+    const liveHtml = await liveResponse.text();
+    check("serve reflects a freshly-added entry with no restart (re-reads the file, no caching)", () => {
+      assert.match(liveHtml, /Added after the server was already running/);
+    });
+  } finally {
+    if (child) {
+      child.kill("SIGTERM");
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 console.log(`\nAll ${passed} checks passed.`);

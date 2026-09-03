@@ -73,18 +73,84 @@ export function add(dir: string, note: string, options: AddOptions = {}): LogEnt
   return entry;
 }
 
-export interface ListOptions {
+/**
+ * Shared `--since`/`--until` handling for `list`/`export`/`stats`. Both
+ * accept anything `Date.parse` can parse (a bare "2026-09-01", a full
+ * ISO-8601 timestamp, etc.) and filtering happens *before* any tag
+ * filtering, grouping, or aggregation — so `stats --since ... --tag ...`
+ * would (if `stats` ever grew a `--tag`) always see the narrower set.
+ *
+ * A bare date-only `--until` (e.g. "2026-09-01", no time component) is
+ * treated as the *end* of that day rather than midnight at its start, so
+ * "--until 2026-09-01" reads naturally as "through the end of Sept 1", not
+ * "up to the first instant of it". `--since` needs no such adjustment: a
+ * bare date already means midnight at the start of that day, which is
+ * exactly "from the start of Sept 1 onward".
+ */
+export interface DateRangeOptions {
+  since?: string;
+  until?: string;
+}
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseDateBoundary(label: "since" | "until", value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) {
+    throw new Error(`Could not parse --${label} "${value}" as a date.`);
+  }
+  if (label === "until" && DATE_ONLY_RE.test(trimmed)) {
+    return parsed + 24 * 60 * 60 * 1000 - 1; // end of that day, inclusive
+  }
+  return parsed;
+}
+
+function filterByDateRange(entries: LogEntry[], options: DateRangeOptions): LogEntry[] {
+  const since = parseDateBoundary("since", options.since);
+  const until = parseDateBoundary("until", options.until);
+  if (since === undefined && until === undefined) return entries;
+  return entries.filter((e) => {
+    const t = Date.parse(e.timestamp);
+    if (since !== undefined && t < since) return false;
+    if (until !== undefined && t > until) return false;
+    return true;
+  });
+}
+
+export interface ListOptions extends DateRangeOptions {
   tag?: Tag;
 }
 
 /** Chronological order (oldest first) — matches the order entries were captured while building. */
 export function list(dir: string, options: ListOptions = {}): LogEntry[] {
   const log = readLog(dir);
-  if (!options.tag) return log.entries;
-  return log.entries.filter((e) => e.tag === options.tag);
+  const entries = filterByDateRange(log.entries, options);
+  if (!options.tag) return entries;
+  return entries.filter((e) => e.tag === options.tag);
 }
 
-export interface ExportOptions {
+export interface SearchOptions {
+  tag?: Tag;
+}
+
+/**
+ * Full-text search across each entry's note text: a case-insensitive
+ * substring match (not a fuzzy or tokenized search — "line num" matches
+ * "no line numbers" but "numbers line" would not), optionally narrowed to
+ * one tag. Chronological order, same as `list`.
+ */
+export function search(dir: string, query: string, options: SearchOptions = {}): LogEntry[] {
+  const log = readLog(dir);
+  const needle = query.toLowerCase();
+  return log.entries.filter((e) => {
+    if (options.tag && e.tag !== options.tag) return false;
+    return e.note.toLowerCase().includes(needle);
+  });
+}
+
+export interface ExportOptions extends DateRangeOptions {
   out?: string;
   title?: string;
   format?: ExportFormat;
@@ -96,17 +162,18 @@ export function exportLog(dir: string, options: ExportOptions = {}): string {
   const format = options.format ?? config.export?.format ?? "md";
   const title = options.title ?? config.export?.title;
   const out = options.out ?? config.export?.out;
+  const filteredLog: LogFile = { ...log, entries: filterByDateRange(log.entries, options) };
 
   let content: string;
   switch (format) {
     case "json":
-      content = exportJson(log);
+      content = exportJson(filteredLog);
       break;
     case "txt":
-      content = exportText(log, { title });
+      content = exportText(filteredLog, { title });
       break;
     case "md":
-      content = exportMarkdown(log, { title });
+      content = exportMarkdown(filteredLog, { title });
       break;
     default:
       throw new Error(`Unknown export format "${format}". Expected one of: json, md, txt.`);
@@ -125,13 +192,19 @@ export interface StatsResult {
   busiestDay: { date: string; count: number } | null;
 }
 
-/** Summary stats over the log: counts per tag, date range covered, and the single busiest day. */
-export function stats(dir: string): StatsResult {
+/**
+ * Summary stats over the log: counts per tag, date range covered, and the
+ * single busiest day. `since`/`until` narrow the entries considered before
+ * any of the above is computed — e.g. `stats --since 2026-09-02` reports
+ * only on "today's" session of a multi-day hackathon.
+ */
+export function stats(dir: string, options: DateRangeOptions = {}): StatsResult {
   const log = readLog(dir);
+  const entries = filterByDateRange(log.entries, options);
   const byTag: Record<string, number> = {};
   const dayCounts: Record<string, number> = {};
 
-  for (const entry of log.entries) {
+  for (const entry of entries) {
     byTag[entry.tag] = (byTag[entry.tag] ?? 0) + 1;
     const day = entry.timestamp.slice(0, 10); // YYYY-MM-DD
     dayCounts[day] = (dayCounts[day] ?? 0) + 1;
@@ -145,11 +218,9 @@ export function stats(dir: string): StatsResult {
   }
 
   const dateRange =
-    log.entries.length > 0
-      ? { from: log.entries[0].timestamp, to: log.entries[log.entries.length - 1].timestamp }
-      : null;
+    entries.length > 0 ? { from: entries[0].timestamp, to: entries[entries.length - 1].timestamp } : null;
 
-  return { totalEntries: log.entries.length, byTag, dateRange, busiestDay };
+  return { totalEntries: entries.length, byTag, dateRange, busiestDay };
 }
 
 export interface EditOptions {
