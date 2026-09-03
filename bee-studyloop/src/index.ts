@@ -14,4 +14,7 @@ app.listen(PORT, () => {
   console.log(`Leeches:          GET  http://localhost:${PORT}/review/leeches`);
   console.log(`Search by topic:  GET  http://localhost:${PORT}/flashcards/search?topic=<tag>`);
   console.log(`Export (Anki):    GET  http://localhost:${PORT}/export`);
+  console.log(`Start a quiz:     POST http://localhost:${PORT}/quiz/start   { "count": 5, "studentId": "..." }`);
+  console.log(`Join a shared deck: POST http://localhost:${PORT}/decks/<sessionId>/join   { "studentId": "..." }`);
+  console.log(`Reminder digest:  GET  http://localhost:${PORT}/reminders/digest?studentId=<id>`);
 });

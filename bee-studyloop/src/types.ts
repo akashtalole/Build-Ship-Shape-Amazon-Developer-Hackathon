@@ -35,6 +35,12 @@ export interface StudySession {
   // `ingestSession` in studyService.ts). Undefined when the caller didn't
   // send one.
   idempotencyKey?: string;
+
+  // Set at ingestion time (`POST /sessions { shared: true }`). When true,
+  // another student can pull this session's flashcards into their own
+  // review queue via `POST /decks/:sessionId/join` — see "Shared study-group
+  // decks" in README.md.
+  shared: boolean;
 }
 
 /** A simplified four-point recall grade, in place of raw SM-2's 0-5 scale. */
@@ -66,4 +72,76 @@ export interface Flashcard {
   // clears it.
   consecutiveFailures: number;
   isLeech: boolean;
+}
+
+/**
+ * Per-student spaced-repetition progress on a *shared* flashcard (see
+ * "Shared study-group decks" in README.md). The flashcard's own `front`/
+ * `back`/`tags` content lives once on the `Flashcard` record itself and is
+ * never copied; only the review state — the exact fields a card would
+ * otherwise carry directly (interval, easeFactor, repetitions, dueAt,
+ * leech tracking) — is tracked per (studentId, cardId) pair, independent of
+ * both the card's own embedded state (used when no `studentId` is given —
+ * see `recordReview`/`listDueCards` in studyService.ts) and of every other
+ * student's progress on that same card. Created lazily: on
+ * `POST /decks/:sessionId/join`, or the first time a `studentId`-tagged
+ * review is submitted for a card, whichever happens first.
+ */
+export interface PersonalReviewState {
+  studentId: string;
+  cardId: string;
+  interval: number;
+  easeFactor: number;
+  repetitions: number;
+  dueAt: string;
+  consecutiveFailures: number;
+  isLeech: boolean;
+  lastReviewedAt?: string;
+  lastGrade?: RecallGrade;
+}
+
+/**
+ * A flashcard as seen by one specific student: the shared `front`/`back`/
+ * `tags` content merged with that student's own `PersonalReviewState`. This
+ * is the shape returned by deck-join, student-scoped due/leech queries, and
+ * student-scoped quiz sampling.
+ */
+export interface PersonalFlashcardView {
+  id: string; // == the underlying Flashcard's id
+  sessionId: string;
+  studentId: string;
+  front: string;
+  back: string;
+  tags: string[];
+  interval: number;
+  easeFactor: number;
+  repetitions: number;
+  dueAt: string;
+  consecutiveFailures: number;
+  isLeech: boolean;
+  lastReviewedAt?: string;
+  lastGrade?: RecallGrade;
+}
+
+/** One graded answer within a quiz — see "Quiz/practice-test mode" in README.md. */
+export interface QuizAnswer {
+  cardId: string;
+  submittedAnswer: string;
+  correct: boolean;
+  answeredAt: string; // ISO timestamp
+}
+
+/**
+ * A timed practice-test session: a fixed, sampled set of flashcard ids
+ * (`cardIds`, in presentation order) plus whatever answers have been
+ * submitted so far (keyed by cardId — re-answering a card overwrites its
+ * previous grade rather than accumulating attempts). See `startQuiz`,
+ * `submitQuizAnswer`, and `getQuizResults` in studyService.ts.
+ */
+export interface Quiz {
+  id: string;
+  studentId?: string;
+  cardIds: string[];
+  startedAt: string; // ISO timestamp
+  answers: Record<string, QuizAnswer>;
 }

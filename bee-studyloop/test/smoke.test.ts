@@ -15,7 +15,7 @@ import { initialSchedulerState, scheduleReview } from "../src/scheduler.js";
 import { initialLeechState, LEECH_THRESHOLD, updateLeechState } from "../src/leech.js";
 import { priorityScore } from "../src/priority.js";
 import { extractTopics } from "../src/topics.js";
-import { listDueCards } from "../src/studyService.js";
+import { getReminderDigest, listDueCards } from "../src/studyService.js";
 
 async function main() {
   const generator = new TemplateFlashcardGenerator();
@@ -448,6 +448,333 @@ async function main() {
   const baselineEaseCard = priorityScore({ dueAt: priorityNow.toISOString(), isLeech: false, easeFactor: 2.5 }, priorityNow);
   assert.ok(lowEaseCard > baselineEaseCard, "a lower ease factor (historically harder card) increases priority");
   console.log("✓ priority.ts: direct unit checks of the priority-score formula");
+
+  // ===================================================================
+  // Round 3: quiz mode, shared decks, reminders, adaptive generation bias
+  // ===================================================================
+
+  // --- Feature 7: shared study-group decks ---
+  const deckSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Shared genetics deck",
+        shared: true,
+        transcript: [
+          { text: "Meiosis is the process of cell division that produces gametes." },
+          { text: "What is meiosis?" },
+          { text: "Meiosis produces four genetically unique haploid cells." },
+        ],
+      }),
+    })
+  ).json();
+  assert.equal(deckSessionRes.session.shared, true, "a session ingested with shared: true is marked shared");
+  assert.ok(deckSessionRes.flashcards.length >= 1, "the shared-deck session generates at least one flashcard");
+  const sharedCard = deckSessionRes.flashcards[0];
+  console.log("✓ POST /sessions accepts shared: true and stores it on the session");
+
+  // Joining a non-shared session is rejected.
+  const notSharedSessionRes = await (
+    await fetch(`${base}/sessions`, { method: "POST", headers, body: JSON.stringify({ title: "Private", transcript: "Homeostasis keeps internal conditions stable." }) })
+  ).json();
+  const joinNotSharedRes = await fetch(`${base}/decks/${notSharedSessionRes.session.id}/join`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ studentId: "someone" }),
+  });
+  assert.equal(joinNotSharedRes.status, 400, "joining a session that isn't marked shared is rejected with a 400");
+  console.log("✓ POST /decks/:sessionId/join rejects a session that wasn't ingested with shared: true");
+
+  const joinMissingSessionRes = await fetch(`${base}/decks/not-a-real-session-id/join`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ studentId: "someone" }),
+  });
+  assert.equal(joinMissingSessionRes.status, 404, "joining an unknown session id returns a clean 404");
+  console.log("✓ POST /decks/:sessionId/join for an unknown session id returns a clean 404");
+
+  // Two different students join the same shared deck.
+  const alice = "alice-deck-student";
+  const bob = "bob-deck-student";
+  const aliceJoinRes = await fetch(`${base}/decks/${deckSessionRes.session.id}/join`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ studentId: alice }),
+  });
+  assert.equal(aliceJoinRes.status, 200);
+  const aliceJoinBody = await aliceJoinRes.json();
+  const bobJoinBody = await (
+    await fetch(`${base}/decks/${deckSessionRes.session.id}/join`, { method: "POST", headers, body: JSON.stringify({ studentId: bob }) })
+  ).json();
+  assert.ok(
+    aliceJoinBody.cards.some((c: { id: string }) => c.id === sharedCard.id) && bobJoinBody.cards.some((c: { id: string }) => c.id === sharedCard.id),
+    "both students' personal decks include the shared card"
+  );
+  console.log("✓ POST /decks/:sessionId/join pulls the shared session's flashcards into a student's own queue without duplicating content");
+
+  // Alice reviews the shared card well; Bob fails it three times in a row (a leech for him only).
+  const aliceReview = await (
+    await fetch(`${base}/review/${sharedCard.id}`, { method: "POST", headers, body: JSON.stringify({ grade: "easy", studentId: alice }) })
+  ).json();
+  let bobReview;
+  for (let i = 0; i < LEECH_THRESHOLD; i++) {
+    bobReview = await (
+      await fetch(`${base}/review/${sharedCard.id}`, { method: "POST", headers, body: JSON.stringify({ grade: "again", studentId: bob }) })
+    ).json();
+  }
+  assert.equal(aliceReview.isLeech, false, "alice's independent progress on the shared card is not a leech");
+  assert.equal(bobReview.isLeech, true, "bob's independent progress on the exact same shared card became a leech");
+  assert.notEqual(aliceReview.easeFactor, bobReview.easeFactor, "the two students' ease factors on the same card diverge independently");
+  console.log("✓ two students reviewing the same shared card independently end up with different ease factors/leech status");
+
+  // The original card's own embedded state is untouched by either student's reviews.
+  const sharedSessionAfter = await (await fetch(`${base}/sessions/${deckSessionRes.session.id}`)).json();
+  const sharedCardAfter = sharedSessionAfter.flashcards.find((c: { id: string }) => c.id === sharedCard.id);
+  assert.equal(sharedCardAfter.repetitions, 0, "the underlying flashcard's own embedded review state is untouched by per-student reviews");
+  assert.equal(sharedCardAfter.isLeech, false, "the underlying flashcard's own embedded state never becomes a leech from a student's personal reviews");
+  console.log("✓ per-student review state never mutates the shared flashcard's own embedded scheduling/leech fields");
+
+  // GET /review/leeches?studentId= is scoped per student.
+  const bobLeeches = await (await fetch(`${base}/review/leeches?studentId=${bob}`)).json();
+  const aliceLeeches = await (await fetch(`${base}/review/leeches?studentId=${alice}`)).json();
+  const globalLeeches = await (await fetch(`${base}/review/leeches`)).json();
+  assert.ok(bobLeeches.some((c: { id: string }) => c.id === sharedCard.id), "GET /review/leeches?studentId=bob includes bob's leeched shared card");
+  assert.ok(!aliceLeeches.some((c: { id: string }) => c.id === sharedCard.id), "GET /review/leeches?studentId=alice does not include it");
+  assert.ok(!globalLeeches.some((c: { id: string }) => c.id === sharedCard.id), "the unscoped GET /review/leeches does not include it either");
+  console.log("✓ GET /review/leeches?studentId= scopes leech visibility to one student's own deck");
+
+  // --- Feature 8: quiz/practice-test mode ---
+  const quizSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Capitals quiz deck",
+        shared: true,
+        transcript: [
+          { text: "What is the capital of France?" },
+          { text: "Paris is the capital of France." },
+          { text: "What is the capital of Japan?" },
+          { text: "Tokyo is the capital of Japan." },
+          { text: "What is the capital of Italy?" },
+          { text: "Rome is the capital of Italy." },
+        ],
+      }),
+    })
+  ).json();
+  assert.ok(quizSessionRes.flashcards.length >= 3, "the quiz-test session yields at least 3 flashcards to sample from");
+  const backByCardId = new Map<string, string>(quizSessionRes.flashcards.map((c: { id: string; back: string }) => [c.id, c.back]));
+
+  const quizStudent = "quiz-student-1";
+  await fetch(`${base}/decks/${quizSessionRes.session.id}/join`, { method: "POST", headers, body: JSON.stringify({ studentId: quizStudent }) });
+
+  const quizStartRes = await fetch(`${base}/quiz/start`, { method: "POST", headers, body: JSON.stringify({ count: 3, studentId: quizStudent }) });
+  assert.equal(quizStartRes.status, 201);
+  const quiz = await quizStartRes.json();
+  assert.equal(quiz.cards.length, 3, "POST /quiz/start samples exactly the requested count of cards");
+  assert.ok(
+    quiz.cards.every((c: { front?: string; back?: string }) => typeof c.front === "string" && c.back === undefined),
+    "quiz cards expose the prompt (front) but withhold the answer (back) until graded"
+  );
+  console.log(`✓ POST /quiz/start samples exactly ${quiz.cards.length} card(s) into a new timed quiz`);
+
+  const [q1, q2, q3] = quiz.cards;
+  const correctAnswerRes = await fetch(`${base}/quiz/${quiz.id}/answer`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ cardId: q1.cardId, answer: `  ${backByCardId.get(q1.cardId)!.toUpperCase()}  ` }),
+  });
+  assert.equal(correctAnswerRes.status, 200);
+  const correctAnswerBody = await correctAnswerRes.json();
+  assert.equal(correctAnswerBody.correct, true, "an answer matching the card's back (modulo case/whitespace) is graded correct");
+  console.log("✓ POST /quiz/:id/answer grades a correct (case/whitespace-insensitive) answer as correct");
+
+  const wrongAnswerBody = await (
+    await fetch(`${base}/quiz/${quiz.id}/answer`, { method: "POST", headers, body: JSON.stringify({ cardId: q2.cardId, answer: "definitely not it" }) })
+  ).json();
+  assert.equal(wrongAnswerBody.correct, false, "an answer that doesn't match the card's back is graded incorrect");
+  console.log("✓ POST /quiz/:id/answer grades an incorrect answer as incorrect");
+
+  const midQuizResults = await (await fetch(`${base}/quiz/${quiz.id}/results`)).json();
+  assert.equal(midQuizResults.total, 3);
+  assert.equal(midQuizResults.answered, 2);
+  assert.equal(midQuizResults.correct, 1);
+  assert.equal(midQuizResults.complete, false, "results are available mid-quiz and report complete: false before every card is answered");
+  assert.equal(midQuizResults.missed.length, 1, "results list exactly the missed card(s) so far");
+  assert.equal(midQuizResults.missed[0].cardId, q2.cardId);
+  console.log("✓ GET /quiz/:id/results reports a correct partial score summary mid-quiz, including which cards were missed");
+
+  await fetch(`${base}/quiz/${quiz.id}/answer`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ cardId: q3.cardId, answer: backByCardId.get(q3.cardId) }),
+  });
+  const finalResults = await (await fetch(`${base}/quiz/${quiz.id}/results`)).json();
+  assert.equal(finalResults.answered, 3);
+  assert.equal(finalResults.correct, 2);
+  assert.equal(finalResults.complete, true, "results report complete: true once every sampled card has been answered");
+  console.log("✓ GET /quiz/:id/results reports complete: true and the final score once every card is answered");
+
+  const answerUnknownCardRes = await fetch(`${base}/quiz/${quiz.id}/answer`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ cardId: "not-a-card-in-this-quiz", answer: "whatever" }),
+  });
+  assert.equal(answerUnknownCardRes.status, 400, "answering a card that isn't part of the quiz returns a 400");
+  console.log("✓ POST /quiz/:id/answer rejects a cardId that isn't part of the quiz");
+
+  const answerUnknownQuizRes = await fetch(`${base}/quiz/not-a-real-quiz-id/answer`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ cardId: q1.cardId, answer: "x" }),
+  });
+  assert.equal(answerUnknownQuizRes.status, 404, "answering into an unknown quiz id returns a clean 404");
+  const resultsUnknownQuizRes = await fetch(`${base}/quiz/not-a-real-quiz-id/results`);
+  assert.equal(resultsUnknownQuizRes.status, 404, "fetching results for an unknown quiz id returns a clean 404");
+  console.log("✓ quiz endpoints return clean 404s for an unknown quiz id");
+
+  // A quiz with no studentId samples from the shared, student-less pool (there are plenty of cards by now).
+  const anonymousQuizRes = await (await fetch(`${base}/quiz/start`, { method: "POST", headers, body: JSON.stringify({ count: 2 }) })).json();
+  assert.equal(anonymousQuizRes.cards.length, 2, "POST /quiz/start without a studentId samples from the shared default pool");
+  console.log("✓ POST /quiz/start without a studentId still samples the requested count from the shared card pool");
+
+  // --- Feature 9: due-card reminder digest ---
+  const digestSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Cell biology reminders deck",
+        shared: true,
+        transcript: [
+          { text: "Mitochondria is the powerhouse of the cell." },
+          { text: "What produces ATP in a cell?" },
+          { text: "The mitochondria produces ATP through respiration." },
+        ],
+      }),
+    })
+  ).json();
+  assert.equal(digestSessionRes.flashcards.length, 2, "the reminders-test session yields exactly two flashcards");
+
+  const reminderStudent = "reminder-student-1";
+  const digestJoinBody = await (
+    await fetch(`${base}/decks/${digestSessionRes.session.id}/join`, { method: "POST", headers, body: JSON.stringify({ studentId: reminderStudent }) })
+  ).json();
+  assert.equal(digestJoinBody.cards.length, 2);
+
+  const freshDigestRes = await fetch(`${base}/reminders/digest?studentId=${reminderStudent}`);
+  assert.equal(freshDigestRes.status, 200);
+  const freshDigest = await freshDigestRes.json();
+  assert.equal(freshDigest.counts.due, 2, "both freshly-joined cards are immediately due");
+  assert.equal(freshDigest.counts.dueLeeches, 0, "no leeches yet");
+  assert.equal(freshDigest.summary, "You have 2 cards due today.", "the digest summary reflects the actual due count with no leech clause");
+  console.log(`✓ GET /reminders/digest reflects actual due counts: "${freshDigest.summary}"`);
+
+  // Make the second card a leech for this student.
+  const [digestCardA, digestCardB] = digestJoinBody.cards;
+  for (let i = 0; i < LEECH_THRESHOLD; i++) {
+    await fetch(`${base}/review/${digestCardB.id}`, { method: "POST", headers, body: JSON.stringify({ grade: "again", studentId: reminderStudent }) });
+  }
+
+  // Grading pushes dueAt at least a day into the future (SM-2's minimum interval),
+  // so — same documented pattern as the adaptive-ordering test above — call
+  // getReminderDigest directly with an injected future "now" to observe the
+  // digest once both cards are due again, rather than sleeping the test for real days.
+  const digestFutureNow = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  const leechDigest = getReminderDigest(reminderStudent, digestFutureNow);
+  assert.equal(leechDigest.counts.due, 2, "both cards are due again once enough time has passed");
+  assert.equal(leechDigest.counts.dueLeeches, 1, "exactly one of the due cards is a leech");
+  assert.equal(leechDigest.counts.totalLeeches, 1);
+  assert.equal(leechDigest.summary, "You have 2 cards due today, including 1 leech.", "the digest summary mentions the leech count in a voice-assistant-friendly sentence");
+  console.log(`✓ getReminderDigest reflects leech counts once a card becomes a leech: "${leechDigest.summary}"`);
+
+  const missingStudentDigestRes = await fetch(`${base}/reminders/digest`);
+  assert.equal(missingStudentDigestRes.status, 400, "GET /reminders/digest without a studentId returns a clean 400");
+  console.log("✓ GET /reminders/digest without a studentId query parameter returns a clean 400");
+
+  // --- Feature 10: adaptive new-card generation bias ---
+  // Establish "weak-glyco-student" as historically weak on the "glycolysis" topic:
+  // ingest a glycolysis-tagged session, then fail its card three times in a row.
+  const weakTopicSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Glycolysis basics",
+        transcript: [
+          { text: "Glycolysis is the process of breaking down glucose to release energy." },
+          { text: "What is glycolysis?" },
+          { text: "Glycolysis converts glucose into pyruvate and produces ATP." },
+        ],
+      }),
+    })
+  ).json();
+  assert.ok(weakTopicSessionRes.session.topics.includes("glycolysis"), "the glycolysis-heavy session is tagged with the glycolysis topic");
+  const weakGlycoStudent = "weak-glyco-student";
+  for (let i = 0; i < LEECH_THRESHOLD; i++) {
+    await fetch(`${base}/review/${weakTopicSessionRes.flashcards[0].id}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ grade: "again", studentId: weakGlycoStudent }),
+    });
+  }
+
+  // Plain statement sentences about glycolysis that don't match the Q&A or
+  // "X is Y" definition tiers, so — absent the bias — regenerating over the
+  // full transcript yields zero *new* cards (the fallback cloze tier never
+  // fires because the session already has cards from its initial ingest).
+  const glycolysisAppend = [
+    { text: "Glycolysis also helps regulate blood sugar levels during exercise." },
+    { text: "Muscle cells increasingly turn to glycolysis when oxygen grows scarce." },
+    { text: "Excess lactate from glycolysis can contribute to muscle fatigue." },
+  ];
+
+  // Control: a fresh session + a student with zero review history appends the exact same content.
+  const controlSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Meiosis basics (control)",
+        transcript: [
+          { text: "Meiosis is the process of cell division that produces gametes." },
+          { text: "What is meiosis?" },
+          { text: "Meiosis produces four genetically unique haploid cells." },
+        ],
+      }),
+    })
+  ).json();
+  const freshStudent = "fresh-no-history-student";
+  const controlPatchBody = await (
+    await fetch(`${base}/sessions/${controlSessionRes.session.id}/segments`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ segments: glycolysisAppend, studentId: freshStudent }),
+    })
+  ).json();
+  assert.equal(controlPatchBody.newFlashcards.length, 0, "appending plain statements with no weak-topic history yields zero new cards (no Q&A/definition match, fallback tier already spent)");
+  console.log("✓ control: appending non-Q&A/definition statements with a student who has no weak-topic history generates zero new cards");
+
+  // Biased: the same append, on the student's own glycolysis session, with their studentId.
+  const biasedPatchRes = await fetch(`${base}/sessions/${weakTopicSessionRes.session.id}/segments`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ segments: glycolysisAppend, studentId: weakGlycoStudent }),
+  });
+  assert.equal(biasedPatchRes.status, 200);
+  const biasedPatchBody = await biasedPatchRes.json();
+  assert.ok(
+    biasedPatchBody.newFlashcards.length > controlPatchBody.newFlashcards.length,
+    "appending the same content for a student who is historically weak on the touched topic generates more new cards than the control"
+  );
+  assert.ok(
+    biasedPatchBody.newFlashcards.every((c: { front: string }) => c.front.startsWith("Fill in the blank:")),
+    "the bias-generated cards are the documented extra simple cloze-deletion cards"
+  );
+  console.log(
+    `✓ PATCH /sessions/:id/segments with a studentId weak on the touched topic generates ${biasedPatchBody.newFlashcards.length} extra card(s) vs. ${controlPatchBody.newFlashcards.length} for the control`
+  );
 
   httpServer.close();
   console.log("\nAll StudyLoop smoke tests passed.");

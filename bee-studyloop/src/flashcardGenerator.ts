@@ -51,6 +51,40 @@ function ensureTerminalPunctuation(s: string): string {
 }
 
 /**
+ * Cloze-deletion card generation, factored out of `TemplateFlashcardGenerator`
+ * so it can be called two ways: as tier 3's fallback (only when the other two
+ * tiers found nothing at all, over the *whole* transcript), and directly by
+ * `appendSessionSegments` in studyService.ts as part of the adaptive
+ * generation-bias heuristic (see README "Adaptive new-card generation bias")
+ * — deliberately run over just the newly-appended segments, and deliberately
+ * NOT gated on "no other cards exist yet," so it can add a few simple extra
+ * cards for a weak topic even when the session already has plenty of cards
+ * overall. Blanks the longest word in each sufficiently-long sentence, on
+ * the theory that a longer word is more likely to be the sentence's key term
+ * than a short connective.
+ */
+export function generateClozeCards(segments: TranscriptSegment[], maxCount = 5): GeneratedFlashcard[] {
+  const fullText = segments.map((s) => s.text).join(" ");
+  const candidates = splitIntoSentences(fullText).filter((s) => s.split(/\s+/).length >= 5);
+
+  const cards: GeneratedFlashcard[] = [];
+  const seenFronts = new Set<string>();
+  for (const sentence of candidates) {
+    if (cards.length >= maxCount) break;
+    const words = sentence.replace(/[.?!]$/, "").split(/\s+/);
+    const target = [...words].sort((a, b) => b.length - a.length)[0];
+    if (!target || target.length < 4) continue;
+    const blanked = sentence.replace(target, "____");
+    const front = `Fill in the blank: ${blanked}`;
+    const key = front.trim().toLowerCase();
+    if (seenFronts.has(key)) continue;
+    seenFronts.add(key);
+    cards.push({ front, back: target.replace(/[.,;:]$/, "") });
+  }
+  return cards;
+}
+
+/**
  * Template/heuristic flashcard generator — no LLM required. It looks for
  * three progressively looser patterns in a study transcript:
  *
@@ -104,14 +138,7 @@ export class TemplateFlashcardGenerator implements FlashcardGenerator {
 
     // 3. Fallback: cloze-deletion cards built from the longest sentences.
     if (cards.length === 0) {
-      const candidates = splitIntoSentences(fullText).filter((s) => s.split(/\s+/).length >= 5);
-      for (const sentence of candidates.slice(0, 5)) {
-        const words = sentence.replace(/[.?!]$/, "").split(/\s+/);
-        const target = [...words].sort((a, b) => b.length - a.length)[0];
-        if (!target || target.length < 4) continue;
-        const blanked = sentence.replace(target, "____");
-        addCard(`Fill in the blank: ${blanked}`, target.replace(/[.,;:]$/, ""));
-      }
+      for (const c of generateClozeCards(segments, 5)) addCard(c.front, c.back);
     }
 
     return { summary: summarize(segments), flashcards: cards.slice(0, 12) };
