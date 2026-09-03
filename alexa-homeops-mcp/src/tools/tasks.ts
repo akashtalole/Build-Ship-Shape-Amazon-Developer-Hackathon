@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { addTask, listUpcomingTasks, markTaskDone, openTaskCounts, suggestAssignee } from "../store.js";
+import { addTask, importTasks, listUpcomingTasks, markTaskDone, openTaskCounts, suggestAssignee } from "../store.js";
 import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
+import { logEvent } from "../logging.js";
 
 const taskShape = {
   id: z.string(),
@@ -11,7 +12,9 @@ const taskShape = {
   done: z.boolean(),
 };
 
-export function registerTaskTools(server: McpServer, notify: NotifyFn): void {
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+export function registerTaskTools(server: McpServer, notify: NotifyFn, householdId: string): void {
   server.registerTool(
     "list_upcoming_tasks",
     {
@@ -33,7 +36,7 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn): void {
       annotations: { title: "List upcoming tasks", readOnlyHint: true, openWorldHint: false },
     },
     async ({ withinDays }) => {
-      const tasks = listUpcomingTasks(withinDays ?? 7);
+      const tasks = listUpcomingTasks(householdId, withinDays ?? 7);
       const text =
         tasks.length === 0
           ? `Nothing due in the next ${withinDays ?? 7} day(s).`
@@ -60,8 +63,15 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn): void {
     },
     async ({ title, dueDate, assignee }) => {
       const wasAutoAssigned = !assignee;
-      const task = addTask(title, dueDate, assignee);
+      const task = addTask(householdId, title, dueDate, assignee);
       await notify(RESOURCE_URIS.upcomingTasks);
+      await logEvent(server, "info", "Task added", {
+        taskId: task.id,
+        title: task.title,
+        dueDate: task.dueDate,
+        assignee: task.assignee,
+        autoAssigned: wasAutoAssigned,
+      });
       return {
         content: [
           {
@@ -76,6 +86,112 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn): void {
   );
 
   server.registerTool(
+    "import_tasks",
+    {
+      description:
+        "Bulk-add several household tasks in one call, e.g. 'add my whole week's chores at once'. " +
+        "Each item is validated independently — a malformed item (missing title, or a due date not in " +
+        "YYYY-MM-DD format) is reported as rejected without blocking the valid items in the same batch. " +
+        "Prefer this over repeated add_task calls when the user hands you a list.",
+      inputSchema: {
+        items: z
+          .array(
+            z
+              .object({
+                title: z.unknown().optional().describe("Short description of the task."),
+                dueDate: z.unknown().optional().describe("Due date in YYYY-MM-DD format."),
+                assignee: z.unknown().optional().describe("Household member responsible. Omit to auto-assign fairly."),
+              })
+              .passthrough()
+          )
+          .min(1)
+          .max(100)
+          .describe("The tasks to add, one object per task."),
+      },
+      outputSchema: {
+        results: z.array(
+          z.object({
+            index: z.number(),
+            status: z.enum(["added", "rejected"]),
+            title: z.string().optional(),
+            taskId: z.string().optional(),
+            dueDate: z.string().optional(),
+            assignee: z.string().optional(),
+            reason: z.string().optional(),
+          })
+        ),
+        addedCount: z.number(),
+        rejectedCount: z.number(),
+      },
+      annotations: { title: "Import tasks", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ items }) => {
+      type ItemResult = {
+        index: number;
+        status: "added" | "rejected";
+        title?: string;
+        taskId?: string;
+        dueDate?: string;
+        assignee?: string;
+        reason?: string;
+      };
+
+      const results: ItemResult[] = [];
+      const toAdd: { index: number; title: string; dueDate: string; assignee?: string }[] = [];
+
+      items.forEach((raw, index) => {
+        const title = typeof raw.title === "string" ? raw.title.trim() : "";
+        const dueDate = typeof raw.dueDate === "string" ? raw.dueDate.trim() : "";
+        const assignee = typeof raw.assignee === "string" && raw.assignee.trim() ? raw.assignee.trim() : undefined;
+
+        if (!title) {
+          results.push({ index, status: "rejected", reason: "Missing or empty title." });
+          return;
+        }
+        if (!DATE_PATTERN.test(dueDate)) {
+          results.push({ index, status: "rejected", title, reason: `dueDate must be YYYY-MM-DD, got ${JSON.stringify(raw.dueDate)}.` });
+          return;
+        }
+        toAdd.push({ index, title, dueDate, assignee });
+      });
+
+      // One store write and one resource notification for the whole batch,
+      // not one per item — that's the point of a bulk-import tool.
+      const created = importTasks(
+        householdId,
+        toAdd.map(({ title, dueDate, assignee }) => ({ title, dueDate, assignee }))
+      );
+
+      created.forEach((task, i) => {
+        const { index } = toAdd[i];
+        results.push({ index, status: "added", title: task.title, taskId: task.id, dueDate: task.dueDate, assignee: task.assignee });
+      });
+      results.sort((a, b) => a.index - b.index);
+
+      const addedCount = created.length;
+      const rejectedCount = results.length - addedCount;
+
+      if (addedCount > 0) {
+        await notify(RESOURCE_URIS.upcomingTasks);
+      }
+      await logEvent(server, rejectedCount > 0 ? "warning" : "info", "Bulk task import completed", {
+        addedCount,
+        rejectedCount,
+        totalRequested: items.length,
+      });
+
+      const lines = results.map((r) =>
+        r.status === "added"
+          ? `- [added] "${r.title}" due ${r.dueDate} for ${r.assignee}`
+          : `- [rejected] item ${r.index}${r.title ? ` ("${r.title}")` : ""}: ${r.reason}`
+      );
+      const text = `Imported ${addedCount}/${items.length} task(s).\n${lines.join("\n")}`;
+
+      return { content: [{ type: "text", text }], structuredContent: { results, addedCount, rejectedCount } };
+    }
+  );
+
+  server.registerTool(
     "mark_task_done",
     {
       description: "Mark a household task as completed by its task ID (from list_upcoming_tasks).",
@@ -85,7 +201,7 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn): void {
       annotations: { title: "Mark task done", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ taskId }) => {
-      const task = markTaskDone(taskId);
+      const task = markTaskDone(householdId, taskId);
       if (!task) {
         return { content: [{ type: "text", text: `No task found with ID ${taskId}.` }], isError: true };
       }
@@ -104,8 +220,8 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn): void {
       annotations: { title: "Suggest assignee", readOnlyHint: true, openWorldHint: false },
     },
     async () => {
-      const suggestion = suggestAssignee();
-      const counts = openTaskCounts()
+      const suggestion = suggestAssignee(householdId);
+      const counts = openTaskCounts(householdId)
         .map((c) => `${c.member}: ${c.openTasks} open`)
         .join(", ");
       return {
@@ -124,7 +240,7 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn): void {
       annotations: { title: "Sync calendar", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async (_args, extra) => {
-      const tasks = listUpcomingTasks(30);
+      const tasks = listUpcomingTasks(householdId, 30);
       const progressToken = extra._meta?.progressToken;
 
       for (let i = 0; i < tasks.length; i++) {

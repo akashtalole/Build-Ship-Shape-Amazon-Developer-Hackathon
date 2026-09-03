@@ -2,8 +2,9 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { findItemByName, itemsRunningLow, recordReorderIdempotent } from "../store.js";
 import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
+import { logEvent } from "../logging.js";
 
-export function registerShoppingTools(server: McpServer, notify: NotifyFn): void {
+export function registerShoppingTools(server: McpServer, notify: NotifyFn, householdId: string): void {
   server.registerTool(
     "list_low_stock_items",
     {
@@ -19,7 +20,7 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
       annotations: { title: "List low-stock items", readOnlyHint: true, openWorldHint: false },
     },
     async () => {
-      const items = itemsRunningLow();
+      const items = itemsRunningLow(householdId);
       const text = items.length === 0 ? "Everything is well stocked." : items.map((i) => `- ${i.name} (${i.quantityOnHand} on hand)`).join("\n");
       return { content: [{ type: "text", text }], structuredContent: { items } };
     }
@@ -55,7 +56,7 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
       },
     },
     async ({ itemName, confirm, idempotencyKey }) => {
-      const item = findItemByName(itemName);
+      const item = findItemByName(householdId, itemName);
       if (!item) {
         return { content: [{ type: "text", text: `I don't track an item called "${itemName}".` }], isError: true };
       }
@@ -83,6 +84,7 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
           });
 
           if (elicited.action !== "accept" || !elicited.content?.confirmReorder) {
+            await logEvent(server, "notice", "Reorder declined", { itemId: item.id, itemName: item.name });
             return { content: [{ type: "text", text: `Okay, I won't reorder ${item.name}.` }] };
           }
           approved = true;
@@ -102,9 +104,14 @@ export function registerShoppingTools(server: McpServer, notify: NotifyFn): void
         }
       }
 
-      const { item: updated, replayed } = recordReorderIdempotent(item.id, idempotencyKey)!;
+      const { item: updated, replayed } = recordReorderIdempotent(householdId, item.id, idempotencyKey)!;
       if (!replayed) {
         await notify(RESOURCE_URIS.lowStock);
+        await logEvent(server, "info", "Reorder confirmed", {
+          itemId: updated.id,
+          itemName: updated.name,
+          quantityOnHand: updated.quantityOnHand,
+        });
       }
       return {
         content: [

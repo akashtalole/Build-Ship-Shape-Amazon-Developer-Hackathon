@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { addExpense, expensesThisWeek, getBudgetStatus, setBudget } from "../store.js";
 import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
+import { logEvent } from "../logging.js";
 
 const budgetStatusShape = {
   category: z.string(),
@@ -11,7 +12,7 @@ const budgetStatusShape = {
   overBudget: z.boolean(),
 };
 
-export function registerExpenseTools(server: McpServer, notify: NotifyFn): void {
+export function registerExpenseTools(server: McpServer, notify: NotifyFn, householdId: string): void {
   server.registerTool(
     "add_expense",
     {
@@ -29,14 +30,23 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn): void 
       annotations: { title: "Add expense", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     async ({ description, amount, category }) => {
-      const expense = addExpense(description, amount, category);
+      const expense = addExpense(householdId, description, amount, category);
       await notify(RESOURCE_URIS.budgetStatus);
 
-      const status = getBudgetStatus().find((b) => b.category === expense.category);
+      const status = getBudgetStatus(householdId).find((b) => b.category === expense.category);
       const warning =
         status?.overBudget
           ? ` Heads up: ${status.category} is now ${(status.spentThisWeek - status.budget).toFixed(2)} over its weekly budget of ${status.budget}.`
           : "";
+
+      if (status?.overBudget) {
+        await logEvent(server, "warning", "Budget exceeded", {
+          category: status.category,
+          spentThisWeek: status.spentThisWeek,
+          budget: status.budget,
+          overBy: status.spentThisWeek - status.budget,
+        });
+      }
 
       return {
         content: [
@@ -56,7 +66,7 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn): void 
       annotations: { title: "Get weekly summary", readOnlyHint: true, openWorldHint: false },
     },
     async () => {
-      const expenses = expensesThisWeek();
+      const expenses = expensesThisWeek(householdId);
       if (expenses.length === 0) {
         return { content: [{ type: "text", text: "No expenses logged in the past week." }] };
       }
@@ -83,7 +93,7 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn): void 
       annotations: { title: "Set budget", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ category, amount }) => {
-      setBudget(category, amount);
+      setBudget(householdId, category, amount);
       await notify(RESOURCE_URIS.budgetStatus);
       return { content: [{ type: "text", text: `Set the weekly ${category.toLowerCase()} budget to ${amount}.` }] };
     }
@@ -98,7 +108,7 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn): void 
       annotations: { title: "Get budget status", readOnlyHint: true, openWorldHint: false },
     },
     async () => {
-      const statuses = getBudgetStatus();
+      const statuses = getBudgetStatus(householdId);
       const text =
         statuses.length === 0
           ? "No budgets set yet. Use set_budget to add one."

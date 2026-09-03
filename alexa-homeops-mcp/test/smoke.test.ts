@@ -2,11 +2,17 @@
  * End-to-end smoke test: spins up the HomeOps MCP server on an ephemeral
  * port, connects a real MCP client over Streamable HTTP, and exercises
  * every capability — tools, resources (+ subscribe/notify), prompts,
- * elicitation, and sampling. Run with `npm test`.
+ * elicitation, sampling, bearer-token multi-tenancy, structured logging,
+ * file-backed persistence across a simulated restart, and bulk task import.
+ * Run with `npm test`.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
+import type { Server as HttpServer } from "node:http";
 import express from "express";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -14,10 +20,18 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import {
   CreateMessageRequestSchema,
   ElicitRequestSchema,
+  LoggingMessageNotificationSchema,
   ResourceUpdatedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createHomeOpsServer } from "../src/server.js";
 import { InMemoryEventStore } from "../src/eventStore.js";
+import { extractBearerToken, resolveHouseholdId } from "../src/auth.js";
+
+// Isolate this test run's persisted household data from real usage and from
+// any previous test run, and confirm it before any server/store code (which
+// reads this env var lazily, not at import time) actually runs.
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "homeops-smoke-"));
+process.env.HOMEOPS_DATA_DIR = dataDir;
 
 function testEventStore() {
   const store = new InMemoryEventStore();
@@ -43,41 +57,52 @@ function testEventStore() {
   })();
 }
 
-async function main() {
-  await testEventStore();
-  console.log("✓ InMemoryEventStore replays only same-stream events strictly after the given event ID");
-
+/**
+ * Starts a fresh Express app + Streamable HTTP transport layer on an
+ * ephemeral port, mirroring src/index.ts's session/auth wiring exactly
+ * (bearer token → household ID → one McpServer per session) so the smoke
+ * test exercises the real multi-tenancy path rather than a shortcut.
+ */
+function startServer(): { httpServer: HttpServer; baseUrl: URL } {
   const app = express();
   app.use(express.json());
 
   const eventStore = new InMemoryEventStore();
   const transports = new Map<string, StreamableHTTPServerTransport>();
+
   app.all("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     if (sessionId && transports.has(sessionId)) {
       await transports.get(sessionId)!.handleRequest(req, res, req.body);
       return;
     }
+
+    const token = extractBearerToken(req);
+    const householdId = resolveHouseholdId(token);
+
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       eventStore,
       onsessioninitialized: (id) => transports.set(id, transport),
     });
-    await createHomeOpsServer().connect(transport);
+    await createHomeOpsServer(householdId).connect(transport);
     await transport.handleRequest(req, res, req.body);
   });
 
   const httpServer = app.listen(0);
   const { port } = httpServer.address() as AddressInfo;
-  const baseUrl = new URL(`http://127.0.0.1:${port}/mcp`);
+  return { httpServer, baseUrl: new URL(`http://127.0.0.1:${port}/mcp`) };
+}
 
+/** Connects an MCP client (with elicitation/sampling stubs wired in), optionally under a bearer token. */
+async function connectClient(baseUrl: URL, token?: string) {
   const client = new Client(
     { name: "homeops-smoke-test", version: "0.1.0" },
     { capabilities: { elicitation: { form: {} }, sampling: {} } }
   );
 
   // Auto-accept any confirmation the server elicits.
-  client.setRequestHandler(ElicitRequestSchema, async (request) => {
+  client.setRequestHandler(ElicitRequestSchema, async () => {
     return { action: "accept", content: { confirmReorder: true } };
   });
 
@@ -90,12 +115,29 @@ async function main() {
     };
   });
 
-  let resourceUpdates = 0;
-  client.setNotificationHandler(ResourceUpdatedNotificationSchema, async () => {
-    resourceUpdates += 1;
+  const resourceUpdates: string[] = [];
+  client.setNotificationHandler(ResourceUpdatedNotificationSchema, async (n) => {
+    resourceUpdates.push(n.params.uri);
   });
 
-  await client.connect(new StreamableHTTPClientTransport(baseUrl));
+  const logMessages: { level: string; data: unknown }[] = [];
+  client.setNotificationHandler(LoggingMessageNotificationSchema, async (n) => {
+    logMessages.push({ level: n.params.level, data: n.params.data });
+  });
+
+  await client.connect(
+    new StreamableHTTPClientTransport(baseUrl, token ? { requestInit: { headers: { Authorization: `Bearer ${token}` } } } : undefined)
+  );
+
+  return { client, resourceUpdates, logMessages };
+}
+
+async function main() {
+  await testEventStore();
+  console.log("✓ InMemoryEventStore replays only same-stream events strictly after the given event ID");
+
+  const { httpServer, baseUrl } = startServer();
+  const { client, resourceUpdates, logMessages } = await connectClient(baseUrl);
 
   // --- Tools ---
   const tools = await client.listTools();
@@ -106,6 +148,7 @@ async function main() {
     "generate_weekly_narrative",
     "get_budget_status",
     "get_weekly_summary",
+    "import_tasks",
     "list_low_stock_items",
     "list_upcoming_tasks",
     "mark_task_done",
@@ -119,7 +162,7 @@ async function main() {
   assert.equal(listTasksTool.annotations?.readOnlyHint, true);
   const addTaskTool = tools.tools.find((t) => t.name === "add_task")!;
   assert.equal(addTaskTool.annotations?.readOnlyHint, false);
-  console.log("✓ all 13 HomeOps tools discoverable, with read/write annotations");
+  console.log("✓ all 14 HomeOps tools discoverable, with read/write annotations");
 
   // --- Resources (static + a completable template) ---
   const resources = await client.listResources();
@@ -153,13 +196,54 @@ async function main() {
   // Resource-updated notifications ride the SSE stream independently of the
   // tool call's response, so give one a moment to arrive before asserting.
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.ok(resourceUpdates > 0);
+  assert.ok(resourceUpdates.length > 0);
   console.log("✓ add_task auto-assigns via fair rotation and notifies the subscribed tasks resource");
+
+  // --- Structured logging (MCP logging capability) ---
+  // add_task above should have already fired a "Task added" notifications/message,
+  // independent of and in addition to the tool's own text result.
+  assert.ok(logMessages.length > 0, "expected at least one notifications/message log entry");
+  assert.ok(
+    logMessages.some((m) => (m.data as any)?.message === "Task added"),
+    "expected a 'Task added' log entry distinct from the tool result"
+  );
+  console.log(`✓ subscribed client received ${logMessages.length} structured notifications/message log entr(y/ies)`);
 
   // --- Structured tool output ---
   const listed = await client.callTool({ name: "list_upcoming_tasks", arguments: {} });
   assert.ok(Array.isArray((listed.structuredContent as any)?.tasks));
   console.log("✓ list_upcoming_tasks returns structuredContent alongside the text summary");
+
+  // --- Bulk task import ---
+  const preImportNotifications = resourceUpdates.length;
+  const importResult = await client.callTool({
+    name: "import_tasks",
+    arguments: {
+      items: [
+        { title: "Mow the lawn", dueDate: "2026-09-05" },
+        { title: "Clean the gutters", dueDate: "2026-09-06", assignee: "Sam" },
+        { dueDate: "2026-09-07" }, // missing title — rejected
+        { title: "Bad date task", dueDate: "not-a-date" }, // malformed date — rejected
+        { title: "Vacuum the hallway", dueDate: "2026-09-08" },
+      ],
+    },
+  });
+  const importData = importResult.structuredContent as any;
+  assert.equal(importData.addedCount, 3);
+  assert.equal(importData.rejectedCount, 2);
+  assert.equal(importData.results.length, 5);
+  const rejected = importData.results.filter((r: any) => r.status === "rejected");
+  assert.equal(rejected.length, 2);
+  assert.ok(rejected.every((r: any) => typeof r.reason === "string" && r.reason.length > 0));
+  const addedTitles = importData.results.filter((r: any) => r.status === "added").map((r: any) => r.title).sort();
+  assert.deepEqual(addedTitles, ["Clean the gutters", "Mow the lawn", "Vacuum the hallway"]);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(
+    resourceUpdates.length - preImportNotifications,
+    1,
+    "expected exactly one combined resource-update notification for the whole batch, not one per item"
+  );
+  console.log("✓ import_tasks adds valid items, reports per-item rejection reasons, and fires a single notification");
 
   // --- Resource template + argument completion ---
   const completion = await client.complete({
@@ -176,7 +260,12 @@ async function main() {
   const reorder = await client.callTool({ name: "reorder_item", arguments: { itemName: "Dog food" } });
   const reorderText = (reorder.content as any)[0].text as string;
   assert.match(reorderText, /Reordered Dog food/);
-  console.log("✓ reorder_item confirms via MCP elicitation, then executes");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(
+    logMessages.some((m) => (m.data as any)?.message === "Reorder confirmed"),
+    "expected a 'Reorder confirmed' log entry"
+  );
+  console.log("✓ reorder_item confirms via MCP elicitation, then executes, logging a 'Reorder confirmed' entry");
 
   // --- Idempotency-key protected retry ---
   const extractQuantity = (text: string) => Number(text.match(/shows (\d+) on hand/)?.[1]);
@@ -219,7 +308,12 @@ async function main() {
   });
   const expenseText = (expense.content as any)[0].text as string;
   assert.match(expenseText, /over its weekly budget/);
-  console.log("✓ add_expense flags an over-budget category");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(
+    logMessages.some((m) => (m.data as any)?.message === "Budget exceeded"),
+    "expected a 'Budget exceeded' log entry"
+  );
+  console.log("✓ add_expense flags an over-budget category and logs a 'Budget exceeded' entry");
 
   const budgetStatus = await client.callTool({ name: "get_budget_status", arguments: {} });
   const budgetText = (budgetStatus.content as any)[0].text as string;
@@ -246,7 +340,63 @@ async function main() {
   console.log(`✓ sync_household_calendar streamed ${progressUpdates.length} progress notification(s)`);
 
   await client.close();
+
+  // --- Bearer-token multi-household isolation ---
+  const tokenA = `alice-${randomUUID()}`;
+  const tokenB = `bob-${randomUUID()}`;
+  const { client: clientA } = await connectClient(baseUrl, tokenA);
+  const { client: clientB } = await connectClient(baseUrl, tokenB);
+
+  await clientA.callTool({ name: "add_task", arguments: { title: "Alice-only task", dueDate: "2026-09-04" } });
+  await clientB.callTool({ name: "add_task", arguments: { title: "Bob-only task", dueDate: "2026-09-04" } });
+
+  const tasksSeenByA = await clientA.callTool({ name: "list_upcoming_tasks", arguments: { withinDays: 30 } });
+  const tasksSeenByB = await clientB.callTool({ name: "list_upcoming_tasks", arguments: { withinDays: 30 } });
+  const titlesA = ((tasksSeenByA.structuredContent as any).tasks as any[]).map((t) => t.title);
+  const titlesB = ((tasksSeenByB.structuredContent as any).tasks as any[]).map((t) => t.title);
+
+  assert.ok(titlesA.includes("Alice-only task"));
+  assert.ok(!titlesA.includes("Bob-only task"));
+  assert.ok(titlesB.includes("Bob-only task"));
+  assert.ok(!titlesB.includes("Alice-only task"));
+  // Fresh token-derived households start empty (no seeded demo data), unlike
+  // the no-token default household exercised above.
+  assert.equal(titlesA.length, 1);
+  assert.equal(titlesB.length, 1);
+  console.log("✓ two different bearer tokens see completely isolated household data");
+
+  await clientA.close();
+  await clientB.close();
   httpServer.close();
+
+  // --- Durable persistence across a simulated restart ---
+  // Two independent server instances (fresh Express app, fresh EventStore,
+  // fresh Map of transports — nothing shared in memory) pointed at the same
+  // on-disk HOMEOPS_DATA_DIR under the same bearer token, standing in for a
+  // real process restart against the same data directory.
+  const restartToken = `restart-${randomUUID()}`;
+
+  const serverInstance1 = startServer();
+  const { client: restartClient1 } = await connectClient(serverInstance1.baseUrl, restartToken);
+  await restartClient1.callTool({
+    name: "add_task",
+    arguments: { title: "Persisted across restart", dueDate: "2026-09-10" },
+  });
+  await restartClient1.close();
+  serverInstance1.httpServer.close();
+
+  const serverInstance2 = startServer();
+  const { client: restartClient2 } = await connectClient(serverInstance2.baseUrl, restartToken);
+  const tasksAfterRestart = await restartClient2.callTool({
+    name: "list_upcoming_tasks",
+    arguments: { withinDays: 30 },
+  });
+  const titlesAfterRestart = ((tasksAfterRestart.structuredContent as any).tasks as any[]).map((t) => t.title);
+  assert.ok(titlesAfterRestart.includes("Persisted across restart"));
+  await restartClient2.close();
+  serverInstance2.httpServer.close();
+  console.log("✓ household data survives a simulated restart (fresh server instance, same on-disk data dir)");
+
   console.log("\nAll HomeOps MCP smoke tests passed.");
 }
 
