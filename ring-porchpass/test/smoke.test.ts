@@ -6,10 +6,13 @@
  * exercise expiry, revocation, and single-use enforcement — followed by a
  * second round covering the advanced features: idempotent issuance,
  * recurring passes, webhook signature verification, the real-time SSE
- * event stream, quiet-hours enforcement, and check-in rate limiting.
+ * event stream, quiet-hours enforcement, and check-in rate limiting — and a
+ * third round covering multi-device support, outbound webhook notifications,
+ * bulk/template pass issuance, and the grace-period extension flow.
  * Run with `npm test`.
  */
 import assert from "node:assert/strict";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/server.js";
 import { SimulatedRingClient } from "../src/ringClient.js";
@@ -381,8 +384,295 @@ async function main() {
   assert.equal(attemptStatuses.slice(0, 5).every((s) => s !== 429), true, "the first 5 attempts are not rate-limited");
   console.log("✓ the 6th rapid check-in attempt on one checkinToken within 10 minutes is rejected with 429");
 
+  // =========================================================================
+  // Round 3: multi-device support, outbound webhooks, bulk issuance, grace-
+  // period extensions
+  // =========================================================================
+
+  // --- 1. Multi-device support ---
+  const deviceListBefore = await (await fetch(`${base}/devices`)).json();
+  assert.ok(
+    deviceListBefore.some((d: { id: string }) => d.id === "front-door"),
+    "front-door is pre-registered by default, for backward compatibility"
+  );
+  console.log("✓ GET /devices lists the pre-registered front-door device by default");
+
+  const backDoorPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        visitorName: "Back Door Gardener",
+        visitorPhone: "+15552221111",
+        validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        maxUses: 2,
+        deviceIds: ["back-door"],
+      }),
+    })
+  ).json();
+  assert.deepEqual(backDoorPass.deviceIds, ["back-door"]);
+
+  const devicesAfterPassIssuance = await (await fetch(`${base}/devices`)).json();
+  assert.ok(
+    devicesAfterPassIssuance.some((d: { id: string }) => d.id === "back-door"),
+    "a pass naming a new deviceId implicitly registers that device"
+  );
+  console.log("✓ issuing a pass scoped to a new deviceId implicitly registers that device");
+
+  // A front-door ding should NOT correlate with a pass scoped only to back-door.
+  const frontDingBody = JSON.stringify({ deviceId: "front-door", type: "ding" });
+  await fetch(`${base}/ring/events`, { method: "POST", headers: ringWebhookHeaders(frontDingBody), body: frontDingBody });
+  const backDoorScopedMissCheckin = await (
+    await fetch(`${base}/checkin/${backDoorPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(backDoorScopedMissCheckin.ok, true, "the check-in still succeeds even with no matching event on its scoped device");
+  assert.equal(backDoorScopedMissCheckin.visit.matchedEvent, undefined, "a front-door event must not correlate with a back-door-scoped pass");
+  console.log("✓ a pass scoped to back-door does not correlate with a front-door Ring event");
+
+  // A back-door ding SHOULD correlate with the same pass's second use.
+  const backDingBody = JSON.stringify({ deviceId: "back-door", type: "ding" });
+  await fetch(`${base}/ring/events`, { method: "POST", headers: ringWebhookHeaders(backDingBody), body: backDingBody });
+  const backDoorScopedHitCheckin = await (
+    await fetch(`${base}/checkin/${backDoorPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(backDoorScopedHitCheckin.ok, true);
+  assert.ok(backDoorScopedHitCheckin.visit.matchedEvent, "a back-door event must correlate with a back-door-scoped pass");
+  assert.equal(backDoorScopedHitCheckin.visit.matchedEvent.deviceId, "back-door");
+  console.log("✓ a pass scoped to back-door correlates correctly with a back-door Ring event");
+
+  const explicitDevice = await (
+    await fetch(`${base}/devices`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "garage", name: "Garage Camera" }),
+    })
+  ).json();
+  assert.equal(explicitDevice.name, "Garage Camera");
+  console.log("✓ POST /devices explicitly registers a device with a custom name");
+
+  // --- 2. Outbound webhook notifications ---
+  const receivedWebhookDeliveries: Array<{ headers: http.IncomingHttpHeaders; body: string }> = [];
+  const webhookServer = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      receivedWebhookDeliveries.push({ headers: req.headers, body: Buffer.concat(chunks).toString("utf8") });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise<void>((resolve) => webhookServer.listen(0, "127.0.0.1", resolve));
+  const webhookPort = (webhookServer.address() as AddressInfo).port;
+  const webhookUrl = `http://127.0.0.1:${webhookPort}/hook`;
+
+  const webhookRegRes = await fetch(`${base}/settings/webhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: webhookUrl }),
+  });
+  assert.equal(webhookRegRes.status, 201);
+  const webhookReg = await webhookRegRes.json();
+  assert.equal(webhookReg.url, webhookUrl);
+  assert.ok(webhookReg.secret, "registering a webhook returns a server-generated signing secret");
+
+  const getWebhookRes = await fetch(`${base}/settings/webhook`);
+  assert.equal(getWebhookRes.status, 200);
+  const fetchedWebhookReg = await getWebhookRes.json();
+  assert.equal(fetchedWebhookReg.secret, webhookReg.secret, "GET /settings/webhook exposes the same secret so the receiver can verify signatures");
+  console.log("✓ POST/GET /settings/webhook registers a callback URL and exposes its signing secret");
+
+  const webhookUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const webhookPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Webhook Watched Visitor", visitorPhone: "+15553334444", validUntil: webhookUntil }),
+    })
+  ).json();
+  await fetch(`${base}/checkin/${webhookPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+
+  const visitDelivery = await waitFor(
+    () => receivedWebhookDeliveries.find((d) => JSON.parse(d.body).type === "visit_checkin" && JSON.parse(d.body).visit?.passId === webhookPass.id),
+    3000,
+    "the registered webhook to receive a signed visit_checkin delivery"
+  );
+  const deliveredSignature = visitDelivery.headers["x-porchpass-signature"];
+  assert.ok(deliveredSignature, "the outbound delivery carries an X-PorchPass-Signature header");
+  const expectedSignature = signPayload(webhookReg.secret, visitDelivery.body);
+  assert.equal(deliveredSignature, expectedSignature, "the receiver can independently recompute the HMAC-SHA256 signature from the secret and raw body");
+  console.log("✓ a registered outbound webhook receives a correctly HMAC-signed POST when a visit happens");
+
+  const webhookStatusRes = await (await fetch(`${base}/settings/webhook`)).json();
+  assert.ok(webhookStatusRes.deliveryStatus.lastSuccessAt, "successful deliveries are tracked for observability");
+  console.log("✓ GET /settings/webhook exposes last-delivery status for observability");
+
+  webhookServer.close();
+
+  // --- 3. Bulk/template pass issuance ---
+  const bulkUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const bulkRes = await fetch(`${base}/passes/bulk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      template: { visitorPhone: "+15556660000", validUntil: bulkUntil, note: "weekly dog walker" },
+      variations: [
+        { visitorName: "Monday Walker", recurrence: { daysOfWeek: [1], startTime: "13:00", endTime: "15:00" } },
+        { visitorName: "Wednesday Walker", recurrence: { daysOfWeek: [3], startTime: "13:00", endTime: "15:00" } },
+        { visitorName: "Friday Walker", recurrence: { daysOfWeek: [5], startTime: "13:00", endTime: "15:00" } },
+      ],
+      idempotencyKeyPrefix: "bulk-walkers-week1-",
+    }),
+  });
+  assert.equal(bulkRes.status, 201);
+  const bulkResult = await bulkRes.json();
+  assert.equal(bulkResult.results.length, 3, "one result per variation, in one response");
+  assert.ok(bulkResult.results.every((r: { status: string }) => r.status === "created"));
+  assert.deepEqual(
+    bulkResult.results.map((r: { pass: { visitorName: string } }) => r.pass.visitorName),
+    ["Monday Walker", "Wednesday Walker", "Friday Walker"]
+  );
+  assert.ok(bulkResult.results.every((r: { pass: { note: string } }) => r.pass.note === "weekly dog walker"), "template fields apply to every variation");
+  console.log("✓ POST /passes/bulk creates N passes from a template + variations in one request");
+
+  const bulkReplayRes = await fetch(`${base}/passes/bulk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      template: { visitorPhone: "+15556660000", validUntil: bulkUntil, note: "weekly dog walker" },
+      variations: [
+        { visitorName: "Monday Walker", recurrence: { daysOfWeek: [1], startTime: "13:00", endTime: "15:00" } },
+        { visitorName: "Wednesday Walker", recurrence: { daysOfWeek: [3], startTime: "13:00", endTime: "15:00" } },
+        { visitorName: "Friday Walker", recurrence: { daysOfWeek: [5], startTime: "13:00", endTime: "15:00" } },
+      ],
+      idempotencyKeyPrefix: "bulk-walkers-week1-",
+    }),
+  });
+  const bulkReplayResult = await bulkReplayRes.json();
+  assert.ok(bulkReplayResult.results.every((r: { status: string }) => r.status === "replayed"), "a repeated bulk call with the same idempotencyKeyPrefix replays, not duplicates");
+  assert.deepEqual(
+    bulkReplayResult.results.map((r: { pass: { id: string } }) => r.pass.id),
+    bulkResult.results.map((r: { pass: { id: string } }) => r.pass.id)
+  );
+  console.log("✓ POST /passes/bulk replays (not duplicates) passes on a repeated idempotencyKeyPrefix");
+
+  const bulkPartialRes = await fetch(`${base}/passes/bulk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      template: { visitorPhone: "+15556660001", validUntil: bulkUntil },
+      variations: [{ visitorName: "Valid Visitor" }, { visitorPhone: "+15559999999" /* missing visitorName */ }],
+    }),
+  });
+  assert.equal(bulkPartialRes.status, 207);
+  const bulkPartialResult = await bulkPartialRes.json();
+  assert.equal(bulkPartialResult.results[0].status, "created");
+  assert.equal(bulkPartialResult.results[1].status, "error");
+  console.log("✓ POST /passes/bulk reports per-item results — one bad variation doesn't fail the whole batch");
+
+  // --- 4. Grace-period extension flow ---
+  const justExpiredPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        visitorName: "Just Missed It",
+        visitorPhone: "+15557778888",
+        validFrom: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        validUntil: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // expired 5 minutes ago — inside the 30-minute grace window
+      }),
+    })
+  ).json();
+
+  const justExpiredCheckin = await (
+    await fetch(`${base}/checkin/${justExpiredPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(justExpiredCheckin.ok, false);
+  assert.equal(justExpiredCheckin.graceEligible, true, "a pass expired within the grace window is offered an extension");
+  console.log("✓ a pass that just expired is flagged graceEligible instead of only a flat rejection");
+
+  // Never-requested: a second attempt without ever requesting an extension still stays rejected.
+  const neverRequestedRecheck = await (
+    await fetch(`${base}/checkin/${justExpiredPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(neverRequestedRecheck.ok, false, "a never-requested expired pass stays rejected");
+
+  const extensionRequestRes = await fetch(`${base}/checkin/${justExpiredPass.checkinToken}/request-extension`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  assert.equal(extensionRequestRes.status, 201);
+  const extensionRequestResult = await extensionRequestRes.json();
+  assert.equal(extensionRequestResult.ok, true);
+  assert.equal(extensionRequestResult.pass.extension.status, "pending");
+  const extensionRequestNotification = notifier.history().find((n) => n.to === "homeowner" && /extension|more minutes/.test(n.message));
+  assert.ok(extensionRequestNotification, "requesting an extension notifies the homeowner via the existing Notifier");
+  console.log("✓ POST /checkin/:token/request-extension creates a pending request and notifies the homeowner");
+
+  // Deny path: a denied pass stays rejected.
+  const denyUntil = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const toBeDeniedPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        visitorName: "To Be Denied",
+        visitorPhone: "+15557778889",
+        validFrom: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        validUntil: denyUntil,
+      }),
+    })
+  ).json();
+  await fetch(`${base}/checkin/${toBeDeniedPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+  await fetch(`${base}/checkin/${toBeDeniedPass.checkinToken}/request-extension`, { method: "POST", headers: { Accept: "application/json" } });
+  const denyRes = await fetch(`${base}/passes/${toBeDeniedPass.id}/extension/deny`, { method: "POST" });
+  assert.equal(denyRes.status, 200);
+  const denyResult = await denyRes.json();
+  assert.equal(denyResult.pass.extension.status, "denied");
+  const deniedCheckin = await (
+    await fetch(`${base}/checkin/${toBeDeniedPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(deniedCheckin.ok, false, "a denied extension request stays rejected");
+  console.log("✓ POST /passes/:id/extension/deny keeps the pass rejected on the next check-in attempt");
+
+  // Approve path: an approved extension unlocks exactly one more check-in.
+  const approveRes = await fetch(`${base}/passes/${justExpiredPass.id}/extension/approve`, { method: "POST" });
+  assert.equal(approveRes.status, 200);
+  const approveResult = await approveRes.json();
+  assert.equal(approveResult.pass.extension.status, "approved");
+  const visitorExtensionSms = notifier.history().find((n) => n.to === "visitor" && n.message.includes("more minutes") && n.message.includes("Good news"));
+  assert.ok(visitorExtensionSms, "approving an extension notifies the visitor");
+
+  const extendedCheckin = await (
+    await fetch(`${base}/checkin/${justExpiredPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(extendedCheckin.ok, true, "an approved grace-period extension unlocks one more check-in on an otherwise-expired pass");
+  console.log("✓ an approved grace-period extension lets a just-expired pass check in one more time");
+
+  // The extension is single-use: a further attempt is rejected again.
+  const afterExtensionUsedCheckin = await (
+    await fetch(`${base}/checkin/${justExpiredPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(afterExtensionUsedCheckin.ok, false, "an approved extension is consumed after one use and can't be replayed");
+  console.log("✓ a used grace-period extension can't be reused for a further check-in");
+
+  // Approving/denying an extension that isn't pending is rejected.
+  const doubleApproveRes = await fetch(`${base}/passes/${justExpiredPass.id}/extension/approve`, { method: "POST" });
+  assert.equal(doubleApproveRes.status, 409, "approving an extension that's already been decided is rejected");
+  console.log("✓ POST /passes/:id/extension/approve rejects a request that isn't pending");
+
   httpServer.close();
   console.log("\nAll PorchPass smoke tests passed.");
+}
+
+/** Polls `check()` until it returns a truthy value, or throws after `timeoutMs`. Used for asserting on an async side effect (e.g. a webhook delivery) that doesn't have its own completion signal to await. */
+async function waitFor<T>(check: () => T | undefined, timeoutMs: number, description: string): Promise<T> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const result = check();
+    if (result) return result;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for ${description}`);
 }
 
 function listPassCount(passes: Array<{ id: string }>, id: string): number {

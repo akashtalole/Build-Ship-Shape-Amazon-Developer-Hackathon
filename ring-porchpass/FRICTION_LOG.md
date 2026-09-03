@@ -90,3 +90,64 @@ check-in rate limiting on top of the v1 lifecycle above.
    A real production deployment needs a shared store (Redis `INCR` + `EXPIRE`, or a managed rate-limiting service)
    keyed the same way. Worth flagging explicitly rather than letting "it's rate-limited" imply more robustness than
    the current implementation actually provides.
+
+## Round 3: multi-device, outbound webhooks, bulk issuance, grace-period extensions
+
+Notes from generalizing the single-device assumption baked into every earlier round, adding the outbound half of
+the webhook story, bulk/template issuance, and a homeowner-approved grace-period extension flow.
+
+### What worked well
+
+- **Making device registration implicit, not a prerequisite, avoided inventing a whole extra "onboarding" concept**
+  for a feature that's otherwise small. The temptation with "add a device registry" is to also design a setup
+  wizard, validation for device types, capability negotiation, etc. — none of which this problem actually needed.
+  Letting the first pass or Ring event that names a `deviceId` register it on the spot (with `POST /devices` only
+  for a homeowner who wants a nicer name up front) kept the feature exactly as big as the requirement, and it
+  matches how `store.ts`'s idempotency-key cache and `settings.ts`'s single mutable record already treat "the
+  simplest thing that satisfies the requirement" as the right default for a project this size.
+- **Reusing `eventBus.subscribe` for outbound webhook delivery, instead of adding a second call site inside
+  `passService.ts`,** kept `passService.ts` completely unaware that outbound webhooks exist at all — it just
+  publishes to the same bus it always has, and `outboundWebhooks.ts` decides independently whether anyone's
+  listening. That's the same seam the SSE stream already uses, so the "outbound webhook is the push counterpart to
+  the pull-based SSE stream" framing in the README isn't just a marketing line — it's true at the code level too:
+  both are just different subscribers on the same bus.
+- **Reusing `issuePass` unchanged for bulk issuance, by merging `template` + each `variation` into one plain object
+  and calling `issuePass` once per item,** rather than writing a parallel "bulk-issue" code path, meant idempotency,
+  recurrence validation, and device registration all worked correctly for free on the first try — there was no
+  second implementation to have forgotten to update when (for example) `deviceIds` was added to `issuePass`
+  slightly earlier in this same round.
+
+### Friction encountered
+
+1. **Designing retry-with-backoff that's genuinely fire-and-forget took more care than "just don't `await` it."**
+   The easy trap is writing `deliverWithRetry(...)` without `void` and letting the surrounding function's return
+   type or a linter nudge you toward awaiting it "to be safe" — which would silently reintroduce exactly the
+   blocking behavior the feature is supposed to avoid, since `eventBus.emit` is a synchronous call inside
+   `passService.ts`'s request-handling path. The fix was making the non-blocking property structural rather than a
+   matter of remembering to omit `await`: `outboundWebhooks.ts`'s `eventBus.subscribe` callback is not declared
+   `async`, so there's no `await` keyword available inside it to reach for in the first place, and `deliverWithRetry`
+   is invoked with an explicit `void` at the one call site — the type of "can't accidentally get this wrong later"
+   fix that's worth the extra line.
+2. **The extension state machine needed an explicit "already asked" guard, or it would have silently become an
+   infinite-retry loop.** The first draft let `POST /checkin/:token/request-extension` succeed any time the pass
+   was expired-and-within-window, with no check for an existing request — which meant a denied visitor (or a
+   confused client retrying) could just ask again immediately, turning "the homeowner denied it" into "the
+   homeowner has to keep denying it." Modeling `Pass.extension` as `undefined -> pending -> approved | denied`
+   with no way back to `undefined` made "already decided" a state the code can check for directly
+   (`if (pass.extension) reject`), rather than something that had to be reasoned about separately in every caller.
+3. **Multi-device correlation needed the "which devices does this pass care about" question answered *before* the
+   Ring-event-lookup question, not folded into it** — it would have been easy to write `getRecentEvents` itself to
+   take an array and hide the fan-out inside `ringClient.ts`, but that conflates "how many devices a client wants
+   to query" (a `passService.ts` concern — the pass's own `deviceIds`) with "how one device's event log is queried"
+   (a `RingClient` concern, which shouldn't need to know passes exist at all). Keeping `RingClient.getRecentEvents`
+   single-device and doing the `Promise.all` + merge-and-sort fan-out in `passService.checkIn` instead kept the
+   `RingClient` interface exactly as small as it was when it only had to support one device, which matters for
+   [Swapping in the real Ring API](./README.md#swapping-in-the-real-ring-api) staying a one-file change.
+4. **Skipping the recurrence check when a grace-period extension is in play, but *not* skipping the quiet-hours
+   check, is an asymmetry that's easy to get backwards** — both are "narrow an otherwise-valid pass further"
+   guards that look structurally identical in `checkIn()`. The reasoning that settled it: recurrence narrows
+   validity *within* the pass's own outer `[validFrom, validUntil]` window, which by definition has already ended
+   once an extension is relevant, so re-checking it is moot; quiet hours is an independent household-level policy
+   that has nothing to do with any individual pass's schedule, so there's no reason an extension should bypass it.
+   Writing that reasoning down directly as a code comment next to the `!usingExtension &&` guards (rather than
+   leaving future-me to rediscover it by re-deriving the same argument) was the actual fix, not the logic itself.

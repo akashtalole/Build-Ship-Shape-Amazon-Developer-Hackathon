@@ -29,23 +29,26 @@ integration point isolated to a single file (`src/ringClient.ts`) — see [Swapp
 
 ```
 src/
-  types.ts         Pass, Visit, RingEvent, Notification, RecurrenceRule data model
-  store.ts         In-memory pass/visit storage + idempotency-key cache
-  ringClient.ts    RingClient interface + SimulatedRingClient (the Ring integration seam)
-  notify.ts        Notifier interface + LoggingNotifier (the SMS/push integration seam)
-  passService.ts   Core access-control logic: issue, check in, expire, revoke
-  recurrence.ts    Recurring-pass rule evaluation (daysOfWeek + time-of-day window)
-  settings.ts      Household settings: quiet hours
-  webhookAuth.ts   HMAC-SHA256 signing/verification for the Ring webhook ingress
-  rateLimiter.ts   In-memory sliding-window rate limiter for check-in attempts
-  eventBus.ts      Pub/sub used to push live events to SSE dashboard clients
-  server.ts        Express app: homeowner API, visitor check-in flow, Ring event ingress, SSE stream
-  index.ts         Entry point
+  types.ts            Pass, Visit, RingEvent, Notification, RecurrenceRule, Device, PassExtension data model
+  store.ts            In-memory pass/visit storage + idempotency-key cache
+  devices.ts          Ring device registry: implicit + explicit device registration (multi-device support)
+  ringClient.ts        RingClient interface + SimulatedRingClient (the Ring integration seam)
+  notify.ts            Notifier interface + LoggingNotifier (the SMS/push integration seam)
+  passService.ts       Core access-control logic: issue, check in, expire, revoke, grace-period extensions
+  recurrence.ts        Recurring-pass rule evaluation (daysOfWeek + time-of-day window)
+  settings.ts          Household settings: quiet hours
+  webhookAuth.ts        HMAC-SHA256 signing/verification for the *inbound* Ring webhook ingress
+  outboundWebhooks.ts   HMAC-signed *outbound* webhook delivery (retry+backoff) to a homeowner's own callback URL
+  rateLimiter.ts        In-memory sliding-window rate limiter for check-in attempts
+  eventBus.ts          Pub/sub used to push live events to SSE dashboard clients and outbound webhooks
+  server.ts            Express app: homeowner API, visitor check-in flow, Ring event ingress, SSE stream
+  index.ts             Entry point
 test/
   smoke.test.ts    End-to-end test over real HTTP: issue → doorbell event → check-in → audit trail →
                    single-use enforcement → multi-use enforcement → revocation → expiry → idempotent
                    issuance → recurring passes → webhook signature verification → live SSE stream →
-                   quiet hours → check-in rate limiting
+                   quiet hours → check-in rate limiting → multi-device correlation → outbound webhook
+                   delivery → bulk/template issuance → grace-period extension approval/denial
 ```
 
 ## Running it
@@ -103,7 +106,9 @@ Starts the server on an ephemeral port and drives the full lifecycle over real H
 a (simulated) SMS with a check-in link; a simulated doorbell event plus a visitor check-in produces a correlated
 visit with a snapshot URL and a homeowner notification; a single-use pass rejects a second check-in; a `maxUses: 2`
 pass allows exactly two; a revoked pass and an expired pass both correctly deny access — then a second round covers
-every feature in [Advanced features](#advanced-features) below. No external services required.
+every feature in [Advanced features](#advanced-features), and a third round covers every feature in
+[Round 3 additions](#round-3-additions) below, including spinning up a real local HTTP listener in the test process
+to receive and verify an outbound webhook delivery. No external services required.
 
 ## Advanced features
 
@@ -220,6 +225,132 @@ within the window gets `429` with a clear "too many attempts" message. Implement
 in `rateLimiter.ts` — see [`FRICTION_LOG.md`](./FRICTION_LOG.md) for the multi-instance-deployment caveat that
 comes with that choice.
 
+## Round 3 additions
+
+Four more additions on top of everything above: multi-device support, outbound webhook notifications,
+bulk/template pass issuance, and a grace-period extension flow for a visitor who just missed their window.
+
+### 1. Multi-device support
+
+Every device reference used to be hardcoded to a single `"front-door"` id. Now PorchPass has a small device
+registry (`devices.ts`): a `Device` is `{ id, name, registeredAt, registeredVia }`, and a device needs no separate
+setup step to be usable — the first pass that names it in `deviceIds`, or the first Ring event that arrives for
+it, registers it right then with a name derived from the id (`"back-door"` → `"Back Door"`). `POST /devices` is
+there for a homeowner who wants to register (or rename) a device explicitly, e.g. to give it a nicer name before
+anything else references it. `"front-door"` is pre-registered by default, so a deployment that never touches this
+feature sees the exact same single device it always implicitly had.
+
+A pass can now specify which device(s) its check-in should correlate against via `deviceIds: string[]` — omit it
+and a pass behaves exactly as before, correlating only against `"front-door"`. `POST /ring/events` accepts an event
+for any device id, registering it on the way in.
+
+```bash
+# Register a device explicitly (optional — it would also be registered implicitly
+# the first time a pass or event referenced "back-door")
+curl -X POST localhost:4444/devices -H "Content-Type: application/json" \
+  -d '{"id": "back-door", "name": "Back Door"}'
+curl localhost:4444/devices   # -> front-door (pre-registered) + back-door
+
+# Issue a pass scoped to the back door only
+curl -X POST localhost:4444/passes -H "Content-Type: application/json" -d '{
+  "visitorName": "Gardener", "visitorPhone": "+15551230000",
+  "validUntil": "2026-12-01T00:00:00Z", "deviceIds": ["back-door"]
+}'
+# A front-door ding will NOT correlate with this pass's check-in; a back-door ding will.
+```
+
+### 2. Outbound webhook notifications
+
+`GET /events/stream` (the SSE feed) is a *pull* model — a client has to hold a connection open. This adds the
+*push* counterpart: a homeowner registers their own callback URL (`POST /settings/webhook { "url": "..." }`), and
+PorchPass `POST`s a signed payload to it whenever a pass is issued, a visit happens, or a pass is revoked or
+expires — the same four event types the SSE stream emits. Signing mirrors the *inbound* Ring webhook verification
+exactly, just in the opposite direction: PorchPass generates a per-registration secret (returned once at
+registration, and again from `GET /settings/webhook` so the homeowner's receiving endpoint can be configured to
+verify it), computes an HMAC-SHA256 over the raw JSON body it's about to send using `webhookAuth.ts`'s same
+`signPayload` helper, and sends it as `X-PorchPass-Signature`. The receiver verifies it exactly like
+`ring/events`'s handler does for inbound Ring calls — recompute the same HMAC over the exact raw bytes received and
+compare.
+
+Delivery retries up to 3 times with exponential backoff (~300ms, then ~600ms) on a non-2xx response or network
+error, and is genuinely fire-and-forget: `outboundWebhooks.ts` subscribes to the same `eventBus` `passService.ts`
+already publishes to, and never `await`s the delivery — the request that triggered the event (issuing a pass,
+checking a visitor in, ...) returns to its caller immediately, regardless of how slow or broken the homeowner's
+endpoint is. Failures (and successes) are still observable: `GET /settings/webhook` reports the last delivery's
+outcome (`lastSuccessAt`, `lastError`, `consecutiveFailures`, ...) instead of that information disappearing into a
+server log no one's watching.
+
+```bash
+# Register a callback (any local HTTP listener works for testing)
+curl -X POST localhost:4444/settings/webhook -H "Content-Type: application/json" \
+  -d '{"url": "https://your-backend.example/porchpass-webhook"}'
+# -> { "url": "...", "secret": "<hex secret — save this>", "createdAt": "..." }
+
+curl localhost:4444/settings/webhook   # re-fetch the secret + last delivery status any time
+
+# On the receiving end (Node, mirroring webhookAuth.ts's verifySignature):
+node -e '
+  const crypto = require("node:crypto");
+  const secret = "<the secret from above>";
+  const rawBody = "<the exact raw request body bytes your endpoint received>";
+  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  console.log(expected === "<the X-PorchPass-Signature header value>");
+'
+```
+
+### 3. Bulk/template pass issuance
+
+`POST /passes/bulk` issues many passes from one call: a shared `template` (fields common to every pass — e.g.
+`visitorPhone`, `validUntil`, `note`) plus a `variations` array of per-pass overrides (a different `visitorName`
+and `recurrence` per weekday, or the same visitor across a list of explicit date windows). Each variation is
+merged onto the template and passed straight through to the existing `issuePass` — no separate issuance code path,
+so idempotency, recurrence validation, device registration, notifications, and event-bus publishing all work
+exactly as they do for a single `POST /passes`. An optional `idempotencyKeyPrefix` gives each item a stable,
+distinct idempotency key (`` `${idempotencyKeyPrefix}${index}` ``) so retrying the whole bulk call is safe too.
+
+The response lists one result per input item — `"created"`, `"replayed"` (an idempotency-key collision), or
+`"error"` (e.g. a variation missing a required field after merging) — so one bad entry doesn't sink the rest of the
+batch.
+
+```bash
+curl -X POST localhost:4444/passes/bulk -H "Content-Type: application/json" -d '{
+  "template": { "visitorPhone": "+15556660000", "validUntil": "2026-12-01T00:00:00Z", "note": "weekly dog walker" },
+  "variations": [
+    { "visitorName": "Monday Walker",    "recurrence": { "daysOfWeek": [1], "startTime": "13:00", "endTime": "15:00" } },
+    { "visitorName": "Wednesday Walker", "recurrence": { "daysOfWeek": [3], "startTime": "13:00", "endTime": "15:00" } },
+    { "visitorName": "Friday Walker",    "recurrence": { "daysOfWeek": [5], "startTime": "13:00", "endTime": "15:00" } }
+  ],
+  "idempotencyKeyPrefix": "bulk-walkers-week1-"
+}'
+# -> { "results": [ { "index": 0, "status": "created", "pass": {...} }, ... ] }
+```
+
+### 4. Grace-period extension flow
+
+A visitor who taps the check-in link moments after their pass expired used to get a flat rejection. Now, a pass
+that expired within the last **30 minutes** (`GRACE_REQUEST_WINDOW_MS` in `passService.ts`) is flagged
+`graceEligible: true` in the check-in response instead — the visitor-facing HTML page renders a "Request a few
+more minutes" button, or a JSON client can call `POST /checkin/:token/request-extension` directly. That creates a
+`"pending"` extension request on the pass and notifies the homeowner via the existing `Notifier` (no new
+notification channel). The homeowner then approves (`POST /passes/:id/extension/approve`) or denies
+(`POST /passes/:id/extension/deny`) it; only approval unlocks anything, and only for **15 more minutes**
+(`EXTENSION_USABLE_WINDOW_MS`) and exactly **one** more check-in — after that single use (or once the 15 minutes
+lapse unused), the pass is back to being flatly rejected, and a pass can only ever ask for one extension (a denied
+or never-requested pass has no second chance to ask again).
+
+```bash
+# Visitor taps the link on an expired pass -> response includes "graceEligible": true
+curl -X POST localhost:4444/checkin/<token> -H "Accept: application/json"
+
+# Visitor requests a few more minutes
+curl -X POST localhost:4444/checkin/<token>/request-extension -H "Accept: application/json"
+# -> homeowner is notified via the existing Notifier
+
+# Homeowner approves (or: .../extension/deny)
+curl -X POST localhost:4444/passes/<passId>/extension/approve
+# -> visitor is SMS'd a link; the very next check-in within 15 minutes succeeds, then the extension is spent
+```
+
 ## Swapping in the real Ring API
 
 Everything in `src/passService.ts` and `src/server.ts` is Ring-agnostic — it only depends on the `RingClient`
@@ -243,18 +374,26 @@ was the point of isolating Ring behind an interface from the start.
   allow a simulator — the swap to Ring's real API is a one-file change, not a rewrite. The advanced round adds
   production-grade concerns that a hackathon demo usually skips entirely: HMAC-verified webhook ingress, an
   idempotency-safe write path, a real-time SSE push layer, and a rate limiter guarding the one intentionally
-  unauthenticated endpoint.
+  unauthenticated endpoint. Round 3 adds the symmetric *outbound* half of that webhook story (signed, retried,
+  non-blocking delivery) and generalizes the whole system from one hardcoded device to a real multi-device
+  correlation model.
 - **Design:** A genuine "two-tap" flow — the homeowner issues a pass in one call, the visitor confirms with one tap
   and no app, account, or login. Passes fail closed (expired/revoked/used-up all deny access) rather than open, and
-  now compose multiple independent policy layers cleanly (base validity → recurrence window → quiet hours) rather
-  than tangling them into one conditional.
+  now compose multiple independent policy layers cleanly (base validity → recurrence window → quiet hours →
+  grace-period extension) rather than tangling them into one conditional. The extension flow specifically turns a
+  hard failure mode ("you were 90 seconds late, tough luck") into a graceful, homeowner-approved recovery path
+  instead of just a bigger grace window applied blindly to everyone.
 - **Potential Impact:** Solves a real, everyday problem (dog walkers, deliveries, contractors, short-term rentals)
   that today gets solved insecurely (a shared permanent code) or not at all (no delegated access at all).
-  Recurring passes remove the friction of re-issuing a pass every week for a standing visitor, which is what would
-  actually make this usable day-to-day rather than just for one-off events.
+  Recurring passes remove the friction of re-issuing a pass every week for a standing visitor; bulk/template
+  issuance removes the friction of doing that by hand one pass at a time, which is what would actually make this
+  usable for a household managing several standing visitors rather than just one.
 - **Quality of Idea:** Goes beyond a notification app by adding a genuine access-delegation layer — time-boxing,
   use-limits, revocation, and an audit trail — on top of Ring's event stream, one of the five explicitly
-  prioritized Ring categories ("access control").
+  prioritized Ring categories ("access control"). Multi-device support and outbound webhooks both point at the
+  same underlying idea: a household's real security setup usually has more than one camera and more than one
+  place it wants to be told about events, and both features generalize a single-instance assumption baked into
+  earlier rounds rather than bolting on something unrelated.
 
 ## Friction log
 
