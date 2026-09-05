@@ -87,14 +87,22 @@ export async function deliverWithRetry(subscription: Subscription, payload: Nota
 }
 
 /**
- * Fans a notable event out to every subscription registered on its game.
+ * Fans a notable event out to every subscription registered on its game —
+ * except a player-scoped subscription (`subscription.playerName` set, see
+ * `subscribeToGame` in gameService.ts), which only fires when this event's
+ * `player` field names that player (case-insensitive, exact match). A fan
+ * who only cares about their favorite player's moments never hears about
+ * every other notable event in the game.
+ *
  * Synchronous from the caller's point of view (`ingestEvent` calls this
  * without `await`): rate-limit checks happen immediately, but the actual
  * HTTP deliveries (and any retries) run as detached promises so a slow or
  * dead receiver never adds latency to `POST /games/:id/events`.
  */
 export function notifySubscribers(gameId: string, event: GameEvent, commentary: CommentaryLine): void {
-  const subscriptions = listSubscriptions(gameId);
+  const subscriptions = listSubscriptions(gameId).filter(
+    (sub) => !sub.playerName || (event.player?.trim().toLowerCase() === sub.playerName.trim().toLowerCase())
+  );
   if (subscriptions.length === 0) return;
 
   const payload: NotableEventPayload = { type: "notable_event", gameId, event, commentary };

@@ -506,6 +506,149 @@ async function main() {
   assert.equal(missingViewerWatchlist.status, 400);
   console.log("✓ GET /watchlist with no viewerId is rejected with 400");
 
+  // ======================================================================
+  // Round 4 features: season-long stats aggregation, a "catch-up" recap
+  // endpoint, multi-sport commentary/heuristics, and player-level alerts.
+  // ======================================================================
+
+  // --- 12. Season-long stats aggregation: a team's/player's points,
+  // eventCounts, and gamesPlayed aggregate across two separate games, not
+  // just the one game they were queried through. ---
+  const statsGameA = (await postJson("/games", { homeTeam: "Lakers", awayTeam: "Celtics" })).body;
+  await postJson(`/games/${statsGameA.id}/events`, { type: "score", team: "home", player: "James", points: 5 });
+  await postJson(`/games/${statsGameA.id}/events`, { type: "foul", team: "home", player: "James", description: "reaching-in foul" });
+
+  const statsGameB = (await postJson("/games", { homeTeam: "Warriors", awayTeam: "Lakers" })).body; // Lakers as the away team this time
+  await postJson(`/games/${statsGameB.id}/events`, { type: "score", team: "away", player: "James", points: 8 });
+
+  const teamStats = await (await fetch(`${base}/stats/team/Lakers`)).json();
+  assert.equal(teamStats.points, 13, "team points should sum across both games (5 + 8)");
+  assert.equal(teamStats.gamesPlayed, 2, "the team should be credited with both games it appeared in, home or away");
+  assert.equal(teamStats.eventCounts.score, 2);
+  assert.equal(teamStats.eventCounts.foul, 1);
+  console.log("✓ GET /stats/team/:teamName aggregates points/eventCounts/gamesPlayed across every game a team appeared in");
+
+  const playerStats = await (await fetch(`${base}/stats/player/James`)).json();
+  assert.equal(playerStats.points, 13, "player points should sum across both games (5 + 8)");
+  assert.equal(playerStats.gamesPlayed, 2);
+  assert.equal(playerStats.eventCounts.score, 2);
+  assert.equal(playerStats.eventCounts.foul, 1);
+  console.log("✓ GET /stats/player/:playerName aggregates points/eventCounts/gamesPlayed across every game a player appeared in");
+
+  const neverSeenTeamStats = await (await fetch(`${base}/stats/team/Nonexistent%20Team`)).json();
+  assert.equal(neverSeenTeamStats.points, 0);
+  assert.equal(neverSeenTeamStats.gamesPlayed, 0);
+  console.log("✓ GET /stats/team/:teamName for a team never seen in an event returns a zeroed result, not an error");
+
+  // --- 13. "Catch-up" recap: a natural-language summary (via the same
+  // CommentaryProvider, template fallback here) reflecting only the events
+  // inside the requested window, not the whole game. ---
+  const recapGame = (await postJson("/games", { homeTeam: "Suns", awayTeam: "Nuggets" })).body;
+
+  await postJson(`/games/${recapGame.id}/events`, { type: "score", team: "home", player: "Booker", points: 2 });
+  const recapCommentaryAfterFirst = await (await fetch(`${base}/games/${recapGame.id}/commentary`)).json();
+  const recapCursor = recapCommentaryAfterFirst[0].id;
+
+  await new Promise((r) => setTimeout(r, 5)); // guarantee a distinct, later occurredAt for the cursor filter below
+  await postJson(`/games/${recapGame.id}/events`, { type: "score", team: "away", player: "Jokic", points: 3 });
+
+  const recapSince = await (await fetch(`${base}/games/${recapGame.id}/recap?since=${recapCursor}`)).json();
+  assert.equal(recapSince.eventCount, 1, "the since-cursor recap window should include only the one event after the cursor");
+  assert.match(recapSince.summary, /Jokic/, "the recap summary should reflect the event inside the window");
+  assert.ok(!/Booker/.test(recapSince.summary), "the recap summary must not reflect an event outside the requested window");
+  console.log("✓ GET /games/:id/recap?since=<commentary-id> summarizes only events after the cursor, not the whole game");
+
+  const recapFull = await (await fetch(`${base}/games/${recapGame.id}/recap`)).json();
+  assert.equal(recapFull.eventCount, 2, "recap with no window given should cover the whole game so far");
+  assert.match(recapFull.summary, /Booker/);
+  assert.match(recapFull.summary, /Jokic/);
+  console.log("✓ GET /games/:id/recap with no window given recaps the whole game so far");
+
+  const recapMinutes = await (await fetch(`${base}/games/${recapGame.id}/recap?sinceMinutes=60`)).json();
+  assert.equal(recapMinutes.eventCount, 2, "a generous sinceMinutes window should include every event so far");
+  console.log("✓ GET /games/:id/recap?sinceMinutes=<n> recaps a rolling time window");
+
+  const missingRecap = await fetch(`${base}/games/does-not-exist/recap`);
+  assert.equal(missingRecap.status, 404);
+  console.log("✓ GET /games/:id/recap for an unknown game returns a clean 404 error");
+
+  // --- 14. Multi-sport event vocabulary: a game can declare its sport, and
+  // both commentary phrasing and the notable-event heuristic adapt — without
+  // basketball's own default behavior changing at all. ---
+  const soccerGame = (await postJson("/games", { sport: "soccer", homeTeam: "Barca", awayTeam: "Real" })).body;
+  assert.equal(soccerGame.periodLabel, "half", "soccer should default to a 'half' periodLabel when none is given");
+
+  const soccerScore = await postJson(`/games/${soccerGame.id}/events`, { type: "score", team: "home", player: "Messi", points: 1 });
+  assert.equal(soccerScore.status, 201);
+  const basketballWords = /\bbasket\b|\bbucket\b|free throw|\bboards\b|end zone/i;
+  assert.ok(!basketballWords.test(soccerScore.body.commentary.text), "soccer commentary must not use basketball-specific language");
+  console.log("✓ a soccer game's score commentary avoids basketball-specific language (no 'basket'/'bucket'/'free throw')");
+
+  const soccerRoutineFoul = await postJson(`/games/${soccerGame.id}/events`, { type: "foul", team: "away", description: "reaching-in foul" });
+  assert.equal(soccerRoutineFoul.body.path, "fast", "basketball's 'flagrant/technical' vocabulary shouldn't flag a soccer foul as serious");
+
+  const soccerSeriousFoul = await postJson(`/games/${soccerGame.id}/events`, {
+    type: "foul",
+    team: "away",
+    description: "red card, violent conduct",
+  });
+  assert.equal(soccerSeriousFoul.body.path, "escalated", "a soccer-specific serious-foul description (red card) should escalate");
+  console.log("✓ the notable-event heuristic uses sport-appropriate serious-foul vocabulary (soccer's own keywords, not basketball's)");
+
+  const basketballGame = (await postJson("/games", { homeTeam: "Nets", awayTeam: "Knicks" })).body;
+  assert.equal(basketballGame.sport, "basketball");
+  assert.equal(basketballGame.periodLabel, "quarter", "basketball (the default sport) keeps its original 'quarter' periodLabel default");
+  console.log("✓ a game with no sport specified still defaults to basketball's original behavior (periodLabel 'quarter')");
+
+  // --- 15. Player-level alert subscriptions: a subscription scoped to one
+  // player only fires for a notable event naming that player, not every
+  // notable event in the game. ---
+  const playerSubGame = (await postJson("/games", { homeTeam: "Warriors", awayTeam: "Kings" })).body;
+  const playerWebhook = await startWebhookListener();
+
+  const playerSubscribeRes = await postJson(`/games/${playerSubGame.id}/subscriptions`, {
+    callbackUrl: `http://127.0.0.1:${playerWebhook.port}/alerts`,
+    playerName: "Curry",
+  });
+  assert.equal(playerSubscribeRes.status, 201);
+  assert.equal(playerSubscribeRes.body.subscription.playerName, "Curry");
+  console.log("✓ POST /games/:id/subscriptions accepts a playerName and returns it on the registered subscription");
+
+  const curryNotable = await postJson(`/games/${playerSubGame.id}/events`, { type: "score", team: "home", player: "Curry", points: 3 });
+  assert.equal(curryNotable.body.path, "escalated", "a go-ahead score off a tied game should be notable");
+
+  await waitFor(() => playerWebhook.received.length >= 1);
+  assert.equal(playerWebhook.received.length, 1, "the player-scoped subscription should fire for its player's notable event");
+  console.log("✓ a player-scoped subscription fires for a notable event naming that player");
+
+  const thompsonNotable = await postJson(`/games/${playerSubGame.id}/events`, {
+    type: "foul",
+    team: "away",
+    player: "Thompson",
+    description: "flagrant foul, hard contact",
+  });
+  assert.equal(thompsonNotable.body.path, "escalated", "a flagrant foul should be notable regardless of which player committed it");
+
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(playerWebhook.received.length, 1, "a notable event naming a different player must not trigger a player-scoped subscription");
+  console.log("✓ a player-scoped subscription does not fire for another player's notable event in the same game");
+
+  // The same callbackUrl with a different playerName is a distinct
+  // registration, not a duplicate — the idempotency key includes playerName.
+  const sameCallbackDifferentPlayer = await postJson(`/games/${playerSubGame.id}/subscriptions`, {
+    callbackUrl: `http://127.0.0.1:${playerWebhook.port}/alerts`,
+    playerName: "Thompson",
+  });
+  assert.equal(sameCallbackDifferentPlayer.status, 201, "the same callbackUrl with a different playerName should be a new subscription");
+  assert.notEqual(
+    sameCallbackDifferentPlayer.body.subscription.id,
+    playerSubscribeRes.body.subscription.id,
+    "a player-scoped subscription must not collide with a different player's subscription on the same callbackUrl"
+  );
+  console.log("✓ the same callbackUrl with a different playerName registers as a distinct subscription");
+
+  await playerWebhook.close();
+
   httpServer.close();
   console.log("\nAll CourtSide smoke tests passed.");
 }

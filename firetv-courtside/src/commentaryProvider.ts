@@ -1,4 +1,4 @@
-import type { EventType, GameEvent, GameState, ViewerPreferences } from "./types.js";
+import type { CommentaryLine, EventType, GameEvent, GameState, ViewerPreferences } from "./types.js";
 
 /**
  * The seam between CourtSide's game logic and whatever actually generates
@@ -22,7 +22,7 @@ export interface CommentaryPrompt {
   /** Serialized game context an LLM would read (score, period, recent plays). */
   context: string;
   /** Structured data backing this request, for non-LLM fallbacks. */
-  data: EventCommentaryData | QuestionAnswerData;
+  data: EventCommentaryData | QuestionAnswerData | RecapData;
 }
 
 export interface EventCommentaryData {
@@ -37,6 +37,18 @@ export interface QuestionAnswerData {
   game: GameState;
 }
 
+/** Structured data behind a `GET /games/:id/recap` window — see `CommentaryProvider.generateRecap`. */
+export interface RecapData {
+  kind: "recap";
+  game: GameState;
+  /** Human-readable description of the window being recapped, e.g. "in the last 10 minutes" or "since <cursor>". */
+  windowLabel: string;
+  /** Events within the window, chronological (oldest first). */
+  events: GameEvent[];
+  /** Commentary lines within the window, chronological (oldest first). */
+  commentaryLines: CommentaryLine[];
+}
+
 /**
  * The commentary-generation interface. A Fire TV overlay never talks to this
  * directly — `gameService.ts` calls it to turn a raw event or a viewer
@@ -47,6 +59,8 @@ export interface CommentaryProvider {
   narrateEvent(game: GameState, event: GameEvent): Promise<string>;
   /** Answers an on-demand viewer question, grounded in current game state. */
   answerQuestion(game: GameState, question: string): Promise<string>;
+  /** Generates a natural-language recap summarizing a window of events/commentary — see `GET /games/:id/recap`. */
+  generateRecap(game: GameState, events: GameEvent[], commentaryLines: CommentaryLine[], windowLabel: string): Promise<string>;
 }
 
 const SYSTEM_PERSONA =
@@ -71,6 +85,11 @@ export class TemplateCommentaryProvider implements CommentaryProvider {
     const prompt = buildQuestionPrompt(game, question);
     return templateAnswerQuestion(prompt.data as QuestionAnswerData);
   }
+
+  async generateRecap(game: GameState, events: GameEvent[], commentaryLines: CommentaryLine[], windowLabel: string): Promise<string> {
+    const prompt = buildRecapPrompt(game, events, commentaryLines, windowLabel);
+    return templateGenerateRecap(prompt.data as RecapData);
+  }
 }
 
 /** Builds the Bedrock-shaped prompt for a single event. Exported so a real provider's tests can reuse it. */
@@ -91,6 +110,31 @@ export function buildQuestionPrompt(game: GameState, question: string): Commenta
     context: serializeGameContext(game),
     data: { kind: "question", question, game },
   };
+}
+
+/** Builds the Bedrock-shaped prompt for a "catch-up" window recap. Exported so a real provider's tests can reuse it. */
+export function buildRecapPrompt(
+  game: GameState,
+  events: GameEvent[],
+  commentaryLines: CommentaryLine[],
+  windowLabel: string
+): CommentaryPrompt {
+  return {
+    system: SYSTEM_PERSONA,
+    instruction: `Summarize everything that happened ${windowLabel} in 2-4 sentences for a viewer catching up. Mention the score and any big moments.`,
+    context: serializeRecapContext(game, events, windowLabel),
+    data: { kind: "recap", game, windowLabel, events, commentaryLines },
+  };
+}
+
+function serializeRecapContext(game: GameState, events: GameEvent[], windowLabel: string): string {
+  const lines = [
+    `${game.homeTeam} ${game.homeScore} - ${game.awayScore} ${game.awayTeam}`,
+    `${capitalize(game.periodLabel)} ${game.period}, ${game.clock} remaining, status: ${game.status}`,
+    `Events ${windowLabel} (chronological):`,
+    ...events.map((e) => `- ${describeEvent(e)}`),
+  ];
+  return lines.join("\n");
 }
 
 function serializeGameContext(game: GameState, highlightEvent?: GameEvent): string {
@@ -180,47 +224,157 @@ function scoreLine(game: GameState): string {
   return `${game.homeTeam} ${game.homeScore} - ${game.awayScore} ${game.awayTeam}`;
 }
 
+// --- Multi-sport vocabulary ---------------------------------------------
+//
+// `GameState.sport` is free text (whatever a game was started with), but
+// only a handful of sports get dedicated phrasing below — anything else
+// (including an empty/unrecognized value) falls back to basketball's
+// existing wording, which is also the *default* sport a game gets when none
+// is given at all. That keeps every pre-round-4 game and test byte-for-byte
+// unchanged while letting a game that explicitly declares "football" or
+// "soccer" get commentary that doesn't talk about baskets or free throws.
+
+export type SportKey = "basketball" | "football" | "soccer";
+
+/** Normalizes a game's free-text `sport` field to one of the sports with dedicated phrasing, defaulting to basketball. */
+export function normalizeSport(sport: string | undefined): SportKey {
+  const s = (sport ?? "").trim().toLowerCase();
+  if (s === "football" || s === "american football" || s === "nfl") return "football";
+  if (s === "soccer" || s === "association football" || s === "futbol") return "soccer";
+  return "basketball";
+}
+
+/** The `periodLabel` a game gets when it doesn't specify one explicitly — "half" for soccer, "quarter" otherwise (basketball's existing default, also used for football). */
+export function defaultPeriodLabel(sport: string | undefined): string {
+  return normalizeSport(sport) === "soccer" ? "half" : "quarter";
+}
+
+/**
+ * Per-sport severity check for a `foul` event's free-text `description`,
+ * driving `isNotableEvent`'s foul-escalation gate in `gameService.ts`.
+ * Basketball's original keywords (flagrant/technical/ejection) stay the
+ * default; football and soccer get their own sport-appropriate serious-foul
+ * vocabulary instead of basketball's terms leaking into their heuristic.
+ */
+export function isSeriousFoulDescription(sport: string | undefined, description: string | undefined): boolean {
+  const d = description ?? "";
+  const key = normalizeSport(sport);
+  if (key === "soccer") return /red card|second yellow|violent conduct|serious foul/i.test(d);
+  if (key === "football") return /flagrant|ejection|targeting|unnecessary roughness|unsportsmanlike/i.test(d);
+  return /flagrant|technical|ejection/i.test(d);
+}
+
+function scoreTemplates(sport: SportKey, who: string, event: GameEvent, game: GameState): string[] {
+  const plusPoints = event.points ? ` (+${event.points})` : "";
+  if (sport === "soccer") {
+    return [
+      `GOAL! ${who} finds the back of the net! ${scoreLine(game)}.`,
+      `${who} scores! ${scoreLine(game)}.`,
+      `${who} slots it home. ${scoreLine(game)}.`,
+    ];
+  }
+  if (sport === "football") {
+    return [
+      `${who} scores${plusPoints}! ${scoreLine(game)}.`,
+      `${who} finds the end zone${plusPoints}! ${scoreLine(game)}.`,
+      `Points on the board for ${who}${plusPoints}. Now ${scoreLine(game)}.`,
+    ];
+  }
+  return [
+    `${who} scores${plusPoints}! ${scoreLine(game)}.`,
+    `Bucket for ${who}! ${scoreLine(game)}.`,
+    `${who} finds the basket${event.points ? ` for ${event.points}` : ""}. Now ${scoreLine(game)}.`,
+  ];
+}
+
+function foulTemplates(sport: SportKey, who: string, event: GameEvent): string[] {
+  const colonDesc = event.description ? `: ${event.description}` : "";
+  const dashDesc = event.description ? ` — ${event.description}` : "";
+  if (sport === "football") {
+    return [`Penalty on ${who}${colonDesc}.`, `${who} flagged for a penalty${dashDesc}.`];
+  }
+  if (sport === "soccer") {
+    return [`Foul called on ${who}${colonDesc}.`, `${who} commits a foul${dashDesc}.`];
+  }
+  return [`Foul called on ${who}${colonDesc}.`, `${who} picks up a foul${dashDesc}.`];
+}
+
+function turnoverTemplates(sport: SportKey, who: string, event: GameEvent): string[] {
+  const parenDesc = event.description ? ` (${event.description})` : "";
+  const dashDesc = event.description ? ` — ${event.description}` : "";
+  if (sport === "football") {
+    return [`Turnover! ${who} gives it away${parenDesc}.`, `${who} loses the ball${dashDesc}.`];
+  }
+  if (sport === "soccer") {
+    return [`${who} gives away possession${parenDesc}.`, `Turnover, ${who}${dashDesc}.`];
+  }
+  return [`Turnover, ${who}${dashDesc}.`, `${who} loses possession${parenDesc}.`];
+}
+
+function reboundTemplates(sport: SportKey, who: string): string[] {
+  if (sport === "basketball") return [`${who} grabs the rebound.`, `${who} cleans up the boards.`];
+  return [`${who} recovers the loose ball.`, `${who} scoops up the loose ball.`];
+}
+
+function stealTemplates(sport: SportKey, who: string): string[] {
+  if (sport === "soccer") return [`${who} wins the ball back!`, `Nice tackle from ${who} to win it back!`];
+  if (sport === "football") return [`${who} comes up with the takeaway!`, `Big turnover forced by ${who}!`];
+  return [`${who} comes up with the steal!`, `Great hands by ${who} for the steal!`];
+}
+
+function blockTemplates(sport: SportKey, who: string): string[] {
+  if (sport === "soccer") return [`${who} blocks the shot!`, `Great defending — ${who} blocks it!`];
+  if (sport === "football") return [`${who} blocks the kick!`, `${who} gets a hand up to block it!`];
+  return [`${who} rejects the shot!`, `Denied! ${who} with the block.`];
+}
+
+function gameEndPhrase(sport: SportKey, game: GameState): string {
+  if (sport === "soccer") return `That's full-time! ${scoreLine(game)}.`;
+  if (sport === "football") return `That's the final whistle! ${scoreLine(game)}.`;
+  return `That's the final! ${scoreLine(game)}.`;
+}
+
 function templateNarrateEvent(data: EventCommentaryData): string {
   const { event, game } = data;
   const who = event.player ?? teamName(game, event.team) ?? "The team";
   const seed = event.id;
+  const sport = normalizeSport(game.sport);
 
   const templates: Record<EventType, () => string> = {
-    score: () =>
-      pick(
-        [
-          `${who} scores${event.points ? ` (+${event.points})` : ""}! ${scoreLine(game)}.`,
-          `Bucket for ${who}! ${scoreLine(game)}.`,
-          `${who} finds the basket${event.points ? ` for ${event.points}` : ""}. Now ${scoreLine(game)}.`,
-        ],
-        seed
-      ),
-    foul: () =>
-      pick(
-        [
-          `Foul called on ${who}${event.description ? `: ${event.description}` : ""}.`,
-          `${who} picks up a foul${event.description ? ` — ${event.description}` : ""}.`,
-        ],
-        seed
-      ),
-    turnover: () =>
-      pick(
-        [
-          `Turnover, ${who}${event.description ? ` — ${event.description}` : ""}.`,
-          `${who} loses possession${event.description ? ` (${event.description})` : ""}.`,
-        ],
-        seed
-      ),
-    rebound: () => pick([`${who} grabs the rebound.`, `${who} cleans up the boards.`], seed),
-    steal: () => pick([`${who} comes up with the steal!`, `Great hands by ${who} for the steal!`], seed),
-    block: () => pick([`${who} rejects the shot!`, `Denied! ${who} with the block.`], seed),
+    score: () => pick(scoreTemplates(sport, who, event, game), seed),
+    foul: () => pick(foulTemplates(sport, who, event), seed),
+    turnover: () => pick(turnoverTemplates(sport, who, event), seed),
+    rebound: () => pick(reboundTemplates(sport, who), seed),
+    steal: () => pick(stealTemplates(sport, who), seed),
+    block: () => pick(blockTemplates(sport, who), seed),
     timeout: () => `${who} calls a timeout.`,
     period_end: () =>
       `End of ${game.periodLabel} ${event.period ?? game.period}. ${scoreLine(game)}.`,
-    game_end: () => `That's the final! ${scoreLine(game)}.`,
+    game_end: () => gameEndPhrase(sport, game),
   };
 
   return templates[event.type]();
+}
+
+/**
+ * Template fallback for `GET /games/:id/recap`: reuses the same
+ * sport-neutral `describeEvent` helper the live-context serialization uses
+ * (it prints `[type] who +points — description`, never basketball-specific
+ * words like "basket"), so the recap adapts to any sport for free instead of
+ * needing its own per-sport phrasing.
+ */
+function templateGenerateRecap(data: RecapData): string {
+  const { game, events, windowLabel } = data;
+  if (events.length === 0) {
+    return `Nothing happened ${windowLabel}. Still ${scoreLine(game)}.`;
+  }
+  const MAX_MENTIONED = 8;
+  const mentioned = events.slice(-MAX_MENTIONED); // events is already chronological; keep the most recent ones for a readable recap
+  const recap = mentioned.map((e) => describeEvent(e)).join("; ");
+  const omitted = events.length - mentioned.length;
+  const omittedNote = omitted > 0 ? ` (plus ${omitted} earlier play${omitted === 1 ? "" : "s"} in this window)` : "";
+  const playCount = `${events.length} play${events.length === 1 ? "" : "s"}`;
+  return `Catching you up on what happened ${windowLabel}: ${recap}${omittedNote}. That's ${playCount} — now ${scoreLine(game)}.`;
 }
 
 function templateAnswerQuestion(data: QuestionAnswerData): string {
