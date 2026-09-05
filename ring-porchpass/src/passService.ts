@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pass, PassExtension, RecurrenceRule, Visit } from "./types.js";
 import {
   addVisit,
+  findOpenVisitForPass,
   getPassById,
   getPassByToken,
   getPassIdByIdempotencyKey,
@@ -9,6 +10,7 @@ import {
   listVisits,
   rememberIdempotencyKey,
   savePass,
+  updateVisit,
 } from "./store.js";
 import type { RingClient } from "./ringClient.js";
 import type { Notifier } from "./notify.js";
@@ -17,6 +19,8 @@ import { getSettings, isWithinQuietHours } from "./settings.js";
 import { checkAndRecordAttempt } from "./rateLimiter.js";
 import { eventBus } from "./eventBus.js";
 import { FRONT_DOOR_DEVICE_ID, registerDevice } from "./devices.js";
+import { decryptField, encryptField, maskPhone } from "./crypto.js";
+import { formatDuration } from "./format.js";
 
 // How far back to look for a Ring event to correlate with a check-in — a
 // visitor tapping the link and the doorbell/motion event should land within
@@ -70,7 +74,11 @@ export async function issuePass(input: IssuePassInput, notifier: Notifier): Prom
     id: randomUUID(),
     checkinToken: randomUUID(),
     visitorName: input.visitorName,
-    visitorPhone: input.visitorPhone,
+    // Encrypted immediately — the plaintext `input.visitorPhone` never gets
+    // assigned onto the `Pass` object that `savePass` puts in the store; see
+    // crypto.ts and `decryptVisitorPhone` below for the only place it comes
+    // back out.
+    visitorPhoneEnc: encryptField(input.visitorPhone),
     issuedAt: now.toISOString(),
     validFrom: input.validFrom ?? now.toISOString(),
     validUntil: input.validUntil,
@@ -92,12 +100,33 @@ export async function issuePass(input: IssuePassInput, notifier: Notifier): Prom
   await notifier.send(
     "visitor",
     "sms",
-    `Hi ${pass.visitorName}, you have access to the house ${formatWindow(pass)}. Tap to let us know you've arrived: ${link}`
+    `Hi ${pass.visitorName}, you have access to the house ${formatWindow(pass)}. Tap to let us know you've arrived: ${link}`,
+    decryptVisitorPhone(pass) // decrypted right here, at the one moment an actual send needs it
   );
 
   eventBus.publish({ type: "pass_issued", at: now.toISOString(), pass });
 
   return pass;
+}
+
+/** The only sanctioned way to get a pass's visitor phone number back in plaintext — see the doc comment on `Pass.visitorPhoneEnc`. */
+export function decryptVisitorPhone(pass: Pass): string {
+  return decryptField(pass.visitorPhoneEnc);
+}
+
+/**
+ * The shape `POST /passes`, `GET /passes`, and every other route that hands
+ * a `Pass` back to an API caller actually returns: the encrypted field is
+ * dropped and replaced with a masked `visitorPhone` a homeowner can still
+ * use to recognize which visitor a pass belongs to (e.g. "•••••••1234"),
+ * without the API ever re-exposing the full plaintext number it took care to
+ * encrypt at rest in the first place.
+ */
+export type PassView = Omit<Pass, "visitorPhoneEnc"> & { visitorPhone: string };
+
+export function serializePass(pass: Pass): PassView {
+  const { visitorPhoneEnc: _visitorPhoneEnc, ...rest } = pass;
+  return { ...rest, visitorPhone: maskPhone(decryptVisitorPhone(pass)) };
 }
 
 /** Recomputes status against the current time without mutating a pass that's still genuinely active. */
@@ -344,13 +373,91 @@ export async function decideExtension(
     await notifier.send(
       "visitor",
       "sms",
-      `Good news — you've been granted a few more minutes. Tap to check in now:${link}`
+      `Good news — you've been granted a few more minutes. Tap to check in now:${link}`,
+      decryptVisitorPhone(pass)
     );
   } else {
-    await notifier.send("visitor", "sms", `Sorry, your request for more time wasn't approved.`);
+    await notifier.send("visitor", "sms", `Sorry, your request for more time wasn't approved.`, decryptVisitorPhone(pass));
   }
 
   return { ok: true, pass };
+}
+
+// --- Visit duration tracking ------------------------------------------------
+//
+// A "visit" used to be a single instant (`checkedInAt`). This pairs it with
+// an optional departure: `POST /checkin/:token/checkout` is the visitor's
+// "I'm leaving" tap, closing out the most recently opened visit for their
+// pass that hasn't already been checked out of. A visit with no departure
+// yet reads as "still on-site" (see `listVisitsWithStatus`); one with a
+// departure carries a `durationMs` computed once, at checkout time.
+//
+// Deliberately a *separate* token action from arrival rather than a
+// `direction` field on the existing check-in endpoint: checking in already
+// carries meaning specific to arrival (correlating a Ring event, consuming a
+// pass's use-count, enforcing quiet hours/recurrence/expiry) that a
+// departure shouldn't re-run at all — a visitor leaving doesn't need to pass
+// the same gauntlet of validity checks that let them in, they just need to
+// mark that they left. See FRICTION_LOG.md for the edge cases this raised
+// (a departure with no matching arrival, checking out twice, ...).
+
+export interface CheckOutResult {
+  ok: boolean;
+  reason?: string;
+  visit?: Visit;
+  rateLimited?: boolean;
+}
+
+export async function checkOut(token: string, notifier: Notifier): Promise<CheckOutResult> {
+  // Same brute-force protection as arrival check-ins, kept on an independent
+  // budget (`checkout:${token}`) so a legitimate visitor's arrival attempts
+  // never eat into their own ability to check out, or vice versa.
+  const rateLimit = checkAndRecordAttempt(`checkout:${token}`);
+  if (!rateLimit.allowed) {
+    const retryMinutes = Math.ceil((rateLimit.retryAfterMs ?? 0) / 60000);
+    return {
+      ok: false,
+      rateLimited: true,
+      reason: `Too many checkout attempts for this link. Please try again in about ${retryMinutes} minute${retryMinutes === 1 ? "" : "s"}.`,
+    };
+  }
+
+  const pass = getPassByToken(token);
+  if (!pass) {
+    return { ok: false, reason: "This access link isn't valid." };
+  }
+
+  const openVisit = findOpenVisitForPass(pass.id);
+  if (!openVisit) {
+    // Covers both edge cases the same way, since neither has anything left
+    // to close out: a departure with no matching arrival at all, and a
+    // departure replayed after the matching visit was already checked out.
+    return {
+      ok: false,
+      reason: "There's no active visit to check out of for this pass — either you haven't checked in yet, or you already checked out.",
+    };
+  }
+
+  const now = new Date();
+  const durationMs = now.getTime() - new Date(openVisit.checkedInAt).getTime();
+  const closedVisit: Visit = { ...openVisit, checkedOutAt: now.toISOString(), durationMs };
+  updateVisit(closedVisit);
+
+  await notifier.send("homeowner", "push", `${pass.visitorName} just left (visit lasted ${formatDuration(durationMs)}).`);
+  eventBus.publish({ type: "visit_checkout", at: now.toISOString(), pass, visit: closedVisit });
+
+  return { ok: true, visit: closedVisit };
+}
+
+export type VisitStatus = "on_site" | "completed";
+export type VisitView = Visit & { status: VisitStatus; onSiteForMs?: number };
+
+/** `GET /visits`'s actual response shape: every stored visit, plus a derived `status` ("on_site" until a departure closes it, "completed" after) and, for one still on-site, how long it's been going so far. */
+export function listVisitsWithStatus(now: Date = new Date()): VisitView[] {
+  return listVisits().map((visit) => {
+    if (visit.checkedOutAt) return { ...visit, status: "completed" as const };
+    return { ...visit, status: "on_site" as const, onSiteForMs: now.getTime() - new Date(visit.checkedInAt).getTime() };
+  });
 }
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

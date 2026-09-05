@@ -151,3 +151,73 @@ the webhook story, bulk/template issuance, and a homeowner-approved grace-period
    that has nothing to do with any individual pass's schedule, so there's no reason an extension should bypass it.
    Writing that reasoning down directly as a code comment next to the `!usingExtension &&` guards (rather than
    leaving future-me to rediscover it by re-deriving the same argument) was the actual fix, not the logic itself.
+
+## Round 4: visit duration, traffic analytics, household roles, encrypted-at-rest PII
+
+Notes from pairing arrivals with departures, turning raw visit history into an analytics report, adding
+household-member authorization scoping, and encrypting visitor PII at rest.
+
+### What worked well
+
+- **Making checkout a separate token action instead of a `direction` field on the existing check-in endpoint**
+  avoided smuggling a second, mostly-unrelated meaning into `checkIn()`'s already-long list of validity guards
+  (recurrence, quiet hours, rate limiting, grace-period extensions — see Round 2/3 notes above). A departure
+  doesn't need to re-run any of that; it just needs to find the open visit and close it. Keeping them as genuinely
+  different functions (`checkIn` vs. `checkOut`) made that asymmetry obvious in the code instead of buried inside
+  one function's branching on a `direction` parameter.
+- **Reusing the exact same rate-limiter function for checkout, on an independently-keyed budget
+  (`` `checkout:${token}` ``)** rather than either skipping rate-limiting on checkout entirely or sharing the
+  arrival token's budget, cost one string template and nothing else — and it meant not having to make (and
+  justify) a judgment call about whether checkout "deserves" its own protection separately from arrival.
+- **`serializePass` as one function, called at every route that returns a `Pass`**, was the right amount of
+  refactor for adding field-level encryption without turning it into a bigger project than it needed to be. The
+  temptation with "mask a field in API responses" is to reach for a general-purpose response-serialization
+  middleware or a schema library; a single small function, applied at each of the (already small number of) call
+  sites that hand a `Pass` back to an HTTP caller, was easy to audit for "did I actually apply this everywhere" —
+  the actual risk with this approach, see below.
+
+### Friction encountered
+
+1. **Adding a masked/derived field to every API response touching `Pass` is exactly the kind of change that's easy
+   to apply in most places and quietly miss in one.** `POST /passes`, `GET /passes`, `DELETE /passes/:id`,
+   `POST /passes/bulk`, both extension-decision routes, and the check-in/request-extension results all independently
+   construct a JSON response containing a `pass` — there's no single funnel every `Pass` object passes through on
+   its way out. The actual fix was grepping every `res.json(` and `res.status(...).json(` call in `server.ts` after
+   making the change, one at a time, rather than trusting "I think I got them all" — a genuinely production version
+   of this would want a lint rule or a type-level guarantee (e.g. a branded `PassView` type that a route literally
+   cannot construct except via `serializePass`) rather than relying on a manual audit catching every call site
+   forever.
+2. **Deciding what "encrypted at rest" should mean for a field the API still needs to show *something* useful for**
+   took more thought than "just encrypt it." The requirement is specifically that the *raw stored representation*
+   never contains the plaintext — it says nothing about whether the API may show the real number to the household
+   that owns it, which is arguably fine on its own (it's the visitor's own number, given voluntarily, to the
+   household they're visiting). The design that felt most defensible: encrypt at rest unconditionally, decrypt
+   fully only at the one place with an actual technical need (sending the SMS), and show the API a masked value
+   everywhere else — good enough to recognize which visitor a pass is for, without every response over the wire
+   carrying the full number back out just to render a list. A different, equally reasonable team could have decided
+   the API should show the full number to an authenticated household member; the point that mattered here was
+   picking one answer and being explicit about which one, not stumbling into either accidentally.
+3. **A demo's encryption key management is the same shape of "clearly-marked, not-for-production" tradeoff every
+   earlier secret in this project made (the webhook HMAC secret, the rate limiter's in-memory store) — but it's
+   worth being extra explicit about here, since "encrypted at rest" reads as a much stronger claim to a reviewer
+   than it actually is if the key itself is derivable from a hardcoded string.** `crypto.ts`'s key is derived via
+   `scrypt` — a slow KDF built for hashing *passwords*, not for deriving a data-encryption key — from an env var or,
+   absent one, a string checked into the repository in plaintext. That's fine for a demo whose entire point is
+   "show the mechanism works," and outright dangerous the moment `PORCHPASS_ENCRYPTION_KEY` isn't set in a real
+   deployment: anyone with the source can derive the same key and decrypt everything it ever encrypted. The honest
+   fix isn't a stronger KDF (that doesn't solve the actual problem, which is *where the key material comes from*,
+   not how it's stretched) — it's a proper KMS integration: the application never holds a long-lived plaintext key
+   at all, only ever requesting a short-lived plaintext *data* key from KMS for the duration of one encrypt/decrypt
+   call (envelope encryption), with the long-lived key itself staying inside the KMS boundary permanently. That's a
+   real integration (IAM roles/permissions, a KMS client, key rotation policy) well beyond what a sandboxed
+   hackathon environment can stand up, which is exactly why it's called out explicitly here rather than silently
+   glossed over by the word "encrypted."
+4. **The visit-duration state machine's edge cases are easy to under-specify until you actually try to write the
+   rejection message.** "A checkout with nothing to close" turns out to bundle two different situations — a
+   visitor who taps "I'm leaving" without ever having checked in at all (a bad/forged link, or a UI bug), and one
+   who taps it twice (a double-tap, or a retried request after a flaky connection) — that could plausibly deserve
+   different reasons ("you haven't checked in yet" vs. "you already checked out"). The implementation deliberately
+   collapses them into one message (`findOpenVisitForPass` returning nothing either way) rather than trying to
+   distinguish "never arrived" from "already departed," since from the checkout endpoint's point of view they're
+   the same action to take (reject, cleanly, with no state change) — but it's a real design choice, not an
+   oversight, and worth naming as one rather than let a future reader assume the two cases were never considered.
