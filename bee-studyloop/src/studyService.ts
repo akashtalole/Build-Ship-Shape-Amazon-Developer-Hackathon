@@ -16,13 +16,15 @@ import { initialSchedulerState, isDue, scheduleReview } from "./scheduler.js";
 import { initialLeechState, updateLeechState } from "./leech.js";
 import { priorityScore } from "./priority.js";
 import { extractTopics } from "./topics.js";
-import { toPortableTsv } from "./export.js";
+import { fromPortableTsv, toPortableTsv } from "./export.js";
+import { initialStreakState, recordStreakDay, toStreakSummary, type StreakSummary } from "./streak.js";
 import {
   getFlashcard,
   getQuiz,
   getReviewState,
   getSession as getSessionFromStore,
   getSessionIdForIdempotencyKey,
+  getStreakState,
   listAllFlashcards,
   listFlashcardsBySession,
   listReviewStatesForStudent,
@@ -30,6 +32,7 @@ import {
   saveQuiz,
   saveReviewState,
   saveSession,
+  saveStreakState,
   setIdempotencyKey,
 } from "./store.js";
 
@@ -426,7 +429,36 @@ export function recordReviewForStudent(studentId: string, cardId: string, grade:
     lastGrade: grade,
   };
   saveReviewState(updated);
+  recordStreakActivity(studentId, now);
   return toPersonalView(card, studentId, updated);
+}
+
+// ===========================================================================
+// Study streaks & gamification
+// ===========================================================================
+
+/**
+ * Folds a just-completed review into a student's streak state (see
+ * streak.ts for what counts as a "streak day" and how milestones work).
+ * Called from `recordReviewForStudent` — a "completed review" is one graded
+ * against a named student, so the shared, student-less "default reviewer"
+ * path (`recordReview`, no `studentId`) intentionally never touches streaks;
+ * there's no single student to credit.
+ */
+function recordStreakActivity(studentId: string, now: Date): void {
+  const current = getStreakState(studentId) ?? initialStreakState(studentId);
+  saveStreakState(recordStreakDay(current, now));
+}
+
+/**
+ * Current/longest streak length and earned badges for one student. A
+ * student who hasn't completed a review yet gets a valid, all-zero summary
+ * rather than a 404 — asking about a streak that hasn't started yet isn't an
+ * error.
+ */
+export function getStreakForStudent(studentId: string): StreakSummary {
+  const state = getStreakState(studentId) ?? initialStreakState(studentId);
+  return toStreakSummary(state);
 }
 
 function personalViewsForStudent(studentId: string): PersonalFlashcardView[] {
@@ -620,4 +652,233 @@ export function exportSessionFlashcards(sessionId: string): string | undefined {
 /** Portable TSV export of every flashcard across every session. */
 export function exportAllFlashcards(): string {
   return toPortableTsv(listAllFlashcards());
+}
+
+// ===========================================================================
+// Global daily review session planner
+// ===========================================================================
+
+export interface ReviewSession {
+  studentId: string;
+  maxCards: number;
+  totalDue: number; // how many cards are due across every deck, before capping
+  cards: PersonalFlashcardView[];
+}
+
+/**
+ * Builds one bounded "here's your review for today" session for a student,
+ * across *every* deck they have — their own directly-reviewed cards and
+ * every shared deck they've joined (see `personalViewsForStudent`, the same
+ * pool `GET /review/due?studentId=` reads) — capped at `maxCards` and kept in
+ * the existing adaptive priority order (`sortByPriority`/`priorityScore`), so
+ * a leech or badly-overdue card from one deck still outranks a merely-due
+ * card from another rather than decks being interleaved round-robin or
+ * concatenated deck-by-deck. This is deliberately just a bounded slice of
+ * `listDueCardsForStudent`, not a new ranking algorithm: the "session
+ * planner" is the cap and the "how many did we leave for later" count
+ * (`totalDue`), not a different ordering.
+ */
+export function buildReviewSession(studentId: string, maxCards: number, now: Date = new Date()): ReviewSession {
+  const due = listDueCardsForStudent(studentId, now);
+  const cap = Math.max(0, Math.floor(maxCards));
+  return { studentId, maxCards: cap, totalDue: due.length, cards: due.slice(0, cap) };
+}
+
+// ===========================================================================
+// Import round-trip (the inverse of GET /export)
+// ===========================================================================
+
+export interface ImportFlashcardsInput {
+  /** The exact TSV format `toPortableTsv`/`GET /export` produces (header optional — see `fromPortableTsv`). */
+  tsv: string;
+  /**
+   * Import into an existing session, deduplicating against the cards it
+   * already has. Omit to create a fresh session to hold the imported cards
+   * (nothing to dedupe against but the batch itself) — the natural shape for
+   * "restore a full backup" rather than "merge into a deck I'm still using."
+   */
+  sessionId?: string;
+  /** Title for the session created when `sessionId` is omitted. */
+  title?: string;
+}
+
+export type ImportFlashcardsResult =
+  | { ok: true; session: StudySession; imported: Flashcard[]; skippedDuplicates: number }
+  | { ok: false; reason: "session_not_found" };
+
+/**
+ * Creates flashcards from a TSV export, so a student can back up their deck
+ * and restore it later, or migrate cards between environments (e.g. a local
+ * dev instance and a deployed one). Deduplicates by trimmed, lowercased
+ * `front` text — the same key `appendSessionSegments` already uses to avoid
+ * re-minting cards for material it's seen before — against two pools at
+ * once: whatever the target session already has (so re-importing the same
+ * export twice, or importing into a session you already exported from, is a
+ * safe no-op for cards that already exist) and whatever this same import
+ * batch has already added (so a TSV with an accidental duplicate row doesn't
+ * create two identical cards). Every imported card starts with fresh
+ * scheduling/leech state (`initialSchedulerState`/`initialLeechState`) since
+ * a TSV export carries no review history — only front/back/tags survive a
+ * round trip, by design (see FRICTION_LOG.md).
+ */
+export function importFlashcards(input: ImportFlashcardsInput, now: Date = new Date()): ImportFlashcardsResult {
+  const rows = fromPortableTsv(input.tsv);
+
+  let session: StudySession;
+  if (input.sessionId) {
+    const existing = getSessionFromStore(input.sessionId);
+    if (!existing) return { ok: false, reason: "session_not_found" };
+    session = existing;
+  } else {
+    session = {
+      id: randomUUID(),
+      title: input.title?.trim() || `Imported deck — ${now.toLocaleDateString("en-US")}`,
+      createdAt: now.toISOString(),
+      segments: [],
+      summary: `Imported from a TSV export (${rows.length} row(s)).`,
+      topics: [],
+      shared: false,
+    };
+    saveSession(session);
+  }
+
+  const existingFronts = new Set(listFlashcardsBySession(session.id).map((c) => c.front.trim().toLowerCase()));
+  const seenInBatch = new Set<string>();
+  const imported: Flashcard[] = [];
+  let skippedDuplicates = 0;
+
+  for (const row of rows) {
+    const key = row.front.trim().toLowerCase();
+    if (existingFronts.has(key) || seenInBatch.has(key)) {
+      skippedDuplicates += 1;
+      continue;
+    }
+    seenInBatch.add(key);
+
+    const card: Flashcard = {
+      id: randomUUID(),
+      sessionId: session.id,
+      front: row.front,
+      back: row.back,
+      createdAt: now.toISOString(),
+      tags: row.tags,
+      ...initialSchedulerState(now),
+      ...initialLeechState(),
+    };
+    saveFlashcard(card);
+    imported.push(card);
+  }
+
+  return { ok: true, session, imported, skippedDuplicates };
+}
+
+// ===========================================================================
+// Regenerate-a-card
+// ===========================================================================
+
+/**
+ * Best-effort recovery of the specific transcript material a given card was
+ * generated from, so `regenerateFlashcard` can re-run generation over just
+ * that material rather than the whole session (which would just reproduce
+ * the same card set the original ingest already did). Exploits how each of
+ * `TemplateFlashcardGenerator`'s three tiers builds a card's `front`/`back`,
+ * checked in the same tier order the generator itself uses:
+ *
+ *  1. Q&A cards carry the two source segments' text *verbatim* as front/back
+ *     (see tier 1 in flashcardGenerator.ts) — so an exact match against two
+ *     adjacent segments recovers them exactly.
+ *  2. Cloze cards' front is `"Fill in the blank: " + <sentence with the
+ *     target word replaced by "____">` — substituting the card's own `back`
+ *     (the blanked word) back into the blank reconstructs the original
+ *     sentence, which is then located in the transcript by substring match.
+ *  3. Definition cards' front is a reformatted `"What is <Term>?"` rather
+ *     than verbatim source text, so there's no exact reconstruction; falling
+ *     back to "the segment mentioning the term" is the closest available
+ *     signal.
+ *
+ * Falls back to the session's *entire* transcript if none of the above finds
+ * anything more specific — regeneration still produces a result, just
+ * without the "just this card's material" narrowing. Documented as a
+ * heuristic, not a guarantee, in FRICTION_LOG.md: a hand-typed transcript
+ * with unusual phrasing can still fall through to the whole-transcript case.
+ */
+function findUnderlyingSegments(session: StudySession, card: Flashcard): TranscriptSegment[] {
+  const segments = session.segments;
+
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (segments[i].text.trim() === card.front && segments[i + 1].text.trim() === card.back) {
+      return [segments[i], segments[i + 1]];
+    }
+  }
+
+  const clozeMatch = /^Fill in the blank: (.*)$/.exec(card.front);
+  if (clozeMatch) {
+    const reconstructed = clozeMatch[1].replace("____", card.back);
+    const exact = segments.find((s) => s.text.includes(reconstructed));
+    if (exact) return [exact];
+    const byAnswerWord = segments.find((s) => s.text.toLowerCase().includes(card.back.toLowerCase()));
+    if (byAnswerWord) return [byAnswerWord];
+  }
+
+  const defMatch = /^What is (.+)\?$/.exec(card.front);
+  if (defMatch) {
+    const term = defMatch[1].toLowerCase();
+    const byTerm = segments.find((s) => s.text.toLowerCase().includes(term));
+    if (byTerm) return [byTerm];
+  }
+
+  return segments;
+}
+
+export type RegenerateCardResult =
+  | { ok: true; card: Flashcard }
+  | { ok: false; reason: "card_not_found" }
+  | { ok: false; reason: "session_not_found" }
+  | { ok: false; reason: "no_alternative" };
+
+/**
+ * Re-runs flashcard generation against just one card's underlying transcript
+ * material (see `findUnderlyingSegments`) to produce an alternative
+ * phrasing, replacing that card's `front`/`back` in place. Everything else —
+ * `id`, `tags`, scheduling state (`interval`/`easeFactor`/`repetitions`/
+ * `dueAt`), and leech state (`consecutiveFailures`/`isLeech`) — is carried
+ * over untouched, so regenerating a card doesn't reset a student's progress
+ * on it.
+ *
+ * Reuses the injected `FlashcardGenerator` — the exact same generator
+ * `ingestSession`/`appendSessionSegments` already call — rather than
+ * duplicating any pattern-matching logic: the primary path is just
+ * `generator.generate(underlyingSegments)`, filtered to a candidate whose
+ * `front` differs from the card's current one. Realistically this alone
+ * finds something in a lot of cases (e.g. a Q&A pair's two segments will
+ * often also match the definition-pattern tier, yielding a genuinely
+ * different question/answer pair for the same material — see the smoke
+ * test). Only when the generator's normal tiers produce nothing different
+ * does this fall back to `generateClozeCards` directly on the same
+ * underlying material for a guaranteed-different fill-in-the-blank
+ * phrasing — reusing that exported helper (already used elsewhere for the
+ * adaptive generation-bias feature) rather than writing a second cloze
+ * generator here.
+ */
+export async function regenerateFlashcard(generator: FlashcardGenerator, cardId: string): Promise<RegenerateCardResult> {
+  const card = getFlashcard(cardId);
+  if (!card) return { ok: false, reason: "card_not_found" };
+  const session = getSessionFromStore(card.sessionId);
+  if (!session) return { ok: false, reason: "session_not_found" };
+
+  const underlying = findUnderlyingSegments(session, card);
+  const currentKey = card.front.trim().toLowerCase();
+
+  const { flashcards: candidates } = await generator.generate(underlying);
+  let alternative = candidates.find((c) => c.front.trim().toLowerCase() !== currentKey);
+
+  if (!alternative) {
+    alternative = generateClozeCards(underlying, 5).find((c) => c.front.trim().toLowerCase() !== currentKey);
+  }
+
+  if (!alternative) return { ok: false, reason: "no_alternative" };
+
+  const updated: Flashcard = { ...card, front: alternative.front, back: alternative.back };
+  saveFlashcard(updated);
+  return { ok: true, card: updated };
 }
