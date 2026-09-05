@@ -88,3 +88,46 @@ Notes captured while building the Alexa+ HomeOps submission, for the hackathon's
     impossible: a bad item doesn't get a reason, the whole batch just errors out. The fix was to accept each item
     loosely (`z.unknown().optional()` per field) and hand-validate title/date-format inside the handler instead —
     less type safety at the schema boundary, but the tradeoff a "graceful partial failure" tool actually requires.
+
+## Round 5: role-based access control, outbound alert webhooks, recurring tasks, digest export
+
+11. **Enforcing a role against a dozen already-written tools without touching any of them.** The obvious way to add
+    "reject writes for a read-only token" is to add an `if (role === "read-only") return {isError:true,...}` line to
+    the top of every write handler in `tasks.ts`, `shopping.ts`, `expenses.ts`, plus every new write tool this same
+    round adds (`add_recurring_task`, `register_alert_webhook`, `issue_household_token`) — a dozen-plus near-identical
+    checks, easy to forget on the next new tool anyone adds after this round. The fix (`src/rbac.ts`) was to notice
+    that every tool already declares a `readOnlyHint` annotation (added in round 2, for an unrelated reason — letting
+    a *client* decide what's safe to auto-approve) and wrap `McpServer#registerTool` itself once, at session-creation
+    time: any tool registered with `readOnlyHint !== true` gets its handler swapped for a rejection before it's even
+    stored. One wrapper, applied only for `role === "read-only"` sessions, zero lines changed in any tool file, and a
+    forgotten annotation on a *future* write tool fails safe (unmarked = treated as a write and blocked) rather than
+    failing open. The cost: this only works because the annotation and the actual read/write-ness of a tool have
+    stayed in sync so far — nothing enforces that they always will, beyond code review.
+12. **A pure hash can't give two tokens for the same household different roles.** Round 4's `resolveHouseholdId` is
+    deliberately a pure function of the token (hash it, done) — that's *why* an unrecognized token "just works" with
+    zero setup. But "issue a read-only token for the same household as this full-access session" needs the *reverse*
+    property: two different token strings mapping to the *same* household. A pure hash of each token independently
+    can't produce that (they'd hash to two different, unrelated households). The fix was a small on-disk registry
+    (`data/_tokens.json`, same write-temp-then-rename discipline as household files) that only `issue_household_token`
+    populates — an explicitly-minted token is looked up there first; anything not in the registry (i.e. every token
+    this server has ever supported before this round) falls through to the exact same hash-derivation-plus-full-access
+    behavior as before. The registry is additive, not a replacement — round 4's zero-setup story for a fresh token is
+    completely unchanged.
+13. **Deciding where an outbound alert actually belongs, versus where it's merely convenient to fire from.** The
+    obvious place to check "is anything overdue" is inside `list_upcoming_tasks` — it already computes exactly that
+    set. But that's a read-heavy tool called constantly (including, now, by a read-only token) purely to render a
+    list; firing a side-effecting webhook POST from a read path felt wrong on reflection, and would mean a household
+    checking its own tasks repeatedly re-alerts itself every time. Alerts were moved to the actual write paths
+    instead (`add_task`, `import_tasks`, `sync_household_calendar`) — the moments something *becomes* overdue or
+    *is revealed* overdue by an explicit action, not every time it's merely displayed. `add_expense`'s
+    budget-exceeded alert already lived at the right spot for the same reason: it's already a write handler, not a
+    query.
+14. **Testing a genuinely fire-and-forget delivery without making the test flaky.** `fireHouseholdAlert` is
+    deliberately never awaited by its caller (the whole point is that a slow or dead webhook endpoint can't block a
+    tool call) — which means the smoke test's assertion has to happen *after* the delivery has actually landed, not
+    right after the triggering `tools/call` returns. A fixed `setTimeout` (300ms) is not a real synchronization
+    primitive and is the least satisfying part of this round's test — it works reliably because the test's own
+    listener always answers 200 immediately (so a successful delivery finishes in one attempt, no backoff wait), but
+    a slower/flakier CI environment could in principle need longer. A cleaner fix would be a small poll-until-received
+    helper instead of a flat sleep; deferred here in favor of matching the existing test file's established
+    `setTimeout`-then-assert idiom (already used for resource-update notifications and logging messages above it).

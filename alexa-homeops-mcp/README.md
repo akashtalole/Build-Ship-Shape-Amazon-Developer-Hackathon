@@ -14,19 +14,24 @@ Alexa+'s agent can call these tools, in combination, to complete multi-step requ
 
 | Tool | Purpose |
 |---|---|
-| `list_upcoming_tasks` | Household to-dos due within N days |
+| `list_upcoming_tasks` | Household to-dos due within N days (materializes recurring-task occurrences on the fly) |
 | `add_task` | Add a task; auto-assigns fairly if no assignee is given |
+| `add_recurring_task` | Add a weekly recurring chore template (e.g. "every Tuesday") — no per-week row needed |
 | `import_tasks` | Bulk-add many tasks in one call, with a per-item added/rejected result |
 | `mark_task_done` | Mark a task complete |
 | `suggest_assignee` | Recommend who should take the next chore, by current open-task load |
 | `list_low_stock_items` | Items running low that might need reordering |
 | `reorder_item` | Reorder an item — confirms via **MCP elicitation** before spending |
-| `add_expense` | Log a household expense; warns if it pushes a category over budget |
+| `add_expense` | Log a household expense; warns if it pushes a category over budget, and fires an alert webhook |
 | `get_weekly_summary` | Total spend by category over the past 7 days |
 | `set_budget` / `get_budget_status` | Set and check weekly budgets per category |
 | `generate_weekly_narrative` | Turn the week's data into a natural-language digest via **MCP sampling** |
 | `sync_household_calendar` | Sync tasks to a shared calendar, streaming **progress notifications** per task |
 | `run_morning_briefing` | **Compound tool**: chains tasks + assignment + stock + budget into one call, then narrates them |
+| `export_household_digest` | Combined tasks + budget + low-stock text report, reusing the sampling-backed narrative |
+| `issue_household_token` | Mint a new bearer token for this household as `full-access` or `read-only` |
+| `register_alert_webhook` | Register an HMAC-signed callback URL for proactive budget/overdue-task alerts |
+| `get_alert_webhook_status` | Check whether a webhook is registered and how its last delivery went |
 
 Beyond tools, the server also exposes:
 
@@ -102,6 +107,39 @@ Beyond tools, the server also exposes:
   fires exactly one combined `homeops://tasks/upcoming` update notification for the whole batch instead of one per
   item. The result reports each item's outcome (`added` with its new task ID, or `rejected` with a reason) so a
   malformed entry in the middle of a batch doesn't silently disappear or block the rest.
+- **Role-based access control.** Every bearer token now resolves to both a household *and* an access role
+  (`full-access` or `read-only`), via `issue_household_token` — a full-access session can mint a new token for its
+  *own* household at either level, e.g. a read-only one for a kid's device or a shared kitchen display that should
+  only ever check things. A read-only token can call every read tool (`list_upcoming_tasks`, `get_budget_status`,
+  `export_household_digest`, ...) but is rejected — with a clear `isError` message, never a silent no-op — on every
+  write tool (`add_task`, `reorder_item`, `add_expense`, `import_tasks`, `register_alert_webhook`, even
+  `issue_household_token` itself). The enforcement point is a single wrapper (`src/rbac.ts`) around
+  `McpServer#registerTool`, applied once at session-creation time for a read-only session and never touching any
+  individual tool file — it reuses the `readOnlyHint` annotation every tool already declares (for an unrelated
+  reason, since round 2) rather than hand-adding a role check to a dozen handlers. Round 4's exact "no token or
+  unrecognized token" behavior is unchanged: only a token this server actually issued (via `issue_household_token`)
+  carries a role at all; every other token still gets hash-derived, full-access, no-pre-registration-required
+  treatment.
+- **Outbound household-alert webhooks.** `register_alert_webhook` lets a household register a callback URL to be
+  proactively notified — no MCP session needs to be open to receive these — when `add_expense` pushes a category
+  over its weekly budget, or when a task operation (`add_task`, `import_tasks`, `sync_household_calendar`) reveals
+  something overdue. Mirrors, in spirit, this repo's `ring-porchpass`/`firetv-courtside` outbound-webhook pattern:
+  payloads are signed with HMAC-SHA256 (header `X-HomeOps-Signature`, over the raw JSON body) using a secret handed
+  back exactly once at registration, and delivery retries up to 3 times with exponential backoff before giving up
+  and logging a warning via the MCP logging capability. Delivery is fire-and-forget by construction — the tool call
+  that triggered the alert returns immediately, never blocked on a slow or unreachable endpoint — and
+  `get_alert_webhook_status` reports the outcome of the most recent attempt (never the secret) for observability.
+- **Recurring/template tasks.** `add_recurring_task` adds a weekly chore template (`daysOfWeek: number[]`, e.g.
+  `[2]` for every Tuesday) instead of a one-off task with a single due date. No per-occurrence row is ever stored:
+  `list_upcoming_tasks` materializes the actual occurrences on read, one per matching weekday within whatever
+  `withinDays` window is requested, each with its own synthetic ID (`${templateId}:${date}`) — so "take out the
+  trash every Tuesday" survives across weeks without a background job re-adding it, and a 30-day lookahead shows
+  every occurrence that falls in that window in one `list_upcoming_tasks` call.
+- **Household digest export.** `export_household_digest` produces one combined text report — upcoming tasks,
+  budget status, and low-stock items — for a household member to read at a glance, save, or share. Its summary
+  paragraph reuses the exact same sampling-backed narrative generation `generate_weekly_narrative` and
+  `run_morning_briefing` already use (falling back to the same kind of templated summary when the client doesn't
+  support MCP sampling) rather than duplicating that logic a third time.
 
 ## Persistence
 
@@ -125,39 +163,56 @@ against it — the rest of the codebase (tools, resources) only calls those func
 household is stored.
 
 The server holds one household per distinct bearer token (or the single seeded default household for a request with
-no token), each independently loaded/saved from its own file.
+no token), each independently loaded/saved from its own file. A token minted by `issue_household_token` also gets
+an entry in `data/_tokens.json` (the same directory, same write-then-rename discipline) mapping its hash to the
+household + role it was issued for — that registry, not the household files, is what makes a read-only token for
+an existing household possible at all (see "Role-based access control" above). Alert-webhook delivery *status*
+(last attempt/success/error) is the one piece of round-5 state that is intentionally **not** persisted — it's
+process-lifetime observability only, the same tradeoff round 4 made for the reorder-idempotency cache.
 
 ## Project layout
 
 ```
 src/
   index.ts        Express app + Streamable HTTP transport; extracts the bearer token per session and resolves
-                  it to a household ID (src/auth.ts) before creating that session's McpServer
-  auth.ts          extractBearerToken() + resolveHouseholdId() — bearer token -> household ID derivation
-  server.ts        createHomeOpsServer(householdId) factory — wires resources, prompts, and all tools onto a
-                   fresh McpServer scoped to one household, with the logging capability declared
-  store.ts         File-backed household data (tasks, shopping, expenses, budgets), one JSON file per household
-                   ID under data/ (HOMEOPS_DATA_DIR-overridable), atomic write-then-rename + fair-rotation/
-                   budget/idempotency logic + bulk import
+                  it to a household ID + access role (src/auth.ts) before creating that session's McpServer
+  auth.ts          extractBearerToken(), resolveHouseholdId() (round 4, hash-only), and resolveAccess()/
+                   issueToken() (round 5's role-aware lookup + a small on-disk token registry)
+  rbac.ts          restrictToReadOnlyTools() — wraps McpServer#registerTool so a read-only session's write
+                   tools reject with a clear error, without touching any individual tool file
+  server.ts        createHomeOpsServer(householdId, role) factory — wires resources, prompts, and all tools
+                   onto a fresh McpServer scoped to one household (and access role), logging capability declared
+  store.ts         File-backed household data (tasks, shopping, expenses, budgets, alert webhook registration),
+                   one JSON file per household ID under data/ (HOMEOPS_DATA_DIR-overridable), atomic
+                   write-then-rename + fair-rotation/budget/idempotency logic + bulk import + recurring-task
+                   materialization + overdue-task lookup
+  webhookDelivery.ts  fireHouseholdAlert() — HMAC-SHA256-signed outbound webhook delivery with retry/backoff
   logging.ts       logEvent() helper over the MCP logging capability (notifications/message)
   resources.ts     homeops:// resources + subscribe/unsubscribe + notify() helper for push updates, scoped by
                    household ID
   eventStore.ts    InMemoryEventStore — Streamable HTTP resumability (replay after a dropped connection)
   prompts.ts       weekly_household_briefing prompt template
-  types.ts         Shared data model
+  types.ts         Shared data model, including RecurrenceRule, AlertWebhookRegistration, AccessRole
   tools/
-    tasks.ts       list_upcoming_tasks, add_task, import_tasks, mark_task_done, suggest_assignee,
-                   sync_household_calendar
+    tasks.ts       list_upcoming_tasks, add_task, add_recurring_task, import_tasks, mark_task_done,
+                   suggest_assignee, sync_household_calendar (the last three also fire overdue-task alerts)
     shopping.ts    list_low_stock_items, reorder_item (elicitation-backed, idempotency-key protected)
-    expenses.ts    add_expense, get_weekly_summary, set_budget, get_budget_status
-    insights.ts    generate_weekly_narrative, run_morning_briefing (MCP sampling + compound orchestration)
-data/              JSON-file-backed household storage, one file per household ID (gitignored, created on first use)
+    expenses.ts    add_expense (also fires budget-exceeded alerts), get_weekly_summary, set_budget,
+                   get_budget_status
+    insights.ts    generate_weekly_narrative, run_morning_briefing, export_household_digest (MCP sampling +
+                   compound orchestration + combined report, all sharing one sampleNarrative() helper)
+    access.ts      issue_household_token — mint a full-access or read-only token for this household
+    webhooks.ts    register_alert_webhook, get_alert_webhook_status
+data/              JSON-file-backed household storage, one file per household ID, plus _tokens.json (the
+                   role-aware token registry) — gitignored, created on first use
 test/
   smoke.test.ts    End-to-end test: real MCP client + server, exercising every tool, resource (+ template,
                    completion, subscribe/notify), prompt, elicitation round-trip, sampling call,
                    progress-streaming tool call, idempotent retry, compound tool, a direct EventStore unit
                    test, bearer-token household isolation, structured logging notifications, file-backed
-                   persistence across a simulated restart, and bulk task import
+                   persistence across a simulated restart, bulk task import, recurring-task materialization
+                   across multiple weeks, the household digest export, read-only token enforcement, and
+                   HMAC-signed webhook delivery against a real local HTTP listener
 ```
 
 ## Running it
@@ -201,6 +256,48 @@ A different token always gets its own fresh, empty household on first use — no
 the header entirely connects to the single seeded default household (the one with the original demo tasks/shopping
 items), so existing demos and tooling that don't send a token are unaffected.
 
+### Issuing a read-only token (role-based access control)
+
+Every token above connects `full-access` by default (unchanged from round 4). To hand out a token that can only
+call read tools — a kid's device, a shared kitchen display, a dashboard — call `issue_household_token` from a
+full-access session already connected to the household you want to scope it to:
+
+```jsonc
+// tools/call issue_household_token { "role": "read-only" }
+// -> structuredContent: { "token": "<hex>", "role": "read-only", "householdId": "home-1" }
+```
+
+Connect a second client with `Authorization: Bearer <that token>` and it lands on the *same* household, but every
+write tool (`add_task`, `reorder_item`, `add_expense`, `import_tasks`, `add_recurring_task`,
+`register_alert_webhook`, even `issue_household_token` itself) responds with `isError: true` and a message naming
+the token as read-only, instead of either silently succeeding or silently doing nothing. Read tools
+(`list_upcoming_tasks`, `get_budget_status`, `list_low_stock_items`, `export_household_digest`, ...) work exactly
+as they would for a full-access token.
+
+### Registering an alert webhook
+
+```jsonc
+// tools/call register_alert_webhook { "url": "https://your-endpoint.example/homeops-alerts" }
+// -> structuredContent: { "url": "...", "secret": "<hex, shown once>", "createdAt": "..." }
+```
+
+From then on, an over-budget `add_expense` or an overdue task surfaced by `add_task`/`import_tasks`/
+`sync_household_calendar` POSTs a signed JSON payload to that URL:
+
+```
+POST https://your-endpoint.example/homeops-alerts
+X-HomeOps-Signature: <hex HMAC-SHA256 of the raw body, using the secret above>
+X-HomeOps-Alert-Type: budget_exceeded | task_overdue
+Content-Type: application/json
+
+{"type":"budget_exceeded","householdId":"home-1","message":"...","data":{...},"firedAt":"..."}
+```
+
+Verify it the same way `ring-porchpass`'s Ring-event ingress verifies inbound signatures — recompute
+`HMAC-SHA256(secret, rawBody)` and compare — just in the opposite direction, since here HomeOps is the sender.
+`get_alert_webhook_status` reports the outcome of the most recent delivery attempt without ever re-exposing the
+secret.
+
 ## Testing
 
 ```bash
@@ -213,10 +310,17 @@ get a fair-rotation suggestion → add a task and confirm its resource-update no
 mixed batch of valid/invalid tasks in one call → reorder an item through a live elicitation round-trip → log an
 expense and see the over-budget warning → generate a sampling-backed narrative — while asserting along the way that
 key events (a task added, a reorder confirmed, a budget exceeded) also arrive as independent
-`notifications/message` log entries. It then connects two more clients under two different bearer tokens and
-confirms their household data is completely isolated, and finally spins up two independent server instances
-pointed at the same on-disk data directory to confirm a household's data survives a simulated restart. No external
-services required.
+`notifications/message` log entries. It then adds a recurring task and confirms it materializes into distinct,
+correctly-spaced occurrences across a two-week `list_upcoming_tasks` window; exports a household digest and checks
+its tasks/budget/low-stock sections against the equivalent individual tool calls; mints a read-only token via
+`issue_household_token` and confirms that token can list tasks but is rejected — with a clear error, and no actual
+effect — when it calls `add_task`; and registers an alert webhook against a real local `http` listener spun up in
+the test process, then verifies a subsequent over-budget expense (and a subsequent already-overdue `add_task`)
+each deliver a payload to it whose `X-HomeOps-Signature` header is exactly the HMAC-SHA256 the test independently
+recomputes from the secret `register_alert_webhook` returned. It then connects two more clients under two
+different bearer tokens and confirms their household data is completely isolated, and finally spins up two
+independent server instances pointed at the same on-disk data directory to confirm a household's data survives a
+simulated restart. No external services required.
 
 You can also point the [MCP Inspector](https://modelcontextprotocol.io/legacy/tools/inspector) at the running
 server for interactive exploration:
@@ -240,6 +344,10 @@ npx @modelcontextprotocol/inspector
    - "Log $60 for dog food under pets" (triggers the over-budget warning if the pets budget is set below that)
    - "Give me the weekly household briefing" (uses the `weekly_household_briefing` prompt + sampling-backed digest)
    - "Sync my tasks to the calendar" (streams progress notifications as each task syncs)
+   - "Take out the trash every Tuesday" (`add_recurring_task`; shows up in every future week's task list)
+   - "Give me the full household report" (`export_household_digest` — tasks, budget, and low stock in one report)
+   - "Set up a read-only token for the kitchen display" (`issue_household_token` with `role: "read-only"`)
+   - "Notify me at this URL if we go over budget or something's overdue" (`register_alert_webhook`)
 
 ## Verifying resumability by hand
 
@@ -275,21 +383,29 @@ curl -N http://localhost:3333/mcp -H "Accept: text/event-stream" -H "mcp-session
   resumable `EventStore` — plus resources (including a completable resource template), prompts, elicitation,
   sampling, structured tool output, tool annotations, progress notifications, and the logging capability
   (`notifications/message`): essentially the full breadth of the MCP spec rather than tools alone. Bearer-token
-  auth is threaded from the HTTP layer into per-session state the same way a real multi-tenant MCP server would.
+  auth is threaded from the HTTP layer into per-session state the same way a real multi-tenant MCP server would,
+  now carrying an access role as well as a household ID, and enforced by wrapping the SDK's own tool-registration
+  API rather than hand-checking a role in every handler. Outbound alert delivery reuses the exact HMAC-SHA256 +
+  retry-with-backoff pattern this repo's other services (`ring-porchpass`, `firetv-courtside`) use for their own
+  webhooks, applied in the opposite (outbound) direction.
 - **Design:** Tools are scoped and composable so the agent can chain them (check → decide → act), with
   `run_morning_briefing` collapsing the common four-tool chain into one round trip for latency-sensitive voice
-  interactions, and `import_tasks` collapsing a whole batch of adds into one round trip and one notification. The
-  one spending tool (`reorder_item`) confirms through the protocol's own elicitation mechanism and is safe to retry
-  via an idempotency key, and every capability degrades gracefully when a client doesn't support it.
+  interactions, `import_tasks` collapsing a whole batch of adds into one round trip and one notification, and
+  `export_household_digest` collapsing the same three-domain check into one shareable report. The one spending
+  tool (`reorder_item`) confirms through the protocol's own elicitation mechanism and is safe to retry via an
+  idempotency key, and every capability degrades gracefully when a client doesn't support it.
 - **Potential Impact:** A genuinely useful daily-use pattern (household coordination, fair chore-splitting, budget
   awareness) rather than a novelty demo, with production-grade concerns actually handled — safe retries on the
-  spending path, connection resumability, per-household data isolation via bearer tokens, and data that survives a
-  restart — not just a happy-path demo. The remaining hackathon-specific shortcut is the persistence layer itself
-  (a JSON file per household, no real database) — explicitly documented as such, not hidden.
+  spending path, connection resumability, per-household data isolation via bearer tokens, data that survives a
+  restart, least-privilege access for household members who shouldn't be able to spend or edit, and proactive
+  alerts that don't require an open session to receive — not just a happy-path demo. Recurring tasks close a real
+  daily-use gap (nobody re-adds "take out the trash" every single week by hand). The remaining hackathon-specific
+  shortcuts are the persistence layer (a JSON file per household, no real database) and the in-memory token/webhook
+  delivery-status registries — explicitly documented as such, not hidden.
 - **Quality of Idea:** Demonstrates multi-tool agentic orchestration *and* deep MCP protocol usage (resources with
   live push updates, sampling instead of a bundled model key, resumable transport, idempotent writes, structured
-  logging as a first-class observability channel) — the actual differentiators between an "Agent Skill" and a
-  legacy single-intent Alexa Skill.
+  logging as a first-class observability channel, and now role-aware tool registration plus signed outbound
+  webhooks) — the actual differentiators between an "Agent Skill" and a legacy single-intent Alexa Skill.
 
 ## Friction log
 

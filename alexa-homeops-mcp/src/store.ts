@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { BudgetStatus, Expense, Household, ShoppingItem, Task } from "./types.js";
+import type { AlertWebhookRegistration, BudgetStatus, Expense, Household, ShoppingItem, Task } from "./types.js";
 
 // The household used for any request that carries no (or an unrecognized)
 // bearer token — see src/auth.ts. Kept as a fixed ID so its seeded demo data
@@ -148,13 +148,59 @@ export function getHousehold(householdId: string): Household {
   return loadHousehold(householdId);
 }
 
+/**
+ * Expands one recurring *template* task into its individual occurrences —
+ * one per matching weekday between `from` and `to`, inclusive — instead of
+ * requiring a stored row per week. Each occurrence gets a synthetic ID
+ * (`${templateId}:${date}`) and never carries the `recurrence` field, so it
+ * matches the plain (non-recurring) Task shape exactly and needs no special
+ * handling by callers or by `outputSchema` validation.
+ */
+function materializeOccurrences(template: Task, from: Date, to: Date): Task[] {
+  const occurrences: Task[] = [];
+  const cursor = new Date(from);
+  while (cursor <= to) {
+    if (template.recurrence!.daysOfWeek.includes(cursor.getDay())) {
+      occurrences.push({
+        id: `${template.id}:${cursor.toISOString().slice(0, 10)}`,
+        title: template.title,
+        dueDate: cursor.toISOString().slice(0, 10),
+        assignee: template.assignee,
+        done: false,
+      });
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return occurrences;
+}
+
 export function listUpcomingTasks(householdId: string, withinDays: number): Task[] {
   const household = loadHousehold(householdId);
-  const cutoff = new Date();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cutoff = new Date(today);
   cutoff.setDate(cutoff.getDate() + withinDays);
-  return household.tasks
-    .filter((t) => !t.done && new Date(t.dueDate) <= cutoff)
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
+  const results: Task[] = [];
+  for (const task of household.tasks) {
+    if (task.done) continue;
+    if (task.recurrence) {
+      results.push(...materializeOccurrences(task, today, cutoff));
+    } else if (new Date(task.dueDate) <= cutoff) {
+      // Unlike the recurring branch (which has no natural "in the past"
+      // occurrence), a plain task with no lower bound check on purpose: an
+      // overdue one-off task should keep showing up here until it's marked
+      // done, not silently disappear once its due date passes.
+      results.push(task);
+    }
+  }
+  return results.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+}
+
+/** Non-recurring tasks that are still open and past their due date. Used to fire a task_overdue household alert (see webhookDelivery.ts). */
+export function overdueTasks(householdId: string): Task[] {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  return loadHousehold(householdId).tasks.filter((t) => !t.done && !t.recurrence && t.dueDate < todayStr);
 }
 
 export function listMembers(householdId: string): string[] {
@@ -177,6 +223,27 @@ export function addTask(householdId: string, title: string, dueDate: string, ass
     dueDate,
     assignee: assignee ?? computeSuggestedAssignee(household),
     done: false,
+  };
+  household.tasks.push(task);
+  saveHousehold(householdId, household);
+  return task;
+}
+
+/**
+ * Adds a recurring weekly chore *template* — e.g. "take out the trash every
+ * Tuesday" — instead of a one-off task. No per-week row is ever stored:
+ * `listUpcomingTasks` materializes the actual occurrences on read (see
+ * `materializeOccurrences` above) from this single row.
+ */
+export function addRecurringTask(householdId: string, title: string, daysOfWeek: number[], assignee?: string): Task {
+  const household = loadHousehold(householdId);
+  const task: Task = {
+    id: randomUUID(),
+    title,
+    dueDate: new Date().toISOString().slice(0, 10),
+    assignee: assignee ?? computeSuggestedAssignee(household),
+    done: false,
+    recurrence: { daysOfWeek: [...new Set(daysOfWeek)].sort((a, b) => a - b) },
   };
   household.tasks.push(task);
   saveHousehold(householdId, household);
@@ -329,4 +396,28 @@ export function getBudgetStatus(householdId: string): BudgetStatus[] {
 
 export function getBudgetStatusFor(householdId: string, category: string): BudgetStatus | undefined {
   return getBudgetStatus(householdId).find((b) => b.category === category.toLowerCase());
+}
+
+/**
+ * Registers (or replaces) this household's outbound alert webhook. A fresh
+ * random secret is generated every time — including on re-registration —
+ * mirroring how ring-porchpass's outbound webhook secrets work: the caller
+ * gets it back exactly once, in the tool's own response, and it's never
+ * exposed again after that (get_alert_webhook_status reports the URL and
+ * delivery history, never the secret).
+ */
+export function registerAlertWebhook(householdId: string, url: string): AlertWebhookRegistration {
+  const household = loadHousehold(householdId);
+  const registration: AlertWebhookRegistration = {
+    url,
+    secret: randomBytes(24).toString("hex"),
+    createdAt: new Date().toISOString(),
+  };
+  household.alertWebhook = registration;
+  saveHousehold(householdId, household);
+  return registration;
+}
+
+export function getAlertWebhookRegistration(householdId: string): AlertWebhookRegistration | undefined {
+  return loadHousehold(householdId).alertWebhook;
 }

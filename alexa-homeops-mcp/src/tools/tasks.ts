@@ -1,8 +1,18 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { addTask, importTasks, listUpcomingTasks, markTaskDone, openTaskCounts, suggestAssignee } from "../store.js";
+import {
+  addRecurringTask,
+  addTask,
+  importTasks,
+  listUpcomingTasks,
+  markTaskDone,
+  openTaskCounts,
+  overdueTasks,
+  suggestAssignee,
+} from "../store.js";
 import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 import { logEvent } from "../logging.js";
+import { fireHouseholdAlert } from "../webhookDelivery.js";
 
 const taskShape = {
   id: z.string(),
@@ -13,6 +23,22 @@ const taskShape = {
 };
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** Fires a task_overdue household alert if any newly-relevant tasks are already past due. No-op if no webhook is registered (see webhookDelivery.ts). */
+function alertIfOverdue(server: McpServer, householdId: string, candidates: { id: string; title: string; dueDate: string }[]): void {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const overdue = candidates.filter((t) => t.dueDate < todayStr);
+  if (overdue.length === 0) return;
+  fireHouseholdAlert(server, householdId, {
+    type: "task_overdue",
+    message:
+      overdue.length === 1
+        ? `"${overdue[0].title}" is overdue (was due ${overdue[0].dueDate}).`
+        : `${overdue.length} tasks are overdue: ${overdue.map((t) => t.title).join(", ")}.`,
+    data: { tasks: overdue },
+  });
+}
 
 export function registerTaskTools(server: McpServer, notify: NotifyFn, householdId: string): void {
   server.registerTool(
@@ -65,6 +91,7 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn, household
       const wasAutoAssigned = !assignee;
       const task = addTask(householdId, title, dueDate, assignee);
       await notify(RESOURCE_URIS.upcomingTasks);
+      alertIfOverdue(server, householdId, [task]);
       await logEvent(server, "info", "Task added", {
         taskId: task.id,
         title: task.title,
@@ -173,6 +200,7 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn, household
 
       if (addedCount > 0) {
         await notify(RESOURCE_URIS.upcomingTasks);
+        alertIfOverdue(server, householdId, created);
       }
       await logEvent(server, rejectedCount > 0 ? "warning" : "info", "Bulk task import completed", {
         addedCount,
@@ -259,8 +287,57 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn, household
         }
       }
 
+      // A sync is a natural moment to surface anything that slipped past its
+      // due date without ever getting marked done — check the household's
+      // full overdue list (not just the synced window) and alert on it.
+      alertIfOverdue(server, householdId, overdueTasks(householdId));
+
       return {
         content: [{ type: "text", text: `Synced ${tasks.length} task(s) to the shared calendar.` }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "add_recurring_task",
+    {
+      description:
+        "Add a recurring weekly chore template — e.g. 'take out the trash every Tuesday' — instead of " +
+        "re-adding the same task every week. list_upcoming_tasks materializes the actual occurrences on the " +
+        "fly, within whatever window is requested, from this one template; no per-week row is ever stored.",
+      inputSchema: {
+        title: z.string().min(1).describe("Short description of the recurring task."),
+        daysOfWeek: z
+          .array(z.number().int().min(0).max(6))
+          .min(1)
+          .describe("Days of the week this recurs on: 0=Sunday, 1=Monday, ..., 6=Saturday."),
+        assignee: z
+          .string()
+          .optional()
+          .describe("Household member responsible. Omit to auto-assign fairly."),
+      },
+      annotations: {
+        title: "Add recurring task",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ title, daysOfWeek, assignee }) => {
+      const task = addRecurringTask(householdId, title, daysOfWeek, assignee);
+      await notify(RESOURCE_URIS.upcomingTasks);
+      await logEvent(server, "info", "Recurring task added", {
+        taskId: task.id,
+        title: task.title,
+        daysOfWeek: task.recurrence!.daysOfWeek,
+        assignee: task.assignee,
+      });
+      const dayNames = task.recurrence!.daysOfWeek.map((d) => WEEKDAY_NAMES[d]).join(", ");
+      return {
+        content: [
+          { type: "text", text: `Added recurring task "${task.title}" every ${dayNames}, assigned to ${task.assignee}.` },
+        ],
       };
     }
   );

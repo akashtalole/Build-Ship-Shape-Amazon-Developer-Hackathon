@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { addExpense, expensesThisWeek, getBudgetStatus, setBudget } from "../store.js";
 import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 import { logEvent } from "../logging.js";
+import { fireHouseholdAlert } from "../webhookDelivery.js";
 
 const budgetStatusShape = {
   category: z.string(),
@@ -45,6 +46,16 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn, househ
           spentThisWeek: status.spentThisWeek,
           budget: status.budget,
           overBy: status.spentThisWeek - status.budget,
+        });
+        fireHouseholdAlert(server, householdId, {
+          type: "budget_exceeded",
+          message: `${status.category} is ${(status.spentThisWeek - status.budget).toFixed(2)} over its weekly budget of ${status.budget}.`,
+          data: {
+            category: status.category,
+            spentThisWeek: status.spentThisWeek,
+            budget: status.budget,
+            overBy: status.spentThisWeek - status.budget,
+          },
         });
       }
 
