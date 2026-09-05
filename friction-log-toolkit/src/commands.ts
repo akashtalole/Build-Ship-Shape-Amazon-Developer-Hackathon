@@ -11,6 +11,9 @@ import {
 import { exportJson, exportMarkdown, exportText, type ExportFormat } from "./exporter.js";
 import { readConfig } from "./config.js";
 import { getGitInfo } from "./git.js";
+import { suggestTag } from "./autotag.js";
+import { fillTemplate, getTemplate } from "./templates.js";
+import type { DailyCount } from "./chart.js";
 import { DEFAULT_TAG, type LogEntry, type LogFile, type Tag } from "./types.js";
 
 /**
@@ -51,7 +54,27 @@ export interface AddOptions {
   tag?: Tag;
 }
 
-export function add(dir: string, note: string, options: AddOptions = {}): LogEntry {
+export interface AddResult {
+  entry: LogEntry;
+  /**
+   * True when neither `--tag` nor a configured `defaultTag` was given, and
+   * the tag actually used came from the auto-tag keyword heuristic
+   * (`autotag.ts`) instead of the hardcoded `"note"` fallback. Lets the CLI
+   * surface an explicit "here's the tag I picked for you" notice instead of
+   * silently guessing.
+   */
+  autoTagged: boolean;
+}
+
+/**
+ * Logs a new entry. Tag resolution order: an explicit `--tag`, then a
+ * configured `defaultTag` (`.friction-logrc.json`), then a best-effort
+ * keyword-based suggestion (see `autotag.ts` — e.g. "broke"/"error" suggests
+ * "friction", "worked"/"clean" suggests "worked-well", "wish"/"should"
+ * suggests "feature-request"), and only once none of those apply does it
+ * fall back to the hardcoded `"note"` default.
+ */
+export function add(dir: string, note: string, options: AddOptions = {}): AddResult {
   const trimmed = note.trim();
   if (trimmed.length === 0) {
     throw new Error('Cannot add an empty note. Usage: friction-log add "some note" [--tag <tag>]');
@@ -60,17 +83,18 @@ export function add(dir: string, note: string, options: AddOptions = {}): LogEnt
   const config = readConfig(dir);
   const explicitTag = options.tag && options.tag.trim().length > 0 ? options.tag.trim() : undefined;
   const configTag = config.defaultTag && config.defaultTag.trim().length > 0 ? config.defaultTag.trim() : undefined;
+  const suggested = explicitTag === undefined && configTag === undefined ? suggestTag(trimmed) : undefined;
   const git = getGitInfo(dir);
   const entry: LogEntry = {
     id: generateEntryId(),
     timestamp: new Date().toISOString(),
     note: trimmed,
-    tag: explicitTag ?? configTag ?? DEFAULT_TAG,
+    tag: explicitTag ?? configTag ?? suggested ?? DEFAULT_TAG,
     ...(git ? { gitBranch: git.branch, gitCommit: git.commit } : {}),
   };
   log.entries.push(entry);
   writeLog(dir, log);
-  return entry;
+  return { entry, autoTagged: suggested !== undefined };
 }
 
 /**
@@ -190,13 +214,16 @@ export interface StatsResult {
   byTag: Record<string, number>;
   dateRange: { from: string; to: string } | null;
   busiestDay: { date: string; count: number } | null;
+  /** Entry counts per calendar day (only days with >=1 entry), sorted chronologically — feeds the ASCII bar chart. */
+  dailyCounts: DailyCount[];
 }
 
 /**
- * Summary stats over the log: counts per tag, date range covered, and the
- * single busiest day. `since`/`until` narrow the entries considered before
- * any of the above is computed — e.g. `stats --since 2026-09-02` reports
- * only on "today's" session of a multi-day hackathon.
+ * Summary stats over the log: counts per tag, date range covered, the
+ * single busiest day, and a per-day breakdown (`dailyCounts`, rendered by
+ * the CLI as a small ASCII bar chart). `since`/`until` narrow the entries
+ * considered before any of the above is computed — e.g. `stats --since
+ * 2026-09-02` reports only on "today's" session of a multi-day hackathon.
  */
 export function stats(dir: string, options: DateRangeOptions = {}): StatsResult {
   const log = readLog(dir);
@@ -217,10 +244,14 @@ export function stats(dir: string, options: DateRangeOptions = {}): StatsResult 
     }
   }
 
+  const dailyCounts: DailyCount[] = Object.entries(dayCounts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, count]) => ({ date, count }));
+
   const dateRange =
     entries.length > 0 ? { from: entries[0].timestamp, to: entries[entries.length - 1].timestamp } : null;
 
-  return { totalEntries: entries.length, byTag, dateRange, busiestDay };
+  return { totalEntries: entries.length, byTag, dateRange, busiestDay, dailyCounts };
 }
 
 export interface EditOptions {
@@ -268,12 +299,48 @@ export interface MergeResult {
   total: number;
 }
 
+export interface MergeEntriesResult {
+  entries: LogEntry[];
+  added: number;
+  duplicates: number;
+}
+
+/**
+ * The id-based dedup logic shared by `merge` (two local files) and `sync`
+ * (a local log and a remote's entries): starts from `target`, appends every
+ * entry from `source` whose id isn't already present, and returns the
+ * combined list re-sorted chronologically by timestamp. Pure — takes and
+ * returns plain entry arrays, no file I/O — so both callers (and anything
+ * standing in for a remote in a test) can reuse exactly this logic instead
+ * of re-implementing "skip ids already seen" themselves.
+ */
+export function mergeEntries(target: LogEntry[], source: LogEntry[]): MergeEntriesResult {
+  const seen = new Set(target.map((e) => e.id));
+  const merged = target.slice();
+  let added = 0;
+  let duplicates = 0;
+
+  for (const entry of source) {
+    if (seen.has(entry.id)) {
+      duplicates++;
+      continue;
+    }
+    merged.push(entry);
+    seen.add(entry.id);
+    added++;
+  }
+
+  merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  return { entries: merged, added, duplicates };
+}
+
 /**
  * Merges entries from `sourcePath` (any `.friction-log.json`-shaped file)
- * into `targetPath`, de-duplicating by entry id — so running the same merge
- * twice, or merging two logs that both descend from a shared entry, doesn't
- * double up entries. Entries are kept in chronological (timestamp) order
- * after merging, regardless of which file they came from.
+ * into `targetPath`, de-duplicating by entry id (via `mergeEntries`) — so
+ * running the same merge twice, or merging two logs that both descend from
+ * a shared entry, doesn't double up entries. Entries are kept in
+ * chronological (timestamp) order after merging, regardless of which file
+ * they came from.
  */
 export function merge(sourcePath: string, targetPath: string): MergeResult {
   if (!existsSync(sourcePath)) {
@@ -289,22 +356,27 @@ export function merge(sourcePath: string, targetPath: string): MergeResult {
   const source = readLogFile(sourcePath);
   const target = readLogFile(targetPath);
 
-  const seen = new Set(target.entries.map((e) => e.id));
-  let added = 0;
-  let duplicates = 0;
+  const { entries, added, duplicates } = mergeEntries(target.entries, source.entries);
+  writeLogFile(targetPath, { ...target, entries });
 
-  for (const entry of source.entries) {
-    if (seen.has(entry.id)) {
-      duplicates++;
-      continue;
-    }
-    target.entries.push(entry);
-    seen.add(entry.id);
-    added++;
-  }
+  return { added, duplicates, total: entries.length };
+}
 
-  target.entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  writeLogFile(targetPath, target);
-
-  return { added, duplicates, total: target.entries.length };
+/**
+ * Fills in a saved template's `{placeholder}` tokens with `values` and logs
+ * the result as a normal entry via `add` — so it gets the same id
+ * generation, git-aware tagging, and auto-tag fallback as any other `add`.
+ * Tag resolution: `tagOverride` (the CLI's `--tag`) wins if given, else the
+ * template's own saved tag, else `add`'s normal fallback chain (configured
+ * `defaultTag`, then the auto-tag heuristic, then `"note"`).
+ */
+export function useTemplate(
+  dir: string,
+  name: string,
+  values: Record<string, string>,
+  tagOverride?: string
+): AddResult {
+  const template = getTemplate(dir, name);
+  const filledNote = fillTemplate(template.text, values);
+  return add(dir, filledNote, { tag: tagOverride ?? template.tag });
 }

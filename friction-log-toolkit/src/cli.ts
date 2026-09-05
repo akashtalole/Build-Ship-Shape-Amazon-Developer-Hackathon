@@ -12,11 +12,15 @@ import {
   removeEntry,
   search,
   stats,
+  useTemplate,
 } from "./commands.js";
+import { addTemplate, listTemplates, TemplateNotFoundError } from "./templates.js";
 import { formatTimestamp } from "./exporter.js";
 import type { ExportFormat } from "./exporter.js";
+import { renderBarChart } from "./chart.js";
 import { createFrictionLogServer } from "./server.js";
 import { runWatch } from "./watch.js";
+import { pullSync, pushSync } from "./sync.js";
 
 const USAGE = `friction-log — capture friction points in the moment, export them as a Markdown report.
 
@@ -30,6 +34,10 @@ Usage:
   friction-log edit <id> [--note <note>] [--tag <tag>]
   friction-log remove <id>
   friction-log merge <otherFile> --into <targetFile>
+  friction-log sync <url> [--push|--pull]
+  friction-log template add <name> "<text with {placeholders}>" [--tag <tag>]
+  friction-log template use <name> [--set key=value ...] [--tag <tag>]
+  friction-log template list
   friction-log serve [--port <port>]
   friction-log watch
 
@@ -66,6 +74,28 @@ all entries, re-read from disk on every request, with a tag filter form.
 End a line with "#tagname" to tag it inline; a blank line, "exit", or "quit"
 stops the loop.
 
+Auto-tag suggestion: "add"/"watch" with no explicit tag (and no configured
+"defaultTag") suggest one from keywords in the note text — "bug"/"broke"/
+"error"/"crash"/"fail"/"confusing"/"stuck" suggest "friction"; "worked"/
+"nice"/"clean"/"smooth"/"great"/"easy"/"painless" suggest "worked-well";
+"should"/"wish"/"would be nice"/"could use"/"want" suggest "feature-request".
+"add" applies the suggestion automatically and says so in its output;
+"watch" prompts for confirmation (Enter accepts it, or type a different
+tag). No match falls back to "note", exactly as before this feature existed.
+
+"sync <url> [--push|--pull]" exchanges entries with a remote over a simple
+JSON HTTP contract (GET returns "{entries: [...]}", POST accepts the same
+shape and returns "{added, duplicates, total}") using the same id-based
+dedup as "merge", so it's safe to run repeatedly. Exactly one of --push
+(send local entries) or --pull (fetch and merge remote entries into the
+local log) must be given.
+
+"template add <name> \"<text>\"" saves a reusable note with {placeholder}
+tokens (e.g. "Docs for {feature} were unclear"); "template use <name>
+--set key=value ..." fills them in and logs the result like a normal "add",
+using the template's own --tag (if it has one) unless overridden by --tag
+on "use"; "template list" shows what's saved.
+
 Examples:
   friction-log init
   friction-log add "Alexa+ skill schema validation errors had no line numbers" --tag friction
@@ -80,24 +110,47 @@ Examples:
   friction-log edit a1b2c3d4 --tag worked-well
   friction-log remove a1b2c3d4
   friction-log merge ../teammate/.friction-log.json --into .friction-log.json
+  friction-log sync https://example.com/friction-log --push
+  friction-log sync https://example.com/friction-log --pull
+  friction-log template add flaky-endpoint "{endpoint} returned {code} with no explanation" --tag friction
+  friction-log template use flaky-endpoint --set endpoint=/v1/token --set code=500
+  friction-log template list
   friction-log serve --port 4848
   friction-log watch
 `;
 
-/** Minimal, dependency-free argv parser: pulls out --flags (with values) and leaves positional args. */
-function parseArgs(argv: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
+/**
+ * Minimal, dependency-free argv parser: pulls out --flags (with values) and
+ * leaves positional args. A flag repeated with string values (only
+ * `--set key=value` needs this, for `template use`) collects into a
+ * `string[]` instead of the later occurrence silently clobbering the
+ * earlier one; every other flag keeps its original single-value behavior
+ * since nothing else in this CLI is ever passed more than once.
+ */
+function parseArgs(argv: string[]): { positional: string[]; flags: Record<string, string | boolean | string[]> } {
   const positional: string[] = [];
-  const flags: Record<string, string | boolean> = {};
+  const flags: Record<string, string | boolean | string[]> = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
       const next = argv[i + 1];
+      let value: string | boolean;
       if (next !== undefined && !next.startsWith("--")) {
-        flags[key] = next;
+        value = next;
         i++;
       } else {
-        flags[key] = true;
+        value = true;
+      }
+      const existing = flags[key];
+      if (existing === undefined) {
+        flags[key] = value;
+      } else if (Array.isArray(existing) && typeof value === "string") {
+        existing.push(value);
+      } else if (typeof existing === "string" && typeof value === "string") {
+        flags[key] = [existing, value];
+      } else {
+        flags[key] = value;
       }
     } else {
       positional.push(arg);
@@ -114,6 +167,20 @@ function fail(message: string): never {
 }
 
 const VALID_FORMATS: ExportFormat[] = ["json", "md", "txt"];
+
+/**
+ * Renders the "✓ Logged [...] ..." confirmation shared by `add` and
+ * `template use`. When the tag came from the auto-tag heuristic (no
+ * explicit `--tag`, no configured `defaultTag`, but a keyword matched),
+ * says so explicitly — a non-interactive `add` applies the suggestion
+ * automatically, so it must never look like a silent surprise.
+ */
+function formatAddConfirmation(result: { entry: { tag: string; note: string; gitBranch?: string; gitCommit?: string }; autoTagged: boolean }): string {
+  const { entry, autoTagged } = result;
+  const gitSuffix = entry.gitBranch ? ` (${entry.gitBranch}@${entry.gitCommit})` : "";
+  const autoSuffix = autoTagged ? ` (auto-tagged "${entry.tag}" based on the note text — override any time with --tag)` : "";
+  return `✓ Logged [${entry.tag}] ${entry.note}${gitSuffix}${autoSuffix}`;
+}
 
 export async function run(argv: string[], cwd: string = process.cwd()): Promise<void> {
   const [command, ...rest] = argv;
@@ -133,9 +200,8 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
           fail('Missing note. Usage: friction-log add "<note>" [--tag <tag>]');
         }
         const tag = typeof flags.tag === "string" ? flags.tag : undefined;
-        const entry = add(cwd, note, { tag });
-        const gitSuffix = entry.gitBranch ? ` (${entry.gitBranch}@${entry.gitCommit})` : "";
-        console.log(`✓ Logged [${entry.tag}] ${entry.note}${gitSuffix}`);
+        const result = add(cwd, note, { tag });
+        console.log(formatAddConfirmation(result));
         break;
       }
 
@@ -229,6 +295,12 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
             })`
           );
         }
+        if (result.dailyCounts.length > 0) {
+          console.log("Daily activity:");
+          for (const line of renderBarChart(result.dailyCounts)) {
+            console.log(`  ${line}`);
+          }
+        }
         break;
       }
 
@@ -272,6 +344,92 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
         console.log(
           `✓ Merged ${sourcePath} into ${targetPath}: +${result.added} new, ${result.duplicates} duplicate(s) skipped, ${result.total} total.`
         );
+        break;
+      }
+
+      case "sync": {
+        const url = positional[0];
+        if (!url) {
+          fail("Missing URL. Usage: friction-log sync <url> [--push|--pull]");
+        }
+        if (!logExists(cwd)) {
+          throw new LogNotFoundError(cwd);
+        }
+        const wantsPush = flags.push === true;
+        const wantsPull = flags.pull === true;
+        if (wantsPush === wantsPull) {
+          fail("Specify exactly one of --push or --pull. Usage: friction-log sync <url> [--push|--pull]");
+        }
+        if (wantsPush) {
+          const result = await pushSync(cwd, url);
+          console.log(
+            `✓ Pushed to ${url}: +${result.added} new, ${result.duplicates} duplicate(s) skipped, ${result.total} total on remote.`
+          );
+        } else {
+          const result = await pullSync(cwd, url);
+          console.log(
+            `✓ Pulled from ${url}: +${result.added} new, ${result.duplicates} duplicate(s) skipped, ${result.total} total locally.`
+          );
+        }
+        break;
+      }
+
+      case "template": {
+        const sub = positional[0];
+        switch (sub) {
+          case "add": {
+            const name = positional[1];
+            const text = positional[2];
+            if (!name || !text) {
+              fail(
+                'Missing name or text. Usage: friction-log template add <name> "<text with {placeholders}>" [--tag <tag>]'
+              );
+            }
+            const tag = typeof flags.tag === "string" ? flags.tag : undefined;
+            const template = addTemplate(cwd, name, text, tag);
+            const tagSuffix = template.tag ? ` (tag: ${template.tag})` : "";
+            console.log(`✓ Saved template "${template.name}"${tagSuffix}: ${template.text}`);
+            break;
+          }
+
+          case "use": {
+            const name = positional[1];
+            if (!name) {
+              fail("Missing template name. Usage: friction-log template use <name> [--set key=value ...] [--tag <tag>]");
+            }
+            const setRaw = flags.set;
+            const setValues = Array.isArray(setRaw) ? setRaw : typeof setRaw === "string" ? [setRaw] : [];
+            const values: Record<string, string> = {};
+            for (const raw of setValues) {
+              const eqIndex = raw.indexOf("=");
+              if (eqIndex === -1) {
+                fail(`Invalid --set "${raw}". Expected key=value.`);
+              }
+              values[raw.slice(0, eqIndex)] = raw.slice(eqIndex + 1);
+            }
+            const tagOverride = typeof flags.tag === "string" ? flags.tag : undefined;
+            const result = useTemplate(cwd, name, values, tagOverride);
+            console.log(formatAddConfirmation(result));
+            break;
+          }
+
+          case "list": {
+            const templates = listTemplates(cwd);
+            if (templates.length === 0) {
+              console.log("No templates saved yet.");
+              break;
+            }
+            for (const template of templates) {
+              const tagSuffix = template.tag ? ` [${template.tag}]` : "";
+              console.log(`${template.name}${tagSuffix}: ${template.text}`);
+            }
+            break;
+          }
+
+          default: {
+            fail(`Unknown template subcommand "${sub}". Expected "add", "use", or "list".`);
+          }
+        }
         break;
       }
 
@@ -330,7 +488,8 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
     if (
       err instanceof LogNotFoundError ||
       err instanceof LogAlreadyExistsError ||
-      err instanceof EntryNotFoundError
+      err instanceof EntryNotFoundError ||
+      err instanceof TemplateNotFoundError
     ) {
       fail(err.message);
     }
