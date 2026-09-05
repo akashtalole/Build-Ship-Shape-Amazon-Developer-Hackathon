@@ -2,9 +2,19 @@ import { randomUUID } from "node:crypto";
 import type { SidecarClassifier } from "./sidecarClassifier.js";
 import type { FoundationModelProvider } from "./foundationModel.js";
 import { inferLabelFromFoundationText } from "./foundationModel.js";
-import type { CircuitState, MetricsSnapshot, RouteResult, SidecarResult, CostEstimate, FoundationResult } from "./types.js";
+import type {
+  CircuitState,
+  MetricsSnapshot,
+  RouteResult,
+  SidecarResult,
+  CostEstimate,
+  FoundationResult,
+  CallerBudgetSnapshot,
+  CanaryStatus,
+} from "./types.js";
 import { BudgetTracker, type BudgetStatus } from "./budgetTracker.js";
 import { loadMetricsState, saveMetricsState, type PersistedMetricsState } from "./metricsPersistence.js";
+import { AlertWebhookDispatcher, type AlertWebhookRegistration, type AlertWebhookStatus } from "./alertWebhooks.js";
 
 /** Confidence at/above which the sidecar's own answer is trusted, unless the caller overrides it per request. */
 export const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
@@ -67,6 +77,17 @@ export interface RouteOptions {
    * latency. See `flushShadowEvaluations()` for waiting on these in tests.
    */
   shadowMode?: boolean;
+  /**
+   * Identifies which caller this request is on behalf of, for per-caller
+   * cost-budget enforcement (round 4) — keyed the same way as the HTTP
+   * layer's per-caller rate limiter (`X-Caller-Id`, defaulting to
+   * `"anonymous"` when a caller doesn't supply one; see server.ts). A caller
+   * with no explicit budget override configured (via `setBudget(limit,
+   * periodMs, callerId)`) falls back to the shared default budget, so
+   * omitting this entirely (the pre-round-4 call shape) is unchanged: every
+   * request is checked against that same shared default, exactly as before.
+   */
+  callerId?: string;
 }
 
 export interface ModelRouterOptions {
@@ -94,6 +115,8 @@ export interface ModelRouterOptions {
   metricsPersistPath?: string;
   /** Auto-save cadence: persist after this many `route()` calls. Default 20. Ignored when `metricsPersistPath` isn't set. */
   persistEveryNRequests?: number;
+  /** Source of randomness for canary/A-B traffic-split decisions (round 4). Overridable purely for deterministic tests — production code should never need to set this. Default `Math.random`. */
+  random?: () => number;
 }
 
 interface CacheEntry {
@@ -123,8 +146,18 @@ interface FeedbackEntry {
  *      confidence scores.
  *   6. Cost-budget enforcement: once cumulative spend on paid tiers (reviewer
  *      + foundation) hits a configured per-period limit, further escalation
- *      is auto-throttled back to the sidecar's best-effort answer.
+ *      is auto-throttled back to the sidecar's best-effort answer. Scoped
+ *      per caller (round 4), with a shared default for callers who never
+ *      configure their own.
  *   7. Demo-grade file persistence of cumulative metrics across restarts.
+ *   8. Canary/A-B sidecar routing (round 4): a second "candidate" sidecar
+ *      classifier can be registered alongside the primary one, with a
+ *      configurable share of traffic actually served by its answer instead
+ *      — while every request evaluates both, on the same input, purely to
+ *      track how often they'd have disagreed.
+ *   9. Outbound alert webhooks (round 4): a registered callback URL gets an
+ *      HMAC-SHA256-signed POST whenever a cost budget is exceeded or the
+ *      circuit breaker opens, so an operator doesn't have to poll `/metrics`.
  */
 export class ModelRouter {
   private sidecarPathRequests = 0;
@@ -162,7 +195,21 @@ export class ModelRouter {
   private readonly reviewerConfidenceThreshold: number;
 
   // --- Cost-budget enforcement ---
+  /** The shared/default budget — exactly what pre-round-4 `setBudget()`/`getBudgetStatus()`/`clearBudget()` (no `callerId`) operate on, and what any caller lacking their own explicit override falls back to. See `budgetFor()`. */
   private readonly budget: BudgetTracker;
+  /** Explicit per-caller overrides (round 4), keyed by the same caller id the HTTP layer identifies callers by (`X-Caller-Id`). A caller not in this map isn't unbudgeted — it shares `this.budget` (the default) instead. */
+  private readonly callerBudgets = new Map<string, BudgetTracker>();
+
+  // --- Canary / A-B sidecar routing (round 4) ---
+  private candidateSidecar?: SidecarClassifier;
+  private canaryPercentage = 0; // 0..1; 0 when no canary is registered
+  private canaryEvaluations = 0;
+  private canaryDisagreements = 0;
+  private canaryServedRequests = 0;
+  private readonly random: () => number;
+
+  // --- Outbound alert webhooks (round 4) ---
+  private readonly alertWebhooks = new AlertWebhookDispatcher();
 
   // --- Persistent metrics ---
   private readonly metricsPersistPath?: string;
@@ -184,6 +231,7 @@ export class ModelRouter {
     this.reviewerConfidenceThreshold = options.reviewerConfidenceThreshold ?? DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD;
 
     this.budget = new BudgetTracker(this.now);
+    this.random = options.random ?? Math.random;
 
     this.metricsPersistPath = options.metricsPersistPath;
     this.persistEveryNRequests = options.persistEveryNRequests ?? DEFAULT_PERSIST_EVERY_N_REQUESTS;
@@ -226,6 +274,8 @@ export class ModelRouter {
     const options: RouteOptions = typeof thresholdOrOptions === "number" ? { threshold: thresholdOrOptions } : thresholdOrOptions ?? {};
     const threshold = options.threshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
     const shadowMode = options.shadowMode ?? this.defaultShadowMode;
+    const callerId = options.callerId;
+    const budget = this.budgetFor(callerId);
     this.lastThresholdUsed = threshold;
 
     const now = this.now();
@@ -251,7 +301,7 @@ export class ModelRouter {
     }
     this.cacheMisses += 1;
 
-    const sidecarResult = await this.sidecar.classify(input);
+    const sidecarResult = await this.resolveSidecarResult(input);
     const sidecarRecord: SidecarResult & CostEstimate = {
       ...sidecarResult,
       costUsd: SIDECAR_COST_USD,
@@ -282,16 +332,19 @@ export class ModelRouter {
         // fail) the response we're about to return.
         this.runShadowEvaluation(input, sidecarResult);
       }
-    } else if (this.budget.isExceeded()) {
+    } else if (budget.isExceeded()) {
       // Auto-throttle: escalation is needed, but the configured cost budget
-      // for this period is already exhausted. Stop paying for *any* tier
-      // beyond the sidecar and return its best-effort answer instead.
+      // for this period (this caller's own override, or the shared default
+      // if they don't have one — see `budgetFor()`) is already exhausted.
+      // Stop paying for *any* tier beyond the sidecar and return its
+      // best-effort answer instead.
       this.budgetThrottledRequests += 1;
-      cacheable = this.buildBudgetCappedResult(input, threshold, sidecarRecord, signalDescription, SIDECAR_COST_USD, SIDECAR_LATENCY_MS);
+      this.fireBudgetExceededAlert(callerId, budget);
+      cacheable = this.buildBudgetCappedResult(input, threshold, sidecarRecord, signalDescription, SIDECAR_COST_USD, SIDECAR_LATENCY_MS, budget);
     } else if (this.reviewerProvider && sidecarResult.confidence >= this.reviewerConfidenceThreshold) {
-      cacheable = await this.runReviewerTier(input, threshold, sidecarResult, sidecarRecord, signalDescription, now);
+      cacheable = await this.runReviewerTier(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, budget, callerId);
     } else {
-      cacheable = await this.escalateToFoundation(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, {
+      cacheable = await this.escalateToFoundation(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, budget, {
         priorCostUsd: SIDECAR_COST_USD,
         priorLatencyMs: SIDECAR_LATENCY_MS,
       });
@@ -319,6 +372,65 @@ export class ModelRouter {
     return `matched signal(s): ${matches.map((m) => `"${m}"`).join(", ")}`;
   }
 
+  // --- Canary / A-B sidecar routing internals ---
+
+  /**
+   * Resolves the sidecar result that the rest of `route()` acts on for this
+   * request. With no candidate registered, this is exactly the pre-round-4
+   * behavior: the primary's own answer, nothing else. With a candidate
+   * registered, *both* are evaluated concurrently on the same input — purely
+   * to track agreement (mirroring the spirit of shadow evaluation, but
+   * comparing two sidecar configurations against each other instead of
+   * sidecar-vs-foundation) — and then one of the two is chosen to actually
+   * serve the request, weighted by `canaryPercentage`. Unlike shadow
+   * evaluation, this is awaited (not fire-and-forget): the whole point of a
+   * *canary* is that its answer can actually reach real traffic, so the
+   * comparison has to happen before routing continues, not after the
+   * response is already on its way out. Both mock sidecar calls are cheap
+   * enough (~45ms simulated, near-instant in practice) that awaiting them
+   * concurrently via `Promise.all` doesn't meaningfully add latency.
+   */
+  private async resolveSidecarResult(input: string): Promise<SidecarResult> {
+    if (!this.candidateSidecar) {
+      return this.sidecar.classify(input);
+    }
+
+    const [primaryResult, candidateResult] = await Promise.all([this.sidecar.classify(input), this.candidateSidecar.classify(input)]);
+    this.canaryEvaluations += 1;
+    if (primaryResult.label !== candidateResult.label) {
+      this.canaryDisagreements += 1;
+    }
+
+    const useCandidate = this.random() < this.canaryPercentage;
+    if (useCandidate) this.canaryServedRequests += 1;
+    return useCandidate ? candidateResult : primaryResult;
+  }
+
+  /** Registers (or replaces) a candidate sidecar classifier and the traffic share actually served by its answer. `percentage` is a fraction in [0, 1] — 0.3 means "the candidate serves ~30% of requests," not "30 requests." */
+  setCanary(percentage: number, candidate: SidecarClassifier): void {
+    this.candidateSidecar = candidate;
+    this.canaryPercentage = percentage;
+  }
+
+  /** Unregisters the candidate sidecar entirely — every request goes back to being evaluated by the primary alone, with no comparison overhead. Cumulative canary counters (evaluations/disagreements/served) are left as-is, matching how `clearBudget()` doesn't erase `budgetThrottledRequests`. */
+  clearCanary(): void {
+    this.candidateSidecar = undefined;
+    this.canaryPercentage = 0;
+  }
+
+  /** Current canary configuration and comparison stats. `enabled: false` when no candidate is registered. */
+  getCanaryStatus(): CanaryStatus {
+    return {
+      enabled: this.candidateSidecar !== undefined,
+      percentage: this.canaryPercentage,
+      evaluations: this.canaryEvaluations,
+      disagreements: this.canaryDisagreements,
+      disagreementRate: this.canaryEvaluations === 0 ? 0 : this.canaryDisagreements / this.canaryEvaluations,
+      servedRequests: this.canaryServedRequests,
+      servedRate: this.canaryEvaluations === 0 ? 0 : this.canaryServedRequests / this.canaryEvaluations,
+    };
+  }
+
   // --- Three-tier cascade internals ---
 
   private async runReviewerTier(
@@ -327,7 +439,9 @@ export class ModelRouter {
     sidecarResult: SidecarResult,
     sidecarRecord: SidecarResult & CostEstimate,
     signalDescription: string,
-    now: number
+    now: number,
+    budget: BudgetTracker,
+    callerId: string | undefined
   ): Promise<Omit<RouteResult, "requestId" | "cacheHit">> {
     const prompt = this.promptFor(input);
     let reviewerRecord: (FoundationResult & CostEstimate) | undefined;
@@ -351,7 +465,7 @@ export class ModelRouter {
     if (!reviewerFailed && reviewerAgrees) {
       // Mid tier resolves it: the cheaper model confirmed the sidecar's label.
       this.reviewerPathRequests += 1;
-      this.budget.record(REVIEWER_COST_USD);
+      budget.record(REVIEWER_COST_USD);
       return {
         input,
         threshold,
@@ -371,21 +485,22 @@ export class ModelRouter {
 
     // The reviewer is also unsure (disagreed) or its call failed outright —
     // escalate once more to the full foundation model.
-    if (!reviewerFailed) this.budget.record(REVIEWER_COST_USD);
+    if (!reviewerFailed) budget.record(REVIEWER_COST_USD);
     const priorCostUsd = SIDECAR_COST_USD + (reviewerFailed ? 0 : REVIEWER_COST_USD);
     const priorLatencyMs = SIDECAR_LATENCY_MS + (reviewerFailed ? 0 : REVIEWER_LATENCY_MS);
     const reviewerNote = reviewerFailed
       ? "the reviewer model call itself failed, so the router escalated straight to the full foundation model"
       : "the reviewer model's own guess did not confirm the sidecar's label, so the router escalated to the full foundation model for a fuller read";
 
-    if (this.budget.isExceeded()) {
+    if (budget.isExceeded()) {
       // The reviewer's own cost (if it ran) just used up the remaining
       // budget — stop here rather than also attempting the foundation call.
       this.budgetThrottledRequests += 1;
-      return this.buildBudgetCappedResult(input, threshold, sidecarRecord, signalDescription, priorCostUsd, priorLatencyMs, reviewerRecord, reviewerNote);
+      this.fireBudgetExceededAlert(callerId, budget);
+      return this.buildBudgetCappedResult(input, threshold, sidecarRecord, signalDescription, priorCostUsd, priorLatencyMs, budget, reviewerRecord, reviewerNote);
     }
 
-    return this.escalateToFoundation(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, {
+    return this.escalateToFoundation(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, budget, {
       priorCostUsd,
       priorLatencyMs,
       reviewerRecord,
@@ -395,19 +510,72 @@ export class ModelRouter {
 
   // --- Cost-budget internals ---
 
-  /** Configures (or replaces) the per-period spend cap. See `budgetTracker.ts` for why this is a fixed-window dollar cap. */
-  setBudget(limitUsd: number, periodMs: number): void {
-    this.budget.configure(limitUsd, periodMs);
+  /**
+   * Resolves which `BudgetTracker` a given caller's request is checked
+   * against (round 4): that caller's own explicit override if they have one,
+   * otherwise the shared default — the same tracker pre-round-4 code always
+   * used. Calling `route()` with no `callerId` at all (the pre-round-4 call
+   * shape) always resolves to the default, so existing callers of this
+   * library method see no behavior change.
+   */
+  private budgetFor(callerId?: string): BudgetTracker {
+    if (callerId) {
+      const tracker = this.callerBudgets.get(callerId);
+      if (tracker) return tracker;
+    }
+    return this.budget;
   }
 
-  /** Disables budget enforcement — escalations are never throttled until `setBudget` is called again. */
-  clearBudget(): void {
-    this.budget.clear();
+  /**
+   * Configures (or replaces) a per-period spend cap. See `budgetTracker.ts`
+   * for why this is a fixed-window dollar cap. With no `callerId`, this
+   * configures the shared default budget (unchanged pre-round-4 behavior —
+   * also what any caller lacking their own override falls back to). With a
+   * `callerId`, this configures that specific caller's own independent
+   * budget instead, tracked and enforced completely separately from every
+   * other caller's.
+   */
+  setBudget(limitUsd: number, periodMs: number, callerId?: string): void {
+    if (callerId) {
+      let tracker = this.callerBudgets.get(callerId);
+      if (!tracker) {
+        tracker = new BudgetTracker(this.now);
+        this.callerBudgets.set(callerId, tracker);
+      }
+      tracker.configure(limitUsd, periodMs);
+    } else {
+      this.budget.configure(limitUsd, periodMs);
+    }
   }
 
-  /** Current spend vs. limit and time remaining in the period. `enabled: false` when no budget has been configured. */
-  getBudgetStatus(): BudgetStatus {
-    return this.budget.status();
+  /** Disables budget enforcement for the shared default (no `callerId`), or removes one caller's explicit override — reverting *that caller* to the shared default rather than to "unbudgeted," unless the default itself is also unconfigured. */
+  clearBudget(callerId?: string): void {
+    if (callerId) {
+      this.callerBudgets.delete(callerId);
+    } else {
+      this.budget.clear();
+    }
+  }
+
+  /** Current spend vs. limit and time remaining in the period, for the shared default (no `callerId`) or for one specific caller (falls back to the shared default's status if that caller has no explicit override of their own). `enabled: false` when the resolved budget hasn't been configured. */
+  getBudgetStatus(callerId?: string): BudgetStatus {
+    return this.budgetFor(callerId).status();
+  }
+
+  /** Snapshot of every caller with an *explicit* budget override currently configured (for `GET /metrics`/`GET /metrics/prometheus`). Callers relying on the shared default aren't listed — see `getBudgetStatus()`. */
+  private listCallerBudgets(): CallerBudgetSnapshot[] {
+    return Array.from(this.callerBudgets.entries()).map(([callerId, tracker]) => ({ callerId, ...tracker.status() }));
+  }
+
+  /** Fires a `budget_exceeded` alert webhook (a no-op when none is registered — see `alertWebhooks.ts`). Called every time a request is actually throttled, not just on the first transition into "exceeded" — see FRICTION_LOG.md for why that's a deliberate, documented simplification rather than an oversight. */
+  private fireBudgetExceededAlert(callerId: string | undefined, budget: BudgetTracker): void {
+    const status = budget.status();
+    this.alertWebhooks.fire("budget_exceeded", {
+      callerId: callerId ?? "anonymous",
+      limitUsd: status.limitUsd,
+      spendUsd: status.spendUsd,
+      periodMs: status.periodMs,
+    });
   }
 
   private buildBudgetCappedResult(
@@ -417,10 +585,11 @@ export class ModelRouter {
     signalDescription: string,
     priorCostUsd: number,
     priorLatencyMs: number,
+    budget: BudgetTracker,
     reviewerRecord?: FoundationResult & CostEstimate,
     reviewerNote?: string
   ): Omit<RouteResult, "requestId" | "cacheHit"> {
-    const status = this.budget.status();
+    const status = budget.status();
     return {
       input,
       threshold,
@@ -438,6 +607,28 @@ export class ModelRouter {
       totalCostUsd: priorCostUsd,
       totalLatencyMs: priorLatencyMs,
     };
+  }
+
+  // --- Outbound alert webhooks (round 4) ---
+
+  /** Registers (or replaces) the callback URL that gets an HMAC-SHA256-signed POST whenever a cost budget is exceeded or the circuit breaker opens. Returns the freshly-generated signing secret — hand it back to the caller exactly once, the same convention as `ring-porchpass`'s outbound webhook registration. */
+  registerAlertWebhook(url: string): AlertWebhookRegistration {
+    return this.alertWebhooks.register(url);
+  }
+
+  /** Unregisters the alert webhook — subsequent budget/circuit-breaker events fire no deliveries until a new one is registered. */
+  clearAlertWebhook(): void {
+    this.alertWebhooks.clear();
+  }
+
+  /** Current registration (URL only, never the secret) and delivery history. */
+  getAlertWebhookStatus(): AlertWebhookStatus {
+    return this.alertWebhooks.getStatus();
+  }
+
+  /** Waits for every alert delivery fired so far to settle. Mirrors `flushShadowEvaluations()` — alerts are fire-and-forget from `route()`'s perspective, so tests (and anything else that wants delivery to have actually completed) need this instead of guessing with a sleep. */
+  async flushAlertWebhooks(): Promise<void> {
+    await this.alertWebhooks.flush();
   }
 
   // --- Circuit breaker / foundation-escalation internals ---
@@ -462,9 +653,20 @@ export class ModelRouter {
     // A half-open trial failing re-opens the circuit immediately, regardless
     // of the consecutive-failure threshold — the trial existed precisely to
     // test whether the provider had recovered, and it hasn't.
+    const wasAlreadyOpen = this.circuitState === "open";
     if (this.circuitState === "half-open" || this.consecutiveFoundationFailures >= this.circuitFailureThreshold) {
       this.circuitState = "open";
       this.circuitOpenedAt = now;
+      if (!wasAlreadyOpen) {
+        // Fire only on the transition into "open," not on every failure
+        // while it's already open — an operator needs to know the breaker
+        // just tripped, not get re-alerted on every request it's already
+        // fast-failing.
+        this.alertWebhooks.fire("circuit_open", {
+          consecutiveFailures: this.consecutiveFoundationFailures,
+          cooldownMs: this.circuitCooldownMs,
+        });
+      }
     }
   }
 
@@ -476,6 +678,7 @@ export class ModelRouter {
     sidecarRecord: SidecarResult & CostEstimate,
     signalDescription: string,
     now: number,
+    budget: BudgetTracker,
     prior: { priorCostUsd: number; priorLatencyMs: number; reviewerRecord?: FoundationResult & CostEstimate; reviewerNote?: string }
   ): Promise<Omit<RouteResult, "requestId" | "cacheHit">> {
     const prompt = this.promptFor(input);
@@ -500,7 +703,7 @@ export class ModelRouter {
       const foundationResult = await this.foundation.invoke(prompt);
       this.onFoundationSuccess();
       this.foundationPathRequests += 1;
-      this.budget.record(FOUNDATION_COST_USD);
+      budget.record(FOUNDATION_COST_USD);
       const foundationRecord = { ...foundationResult, costUsd: FOUNDATION_COST_USD, latencyMs: FOUNDATION_LATENCY_MS };
       return {
         input,
@@ -741,10 +944,17 @@ export class ModelRouter {
       reviewerPathRequests: this.reviewerPathRequests,
       reviewerPathRate: totalRequests === 0 ? 0 : this.reviewerPathRequests / totalRequests,
       budgetThrottledRequests: this.budgetThrottledRequests,
+      callerBudgets: this.listCallerBudgets(),
+      canaryEnabled: this.candidateSidecar !== undefined,
+      canaryPercentage: this.canaryPercentage,
+      canaryEvaluations: this.canaryEvaluations,
+      canaryDisagreements: this.canaryDisagreements,
+      canaryDisagreementRate: this.canaryEvaluations === 0 ? 0 : this.canaryDisagreements / this.canaryEvaluations,
+      canaryServedRequests: this.canaryServedRequests,
     };
   }
 
-  /** Resets cumulative metrics (and the cache/circuit-breaker/feedback/budget state) to a fresh start. Mainly useful for tests. */
+  /** Resets cumulative metrics (and the cache/circuit-breaker/feedback/budget/canary state) to a fresh start. Mainly useful for tests. Alert-webhook registration is left untouched — it's configuration, not a cumulative metric, the same way the reviewer/foundation providers themselves aren't reset either. */
   resetMetrics(): void {
     this.sidecarPathRequests = 0;
     this.reviewerPathRequests = 0;
@@ -764,6 +974,12 @@ export class ModelRouter {
     this.feedbackLog.clear();
     this.lastThresholdUsed = DEFAULT_CONFIDENCE_THRESHOLD;
     this.budget.clear();
+    this.callerBudgets.clear();
+    this.candidateSidecar = undefined;
+    this.canaryPercentage = 0;
+    this.canaryEvaluations = 0;
+    this.canaryDisagreements = 0;
+    this.canaryServedRequests = 0;
     this.requestsSincePersist = 0;
   }
 

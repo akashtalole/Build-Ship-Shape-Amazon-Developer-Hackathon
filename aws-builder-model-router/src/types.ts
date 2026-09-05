@@ -92,6 +92,37 @@ export interface RouteResult {
 /** State of the router's foundation-model circuit breaker. */
 export type CircuitState = "closed" | "open" | "half-open";
 
+/** One caller's cost-budget snapshot, as returned in `MetricsSnapshot.callerBudgets` — the status shape from `budgetTracker.ts`'s `BudgetTracker.status()`, tagged with which caller it belongs to. Only callers with an *explicit* per-caller override (set via `setBudget(limit, periodMs, callerId)`) appear here; a caller without one shares the same status as `GET /budget`'s global default instead — see router.ts's `budgetFor()`. */
+export interface CallerBudgetSnapshot {
+  callerId: string;
+  enabled: boolean;
+  limitUsd: number | null;
+  periodMs: number | null;
+  spendUsd: number;
+  remainingUsd: number | null;
+  exceeded: boolean;
+  periodStartedAt: number | null;
+  periodEndsAt: number | null;
+  msRemainingInPeriod: number | null;
+}
+
+/** Canary/A-B sidecar routing status, as returned by `GET /router/canary` and folded into `MetricsSnapshot`. See router.ts's `setCanary()`/`getCanaryStatus()`. */
+export interface CanaryStatus {
+  enabled: boolean;
+  /** Configured fraction (0..1) of requests actually served by the candidate sidecar instead of the primary. 0 when no canary is registered. */
+  percentage: number;
+  /** Requests where both the primary and candidate sidecar were evaluated on the same input (every non-cache-hit request while a canary is registered). */
+  evaluations: number;
+  /** Of those evaluations, how many times the candidate's label disagreed with the primary's. */
+  disagreements: number;
+  /** disagreements / evaluations, 0 when there have been no evaluations yet. */
+  disagreementRate: number;
+  /** Of those evaluations, how many times the candidate's result was the one actually used to serve the request (per the configured `percentage`). */
+  servedRequests: number;
+  /** servedRequests / evaluations, 0 when there have been no evaluations yet — the *observed* traffic share, comparable against the *configured* `percentage`. */
+  servedRate: number;
+}
+
 /** Cumulative metrics the router tracks across all requests it has handled. */
 export interface MetricsSnapshot {
   totalRequests: number;
@@ -131,4 +162,17 @@ export interface MetricsSnapshot {
   // --- Cost-budget enforcement (round 3) ---
   /** Requests where escalation was needed but the configured cost budget was already exhausted, so the sidecar's best-effort answer was returned instead (see RouteResult.budgetExceeded). Not counted in sidecarPathRequests. */
   budgetThrottledRequests: number;
+
+  // --- Per-caller cost budgets (round 4) ---
+  /** Snapshot of every caller with an *explicit* budget override currently configured. Callers without one aren't listed — they share `GET /budget`'s global default status instead. */
+  callerBudgets: CallerBudgetSnapshot[];
+
+  // --- Canary / A-B sidecar routing (round 4) ---
+  canaryEnabled: boolean;
+  /** Configured fraction (0..1) of traffic routed to the candidate sidecar. 0 when no canary is registered. */
+  canaryPercentage: number;
+  canaryEvaluations: number;
+  canaryDisagreements: number;
+  canaryDisagreementRate: number; // 0 when no canary evaluations yet
+  canaryServedRequests: number;
 }

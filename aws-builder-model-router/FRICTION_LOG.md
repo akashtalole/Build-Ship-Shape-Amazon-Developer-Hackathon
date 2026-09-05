@@ -180,3 +180,73 @@ bonus.
     independent `ModelRouter`** pointed at the same file path with no other shared state, and checks *its*
     `getMetrics()` — genuinely exercising the constructor's load path the way a real process restart would, not just
     the save path.
+
+## Round 4: per-caller budgets, canary/A-B sidecar routing, alert webhooks, Prometheus export
+
+18. **The shared checkout this session started in was, mid-task, silently switched to a completely different
+    branch by another concurrent agent working in the same repo directory** — `git branch --show-current` returned
+    `claude/friction-log-round4-sync` a few commands after I'd checked out `claude/model-router-round4-canary` in
+    what I'd assumed was an isolated worktree, and `src/budgetTracker.ts`/`metricsPersistence.ts` briefly appeared to
+    not exist at all because the working tree really was pointed somewhere else at that moment. This wasn't a bug in
+    my own reasoning to debug around — `git worktree list` confirmed several *other* sessions were already using
+    dedicated worktrees under `.claude/worktrees/`, which is the actual fix: I created my own
+    (`.claude/worktrees/model-router-round4`, checked out to `claude/model-router-round4-canary`) and did every
+    remaining edit, test run, and commit there instead of in the shared top-level checkout. Worth naming explicitly
+    because the failure mode is silent and easy to misattribute to "the file must have been deleted" rather than
+    "the branch under my feet just changed."
+19. **Deciding what "no `X-Caller-Id` header" means for `/budget` couldn't reuse the rate limiter's own convention
+    verbatim, even though the feature spec explicitly said to reuse its identification mechanism.** The rate limiter
+    treats a missing header as the caller `"anonymous"` — one bucket among many, no different in kind from any other
+    caller id. If `/budget` did the same, then `POST /budget` with no header (every pre-round-4 call, including the
+    existing HTTP test) would configure `"anonymous"`'s *own* budget bucket instead of the shared default — and any
+    other caller who also never sends a header (a different test's `X-Caller-Id: "budget-tester"`, say) would find
+    the shared default still completely unconfigured, silently breaking the existing budget-over-HTTP test's
+    assumption that one `POST /budget` governs every caller that follows. So I split the reader in two:
+    `callerIdOrAnonymous` (rate limiting, `/classify` routing — a request always belongs to *some* caller) and
+    `explicitCallerId` (the budget endpoints — a missing header means "the shared default," full stop, `undefined`
+    rather than a stand-in id). Reusing the *header name* but not the *missing-value fallback* is a real, deliberate
+    deviation from "identical mechanism," and I documented the reason on `explicitCallerId` itself rather than
+    leaving a future reader to wonder why budgets and rate limits treat the same header differently.
+20. **Canary evaluation couldn't reuse shadow evaluation's fire-and-forget pattern, even though the feature
+    description explicitly invited the comparison ("similar spirit to shadow evaluation").** Shadow mode calls the
+    foundation model *after* the fast-path response is already on its way back to the caller, specifically so a slow
+    or failing comparison call can never affect what the caller sees. A canary's whole point is the opposite: the
+    candidate's answer needs to be able to reach real traffic and change the actual routing decision, which means
+    the comparison has to be awaited *before* routing continues, not fired off after. I only felt comfortable doing
+    that synchronously because both classifiers involved are `MockSidecarClassifier`-shaped — sub-millisecond in
+    practice, ~45ms even in the simulated-cost model — so `Promise.all`-ing them adds no meaningfully observable
+    latency; a canary comparing two *foundation*-model-shaped candidates (a more realistic "compare two LLM prompt
+    versions" use case) would need to think much harder about whether awaiting both really is affordable on every
+    request, or whether it needs its own sampling/async story instead.
+21. **Getting the canary's disagreement signal to be deterministic while its traffic split stays genuinely
+    probabilistic required two different test strategies for what's really one feature, mirroring friction #12's
+    "getting two heuristics to disagree on cue" problem one layer up.** A random 40%/60% split is *supposed* to
+    vary run to run — asserting an exact count would be either flaky or a lie. But if the disagreement rate is
+    *also* left to chance (two independently-tuned keyword sets happening to disagree on naturally-varied test
+    input), a test failure can't distinguish "the traffic split is broken" from "these two heuristics just didn't
+    happen to disagree this run." I split the concerns: a single made-up marker keyword (`zzzcanarymarkerzzz`,
+    checked by inspection against every built-in keyword list so it can't collide) added only to the candidate's
+    config makes disagreement deterministic — 100% of evaluations, every run — while the *served-request* share is
+    the only thing left genuinely random, checked against a generous tolerance band instead of an exact number.
+22. **Whether a `budget_exceeded` alert should fire on every throttled request or only on the transition into
+    "exceeded," and a `circuit_open` alert on every failure or only on the transition into "open," turned out to
+    have different right answers for the two events — and I initially implemented them identically before noticing
+    that.** A circuit breaker has a real, discrete "just tripped" moment (`onFoundationFailure` setting
+    `circuitState` from anything else to `"open"`), so alerting only on that transition is both more useful (one
+    notification, not a flood) and easy to detect precisely. A budget's "exceeded" check is re-evaluated fresh on
+    every request that would otherwise escalate, with no separate stored "was I already exceeded last time"
+    flag to compare against cheaply — adding one purely to dedupe alerts felt like more state for a demo-scale
+    feature to carry than the problem justified. I left budget alerts firing once per throttled request (documented
+    as a deliberate, spam-prone simplification on `fireBudgetExceededAlert`'s doc comment, with the obvious real-world
+    mitigation named — rate-limit the alert itself, or track a per-period "already alerted" flag) rather than quietly
+    making the two events behave inconsistently without saying why.
+23. **Round-4 state (per-caller budget overrides, the canary registration, the alert-webhook registration) is
+    deliberately *not* added to `metricsPersistence.ts`'s persisted file, which is a scope decision worth stating
+    plainly rather than an oversight to stumble on later.** The existing persistence feature already documents itself
+    as demo-grade — plain `writeFileSync`, no locking, no schema migration — and folding in three more pieces of
+    state (a growing map of per-caller trackers, a classifier config object, a webhook secret) would have meaningfully
+    expanded that file's schema and its "what happens on a corrupt/partial read" surface for a restart story this
+    round's spec didn't ask for. A restarted process currently comes back up with the shared default budget restored
+    (unchanged from round 3) but per-caller overrides, the canary, and the alert-webhook registration reset to
+    "unconfigured" — acceptable for a demo process that's expected to stay up for the length of a demo, and called
+    out here so it's a known boundary rather than a surprise.

@@ -23,9 +23,12 @@ const server = app.listen(PORT, () => {
   console.log(`Classify a message:        POST http://localhost:${PORT}/classify  { "text": "..." }`);
   console.log(`Streamed classification:   POST http://localhost:${PORT}/classify/stream  { "text": "..." }`);
   console.log(`Report classification feedback: POST http://localhost:${PORT}/feedback  { "requestId": "...", "correct": true }`);
-  console.log(`Set a cost budget:         POST http://localhost:${PORT}/budget  { "limit": 0.05, "periodMs": 3600000 }`);
-  console.log(`View budget status:        GET  http://localhost:${PORT}/budget`);
+  console.log(`Set a cost budget:         POST http://localhost:${PORT}/budget  { "limit": 0.05, "periodMs": 3600000 }  (add X-Caller-Id to scope it to one caller)`);
+  console.log(`View budget status:        GET  http://localhost:${PORT}/budget  (or GET /budget/all for every caller)`);
+  console.log(`Register a canary sidecar: POST http://localhost:${PORT}/router/canary  { "percentage": 0.3, "config": { "confidenceScale": 0.8 } }`);
+  console.log(`Register an alert webhook: POST http://localhost:${PORT}/alerts/webhook  { "url": "https://example.com/hook" }`);
   console.log(`View metrics:              GET  http://localhost:${PORT}/metrics`);
+  console.log(`View metrics (Prometheus): GET  http://localhost:${PORT}/metrics/prometheus`);
   console.log(`Metrics persisted to:      ${METRICS_PATH}`);
 });
 

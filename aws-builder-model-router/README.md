@@ -61,15 +61,17 @@ request always hit the foundation model directly, which is the concrete argument
 
 ```
 src/
-  types.ts               Shared types: SidecarResult, FoundationResult, RouteResult, MetricsSnapshot
-  sidecarClassifier.ts   SidecarClassifier interface + MockSidecarClassifier (keyword-based urgency heuristic, now with matchedKeywords)
+  types.ts               Shared types: SidecarResult, FoundationResult, RouteResult, MetricsSnapshot, CanaryStatus, CallerBudgetSnapshot
+  sidecarClassifier.ts   SidecarClassifier interface + MockSidecarClassifier (keyword-based urgency heuristic, now configurable for canary/A-B routing)
   foundationModel.ts     FoundationModelProvider interface + MockBedrockProvider (template answer + simulated failures)
   reviewerModel.ts       MockReviewerProvider: the three-tier cascade's cheaper/faster mid-tier "reviewer" model
-  budgetTracker.ts       BudgetTracker: fixed-window dollar-spend cap for cost-budget enforcement
+  budgetTracker.ts       BudgetTracker: fixed-window dollar-spend cap for cost-budget enforcement (one instance per caller as of round 4)
+  alertWebhooks.ts       AlertWebhookDispatcher: HMAC-SHA256-signed outbound webhook delivery for budget/circuit-breaker alerts
+  prometheusFormat.ts    renderPrometheusMetrics: renders GET /metrics's JSON as Prometheus exposition-format text
   metricsPersistence.ts  loadMetricsState/saveMetricsState: demo-grade JSON file persistence for cumulative metrics
   rateLimiter.ts         RateLimiter: in-memory, fixed-window, per-caller quota
-  router.ts              ModelRouter: routing decision (now a 3-tier cascade), cache, circuit breaker, shadow eval, feedback, budget, persistence, metrics
-  server.ts              Express app factory: POST /classify, POST /classify/stream, POST /feedback, POST+GET /budget, GET /metrics
+  router.ts              ModelRouter: routing decision (3-tier cascade), cache, circuit breaker, shadow eval, feedback, per-caller budgets, canary routing, alerts, persistence, metrics
+  server.ts              Express app factory: POST /classify(/stream), POST /feedback, POST+GET+DELETE /budget(/all), POST+GET+DELETE /router/canary, POST+GET+DELETE /alerts/webhook, GET /metrics(/prometheus)
   index.ts               Entry point: wires up the mocks (incl. the reviewer), creates the app, starts listening, persists metrics on shutdown
 test/
   smoke.test.ts          Unit-style router tests (no HTTP) + end-to-end HTTP tests via fetch(), covering every feature below
@@ -174,6 +176,29 @@ npm test
     process restart) reloads those totals instead of resetting to zero, and continues accumulating correctly on top
     of them; a `persistEveryNRequests`-configured router auto-saves after that many calls with no explicit save; and
     pointing at a metrics file that doesn't exist yet starts fresh rather than throwing.
+11. **Per-caller cost budgets (unit + HTTP):** two callers with different `setBudget(limit, periodMs, callerId)`
+    configurations are throttled completely independently — one caller's exhausted budget never affects the other's;
+    a caller who never configured their own budget falls back to the shared default (and continues to, even after a
+    different caller's override is cleared); `GET /metrics`'s `callerBudgets` lists exactly the callers with an
+    explicit override; and a dedicated HTTP test drives the same story through `POST`/`GET /budget` scoped by
+    `X-Caller-Id`, plus `GET /budget/all` for the admin/dashboard view of every caller at once.
+12. **Canary/A-B sidecar routing (unit + HTTP):** a candidate sidecar configured with a keyword the primary doesn't
+    recognize disagrees with the primary on every evaluated input containing it (a deterministic disagreement signal,
+    independent of the random traffic-split draw); registering it at a given percentage and running hundreds of
+    requests shows the candidate actually serving roughly that share of traffic (a probabilistic check with a
+    generous tolerance band, not an exact count); clearing the canary stops routing to it without erasing the
+    cumulative comparison counters; and a dedicated HTTP test drives `POST`/`GET`/`DELETE /router/canary`, including
+    a 400 on an out-of-range `percentage`.
+13. **Outbound alert webhooks (HTTP + unit):** a local Node `http` listener stands in for an operator's own webhook
+    receiver; registering it via `POST /alerts/webhook` hands back a signing secret; exceeding a configured budget
+    fires a `budget_exceeded` delivery whose `X-ModelRouter-Signature` header is independently recomputed and checked
+    against the raw body with that exact secret; tripping the circuit breaker (an always-failing foundation provider)
+    fires a `circuit_open` delivery the same way; and a further failure while the circuit is already open confirms no
+    duplicate `circuit_open` alert fires (transition-only, not one-per-failure).
+14. **Prometheus-format metrics export (HTTP):** `GET /metrics/prometheus` returns `200 text/plain`; every metric
+    name that appears has both a `# HELP` and a `# TYPE` comment; labeled series (per-circuit-breaker-state, per-caller
+    budgets) render with the expected `{label="value"}` syntax; the round-4 canary and alert-webhook metric names are
+    all present; and `GET /metrics`'s original JSON shape is confirmed unchanged by the new endpoint's existence.
 
 No external services or AWS credentials are required to run the tests.
 
@@ -262,7 +287,7 @@ and the top-tier foundation model).
 
 ## Advanced features
 
-Ten production-grade additions on top of the base routing pattern, all genuinely implemented and covered by
+Fourteen production-grade additions on top of the base routing pattern, all genuinely implemented and covered by
 `test/smoke.test.ts` (not stubs) — see [Testing](#testing) above for exactly which checks cover which feature.
 
 ### 1. Response caching
@@ -488,6 +513,110 @@ curl -s localhost:4567/metrics | python3 -m json.tool
 # -> the same cumulative totals as before the restart, not reset to zero
 ```
 
+### 11. Per-caller cost budgets
+
+Round 3's `POST`/`GET /budget` was global — one shared budget for every caller. Round 4 scopes it per caller, reusing
+the exact identification mechanism the per-caller rate limiter already uses: the `X-Caller-Id` header. Send it on a
+`/budget` call and you're configuring/reading **that caller's own independent budget**, tracked and enforced
+completely separately from every other caller's; omit it (as every pre-round-4 call shape still does) and you're
+configuring/reading the **shared default** instead — which is also what any caller *without* their own override falls
+back to, rather than being silently unbudgeted. That fallback is the "sensible default" for callers who never set
+their own: whatever the operator has configured as the shared default (including "nothing yet," preserving the exact
+pre-round-4 behavior when nobody has configured any budget at all).
+
+```bash
+# Give one specific caller ("mobile-app") their own tight budget
+curl -s -X POST localhost:4567/budget -H "Content-Type: application/json" -H "X-Caller-Id: mobile-app" \
+  -d '{"limit": 0.01, "periodMs": 3600000}' | python3 -m json.tool
+# -> "enabled": true, "limitUsd": 0.01 — this budget belongs to "mobile-app" alone
+
+# A different caller, with no override of their own, is governed by the shared default instead
+curl -s localhost:4567/budget -H "X-Caller-Id: some-other-caller" | python3 -m json.tool
+# -> whatever the shared default currently is (unconfigured -> "enabled": false, unaffected by mobile-app's budget)
+
+# See every caller with an explicit override at a glance, alongside the shared default
+curl -s localhost:4567/budget/all | python3 -m json.tool
+```
+
+### 12. Canary / A-B sidecar routing
+
+`POST /router/canary { "percentage": <0..1>, "config": {...} }` registers a second "candidate" `MockSidecarClassifier`
+alongside the primary one — tuned via `config` (`extraKeywords` and/or `confidenceScale`, since both sidecars here are
+the same keyword-heuristic class; a real deployment would point this at a genuinely different trained-model
+endpoint). From then on, **every** request evaluates both classifiers on the same input — mirroring the spirit of the
+advanced round's shadow evaluation, but comparing two *sidecar* configurations against each other instead of
+sidecar-vs-foundation — and `percentage` of the time, the candidate's answer (not the primary's) is the one that
+actually continues through the rest of the routing decision. `GET /metrics` (and the dedicated `GET /router/canary`)
+report how often the two disagreed and what share of traffic the candidate actually ended up serving, so you can
+compare the *observed* traffic split against the *configured* one and watch for a candidate that disagrees with the
+primary more than expected before ever promoting it to be the new primary.
+
+```bash
+# Route 30% of traffic to a candidate that's more conservative (scaled-down confidence) than the primary
+curl -s -X POST localhost:4567/router/canary -H "Content-Type: application/json" \
+  -d '{"percentage": 0.3, "config": {"confidenceScale": 0.8}}' | python3 -m json.tool
+# -> "enabled": true, "percentage": 0.3, "evaluations": 0, "disagreements": 0
+
+# ...classify a bunch of messages...
+curl -s localhost:4567/router/canary | python3 -m json.tool
+# -> "evaluations": 47, "disagreements": 5, "disagreementRate": 0.106, "servedRequests": 15 (~30% of 47)
+
+# Done comparing — stop routing to the candidate (comparison counters are preserved, not reset)
+curl -s -X DELETE localhost:4567/router/canary | python3 -m json.tool
+```
+
+### 13. Outbound alert webhooks
+
+Everything else an operator can observe about this router is **pull** — `GET /metrics`, `GET /budget`, `GET
+/router/canary` — something you have to remember to poll. `POST /alerts/webhook { "url": "..." }` adds a **push**
+surface: register a callback URL once (getting back a signing secret, shown exactly once) and the router POSTs to it
+whenever a (global or per-caller) cost budget is exceeded or the foundation-model circuit breaker trips open, signed
+`HMAC-SHA256` over the raw JSON body — the same scheme `ring-porchpass`'s `webhookAuth.ts`/`outboundWebhooks.ts` use,
+so your receiver recomputes the signature with the secret and compares it (constant-time) before trusting the
+payload. Delivery is fire-and-forget with retries (up to 3 attempts, exponential backoff) so a slow or down receiver
+never adds latency to the classification request that triggered the alert.
+
+```bash
+# Register your own callback (e.g. a webhook.site URL for testing, or your own receiver)
+curl -s -X POST localhost:4567/alerts/webhook -H "Content-Type: application/json" \
+  -d '{"url": "https://your-receiver.example.com/hook"}' | python3 -m json.tool
+# -> { "url": "...", "secret": "a1b2c3...", "createdAt": "..." } — save that secret, it's shown only once
+
+# ...configure a tight budget and exhaust it, or trip the circuit breaker...
+# Your receiver gets a POST with headers:
+#   X-ModelRouter-Event: budget_exceeded   (or: circuit_open)
+#   X-ModelRouter-Signature: <hex hmac-sha256 of the raw JSON body, using your secret>
+# and a body like: {"type":"budget_exceeded","occurredAt":"...","detail":{"callerId":"...","limitUsd":0.01,"spendUsd":0.012,"periodMs":3600000}}
+
+curl -s localhost:4567/alerts/webhook | python3 -m json.tool
+# -> delivery history: "deliveries", "failures", "lastSuccessAt", "consecutiveFailures", ...
+```
+
+### 14. Prometheus-format metrics export
+
+`GET /metrics` (JSON) is unchanged. `GET /metrics/prometheus` renders the **same underlying numbers** — every field
+in `MetricsSnapshot`, plus the shared/per-caller budget statuses and the alert-webhook delivery status that live
+outside it — as plain-text [Prometheus exposition format](https://github.com/prometheus/docs/blob/main/content/docs/instrumenting/exposition_formats.md):
+`# HELP`/`# TYPE` comments followed by `metric_name{labels} value` lines, computed fresh on every scrape so there's
+no separate metrics-tracking code path to keep in sync with `GET /metrics`. Point a real Prometheus server's scrape
+config at this endpoint (or run `promtool check metrics < output` against a saved response) to verify it independently.
+
+```bash
+curl -s localhost:4567/metrics/prometheus
+# -> # HELP model_router_requests_total Total classification requests handled (cache hits included).
+#    # TYPE model_router_requests_total counter
+#    model_router_requests_total 47
+#    ...
+#    # TYPE model_router_circuit_state gauge
+#    model_router_circuit_state{state="closed"} 1
+#    model_router_circuit_state{state="open"} 0
+#    model_router_circuit_state{state="half-open"} 0
+#    ...
+#    model_router_canary_enabled 1
+#    model_router_canary_percentage 0.3
+#    ...
+```
+
 ## A stackable pattern, not a one-off feature
 
 This mini-challenge is explicitly stackable onto any primary-track submission's own AI feature, and this router is
@@ -512,21 +641,24 @@ described above — the router, metrics, and HTTP layer need no changes.
 - **Tech Implementation:** A working, tested TypeScript library with two AWS-SDK-shaped interfaces, a
   framework-agnostic router with real routing logic (not a stub), an Express API, and a smoke test suite exercising
   both the library directly and the full HTTP surface. Zero TypeScript errors under `strict: true`. Beyond the base
-  routing decision, ten genuinely-working production-grade features (see [Advanced features](#advanced-features)):
+  routing decision, fourteen genuinely-working production-grade features (see [Advanced features](#advanced-features)):
   a TTL response cache, a circuit breaker with a sidecar-fallback chain, background shadow evaluation, a
   feedback-driven adaptive-threshold suggestion, simulated SSE streaming, per-caller rate limiting, an optional
-  three-tier cascade with a cheaper "reviewer" model, cost-budget enforcement with auto-throttling, keyword-level
-  classification explainability, and demo-grade file persistence of cumulative metrics — each with its own passing
-  test coverage, not stubbed.
+  three-tier cascade with a cheaper "reviewer" model, cost-budget enforcement with auto-throttling (now scoped per
+  caller), keyword-level classification explainability, demo-grade file persistence of cumulative metrics, canary/A-B
+  sidecar routing, HMAC-signed outbound alert webhooks, and a Prometheus-format metrics export — each with its own
+  passing test coverage, not stubbed.
 - **Design:** The interfaces mirror the real `@aws-sdk/client-sagemaker-runtime` / `@aws-sdk/client-bedrock-runtime`
   request/response shapes closely enough that going live is a class-body swap, not a redesign — the architectural
   seam is the deliverable, not just working code behind it, and the reviewer tier reuses that exact same seam (a
-  second `FoundationModelProvider` instance) rather than inventing a new one. The advanced features are each
-  standard, named production patterns (circuit breaker, shadow deployment, quota management, cost budgeting, cascade
-  routing) applied to *this specific* seam rather than bolted on generically, and each is honestly scoped: the
-  adaptive-threshold heuristic, the streaming endpoint's chunking-after-the-fact, the fixed-window budget/rate-limit
-  choice, and the reviewer's fixed cost/latency profile are all explicitly documented as illustrative simplifications,
-  not claims of statistical rigor or true incremental generation.
+  second `FoundationModelProvider` instance) rather than inventing a new one; the canary feature reuses the identical
+  seam again (a second `SidecarClassifier`) for the same reason. The advanced features are each standard, named
+  production patterns (circuit breaker, shadow deployment, quota management, cost budgeting, cascade routing,
+  canary/A-B deployment, signed webhook alerting, Prometheus scraping) applied to *this specific* seam rather than
+  bolted on generically, and each is honestly scoped: the adaptive-threshold heuristic, the streaming endpoint's
+  chunking-after-the-fact, the fixed-window budget/rate-limit choice, the reviewer's fixed cost/latency profile, and
+  the per-request (not per-transition) budget-alert firing are all explicitly documented as illustrative
+  simplifications, not claims of statistical rigor or a fully hardened production alerting pipeline.
 - **Potential Impact:** This is a genuinely reusable AWS architecture pattern, not tied to one feature — any track
   with an AI feature that mostly handles predictable cases (which is most of them) can drop this router in front of
   its own model calls and get a concrete, measurable cost/latency win, as `GET /metrics` demonstrates numerically.
