@@ -221,3 +221,77 @@ household-member authorization scoping, and encrypting visitor PII at rest.
    distinguish "never arrived" from "already departed," since from the checkout endpoint's point of view they're
    the same action to take (reject, cleanly, with no state change) — but it's a real design choice, not an
    oversight, and worth naming as one rather than let a future reader assume the two cases were never considered.
+
+## Round 5: visitor trust scoring, Alexa+ voice confirmation, geofenced activation, neighborhood alerts
+
+The brief for this round was explicit that it wanted genuinely new functionality, not more infrastructure
+hardening — a useful forcing function, since every prior round's "what's missing" instinct pointed at production
+concerns (a KMS, a shared rate-limit store, real auth). Notes from building four features that are actually new
+behavior instead.
+
+### What worked well
+
+- **Refactoring `checkIn` into a shared `performCheckIn` core *before* writing the voice-confirm feature**, rather
+  than copy-pasting the validity-check gauntlet into a second function, meant the Alexa+ endpoint got every
+  existing policy layer (recurrence, quiet hours, geofencing, expiry, extensions) for free and could never drift
+  from the link flow's rules by accident. The only thing that differs between the two call sites is *how identity
+  was confirmed* — a `{confirmedVia, confirmedByMember}` value threaded through to the `Visit` record — which is
+  exactly the shape of the actual difference between "a visitor tapped a link" and "a household member said so,"
+  and nothing more.
+- **Making `GeoVerifier` structurally identical to `RingClient`** (a two-line interface, one simulated
+  implementation, a doc comment naming exactly what a real implementation needs that a demo can't provide) instead
+  of inventing a new pattern for "another sandboxed hardware source" kept the geofencing feature's honesty
+  consistent with how the whole project already talks about Ring itself — a reviewer who understands one seam
+  immediately understands the other.
+- **Reusing `outboundWebhooks.ts`'s retry-with-backoff as an exported `deliverSignedPayload` function**, rather
+  than writing a second signing/retry implementation for neighborhood alerts, was a small refactor (extract the
+  loop, keep the homeowner-webhook-specific `status` bookkeeping as a thin wrapper around it) that paid for itself
+  immediately: the neighborhood broadcast feature is maybe 40 lines of actual new logic (risk detection + a
+  subscriber registry) because the hard part — "sign this, POST it, retry on failure, never block the caller" — was
+  already solved and battle-tested by round 3's tests.
+- **Computing the trust score as "sum of an explicit factors array," not an internal number the factors are
+  merely a comment on,** forced every scoring rule to be written as a discrete, nameable adjustment from the start,
+  which is exactly the "explainable, not a black box" requirement in the brief — there was no way to accidentally
+  end up with a formula that produces a score the `factors` array doesn't fully account for, because the score
+  literally *is* `factors.reduce(sum)`, clamped.
+
+### Friction encountered
+
+1. **Trust-gated auto-approval had a genuine self-referential bug, not just a test-writing mistake.** The first
+   version of `isNoShow` (the "expired without ever being used" signal) counted *any* expired, unused,
+   non-revoked pass — which meant the very pass whose grace-period extension was mid-request counted itself as a
+   no-show at the exact moment its own trust score was being computed to decide whether to auto-approve it. A
+   visitor who showed up, found their pass expired, and immediately asked for a few more minutes is the *opposite*
+   of a no-show (a no-show is silence — nobody ever tried), but the naive signal couldn't tell the two apart
+   because both share "useCount is still 0." The fix was excluding any pass carrying an `extension` record at all
+   from no-show consideration (requesting one — even a denied one — is evidence of an attempt), which is both the
+   more correct definition of "no-show" and the fix for the self-penalizing auto-approval bug — the same fix
+   solved a modeling problem and a code bug at once, which is usually a sign the original modeling was actually
+   wrong rather than the code being wrong in isolation. Caught by the end-to-end test (a `score` off by exactly the
+   no-show penalty, not a crash) — not something a purely unit-level test of `computeTrustScore` in isolation,
+   without also exercising the real `requestExtension` call order, would have surfaced.
+2. **Deciding what counts as "the same visitor" needed a real answer, not just "match the phone number."** Two
+   passes for the same phone number are unambiguously the same visitor in this demo, but a phone number is
+   reassigned between people in the real world eventually (carriers recycle numbers), and a household could
+   plausibly want to track "this specific person," not "whoever currently holds this number," for anything
+   longer-lived than a hackathon deployment. Phone number is what round 4 already collects and encrypts, so this
+   round explicitly scoped trust identity to it rather than inventing a separate "visitor ID" concept the rest of
+   the system doesn't have a natural place to collect (no visitor account, no login) — the honest limitation is
+   named here rather than silently assumed away.
+3. **Geofencing without real hardware means the entire feature's security value rests on a doc comment, not code**
+   — `SimulatedGeoVerifier` will happily "confirm" a visitor is at the property because a POST body said so, with
+   nothing stopping the same visitor (or anyone who knows a pass ID) from sending fabricated coordinates. This is
+   the same honest tradeoff every other "simulated hardware" seam in this project makes (Ring events, the
+   encryption key, the webhook secret) but it's worth calling out specifically here because geofencing *reads* as
+   a strong security control to a reviewer ("it checks your location!") in a way that, without the real signal
+   `geo.ts`'s doc comment describes (a native mobile geolocation API with OS-level anti-spoofing), it currently
+   isn't. Naming the gap explicitly in both `geo.ts` and the README was the actual mitigation available in this
+   environment, not a code fix.
+4. **The neighborhood broadcast test needed real signature isolation per recipient, which is easy to fake-pass**
+   — a naive test could sign every delivery with one shared secret and never notice that a bug caused every
+   neighbor to receive the *same* signature. Spinning up two independent local HTTP listeners with two
+   independently-generated subscriber secrets, then explicitly asserting `neighborA`'s delivery only verifies
+   against `subA.secret` (and `neighborB`'s only against `subB.secret`), is what actually exercises the "each
+   subscriber gets their own secret" design decision rather than merely exercising "delivery happens at all" —
+   the same "test over real HTTP catches what a mock can't" lesson from round 1's friction notes, applied again
+   here to a fan-out delivery instead of a single one.

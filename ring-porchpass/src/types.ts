@@ -43,6 +43,15 @@ export interface Pass {
   // responses expose a masked `visitorPhone` (see `passService.serializePass`)
   // rather than this field directly.
   visitorPhoneEnc: EncryptedField;
+  // A one-way HMAC-SHA256 of the visitor's phone number (see
+  // `crypto.ts#phoneLookupKey`) — never the plaintext, and not reversible
+  // without brute-forcing every possible phone number. Lets `store.ts` and
+  // `trust.ts` correlate every pass/visit for the same visitor identity
+  // across time (round 5's trust scoring) without ever storing the
+  // plaintext number anywhere but the one encrypted field above. Excluded
+  // from `PassView` (see `passService.serializePass`) — it's an internal
+  // indexing artifact, not something an API caller needs back.
+  visitorPhoneLookup: string;
   issuedAt: string; // ISO timestamp
   validFrom: string; // ISO timestamp
   validUntil: string; // ISO timestamp
@@ -55,6 +64,20 @@ export interface Pass {
   idempotencyKey?: string; // the key this pass was issued under, if any (for debugging/audit)
   deviceIds?: string[]; // Ring device(s) this pass's check-in correlates against; defaults to [FRONT_DOOR_DEVICE_ID] when omitted, for backward compatibility
   extension?: PassExtension; // grace-period extension request/decision state — see passService.ts's request/decide-extension flow
+  // Round 5: if set, a *pending* grace-period extension request on this pass
+  // is auto-approved (see passService.requestExtension) the moment the
+  // visitor's current trust score (trust.ts) is >= this threshold, instead
+  // of waiting on the homeowner to decide every time — the "auto-approve
+  // future recurring visits above trust N" behavior called for in the round
+  // 5 brief. Only ever consulted when a request is made; never bypasses the
+  // pass's own validity rules.
+  autoApproveExtensionsAboveTrust?: number;
+  // Round 5: geofenced activation. When true, a check-in is denied until a
+  // simulated location ping (`POST /passes/:id/location-ping`) confirms the
+  // visitor is within the household's configured home radius — see geo.ts
+  // and settings.ts's `homeLocation`/`geofenceRadiusMeters`.
+  requireGeofence?: boolean;
+  geofenceConfirmedAt?: string; // ISO timestamp — set once a location ping lands within radius
 }
 
 /**
@@ -113,6 +136,16 @@ export interface Visit {
   matchedEvent?: RingEvent; // the Ring event correlated with this check-in, if any
   checkedOutAt?: string; // ISO timestamp — the departure, once it happens
   durationMs?: number; // checkedOutAt - checkedInAt, computed once at checkout
+  // Round 5: how this arrival was confirmed. "link" is the original
+  // visitor-taps-the-link flow; "voice" is a household member confirming the
+  // visitor's identity out loud (the Alexa+ integration seam — see
+  // `POST /passes/:id/voice-confirm` in server.ts and its README section).
+  confirmedVia: "link" | "voice";
+  confirmedByMember?: string; // household member id who voice-confirmed this visit, when confirmedVia === "voice"
+  // Set when this arrival only succeeded because of an approved grace-period
+  // extension (see passService.ts) — i.e. the visitor showed up outside the
+  // pass's own expected time window. One of trust.ts's real signals.
+  usedGraceExtension?: boolean;
 }
 
 export interface Notification {

@@ -6,6 +6,8 @@
  * would key `store.ts`.
  */
 
+import type { HomeLocation } from "./geo.js";
+
 export interface QuietHours {
   start: string; // "HH:MM", UTC, 24h clock
   end: string; // "HH:MM", UTC, 24h clock — may be < start to cross midnight
@@ -13,6 +15,13 @@ export interface QuietHours {
 
 export interface HouseholdSettings {
   quietHours?: QuietHours;
+  // Round 5 (geofenced pass activation): the property's location and how
+  // close a visitor's simulated location ping must land to count as "here."
+  // Unset until a homeowner configures it via `POST /settings/location` —
+  // a pass with `requireGeofence: true` simply can't be geofence-confirmed
+  // until then (see passService.submitLocationPing).
+  homeLocation?: HomeLocation;
+  geofenceRadiusMeters?: number;
 }
 
 function quietHoursFromEnv(): QuietHours | undefined {

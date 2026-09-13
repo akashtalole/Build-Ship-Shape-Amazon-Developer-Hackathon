@@ -7,10 +7,27 @@ const visits: Visit[] = [];
 // flaky mobile connection resubmitting the same request) without issuing a
 // second pass or re-sending the visitor's "you have access" SMS.
 const passIdByIdempotencyKey = new Map<string, string>();
+// Round 5 (visitor trust scoring): every pass id ever issued to the same
+// visitor identity, keyed by `visitorPhoneLookup` — a one-way HMAC of the
+// phone number (see crypto.ts), never the plaintext. This is what lets
+// `trust.ts` answer "what's this visitor's history?" across every pass
+// they've ever been issued, without the store holding a reversible phone
+// number anywhere.
+const passIdsByPhoneLookup = new Map<string, Set<string>>();
 
 export function savePass(pass: Pass): void {
   passes.set(pass.id, pass);
   passesByToken.set(pass.checkinToken, pass.id);
+  if (pass.visitorPhoneLookup) {
+    const existing = passIdsByPhoneLookup.get(pass.visitorPhoneLookup) ?? new Set<string>();
+    existing.add(pass.id);
+    passIdsByPhoneLookup.set(pass.visitorPhoneLookup, existing);
+  }
+}
+
+/** Every pass id issued to the visitor identified by this lookup key — see the module doc comment above and `trust.ts`. */
+export function getPassIdsByPhoneLookup(lookupKey: string): string[] {
+  return [...(passIdsByPhoneLookup.get(lookupKey) ?? [])];
 }
 
 export function getPassById(id: string): Pass | undefined {
