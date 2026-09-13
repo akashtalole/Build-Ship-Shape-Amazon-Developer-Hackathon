@@ -1,0 +1,91 @@
+<speak version="1.0" xml:lang="en-US" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:amazon="http://amazon.com/schemas/ssml-1.0">
+<amazon:domain name="conversational">
+
+<mark name="intro_start"/>
+Most smart-home skills handle one command at a time.
+<break time="300ms"/>
+Ask a real household assistant something bigger —
+<break time="200ms"/>
+<emphasis level="moderate">"what's due this week, and can you reorder anything running low?"</emphasis>
+<break time="300ms"/>
+and it falls apart.
+<break time="400ms"/>
+This is HomeOps: a self-hosted
+<say-as interpret-as="characters">MCP</say-as>
+server built for the Alexa+ track,
+that gives Alexa+ real household tools it can chain together in one turn.
+
+<break time="500ms"/>
+
+<mark name="feature_tasks"/>
+Here's a household's open tasks.
+<break time="200ms"/>
+Ask HomeOps to add one, and it fairly assigns it based on who already has the lightest load
+<break time="200ms"/>
+— no one has to argue about whose turn it is.
+
+<break time="500ms"/>
+
+<mark name="feature_reorder"/>
+Now the shopping list is running low on a few items.
+<break time="300ms"/>
+When Alexa+ tries to reorder one, HomeOps doesn't just spend money silently.
+<break time="200ms"/>
+It uses <say-as interpret-as="characters">MCP</say-as> elicitation
+to have Alexa+ ask the user directly, in real time, before the order goes through.
+<break time="400ms"/>
+That's the protocol-correct way to gate a spending action — not a hidden confirm flag.
+
+<break time="500ms"/>
+
+<mark name="feature_budget"/>
+Log an expense that pushes a category over its weekly budget,
+<break time="200ms"/>
+and HomeOps flags it immediately.
+<break time="300ms"/>
+Ask for the week's story instead of raw numbers,
+<break time="200ms"/>
+and it generates a natural-language summary
+using <say-as interpret-as="characters">MCP</say-as> sampling
+— asking the connected model to write it, with no
+<say-as interpret-as="characters">API</say-as> key of its own.
+
+<break time="500ms"/>
+
+<mark name="feature_briefing"/>
+And this is the compound tool:
+<break time="200ms"/>
+<emphasis level="moderate">run morning briefing</emphasis>
+chains tasks, fair assignment, low stock, and budget status into a single call,
+<break time="200ms"/>
+then narrates all of it back in one breath.
+<break time="300ms"/>
+One request. One conversation turn. The whole household, handled.
+
+<break time="600ms"/>
+
+<mark name="opensource_start"/>
+For the open source mini-challenge, we built
+<emphasis level="reduced">friction-log-toolkit</emphasis>
+<break time="200ms"/>
+— a tiny command-line tool that captures a friction point the moment it happens,
+<break time="200ms"/>
+instead of trying to remember it an hour before a deadline.
+<break time="300ms"/>
+One command while you build.
+<break time="200ms"/>
+One export at submission time.
+
+<break time="600ms"/>
+
+<mark name="close_start"/>
+Every tool here is real and tested end to end —
+<break time="200ms"/>
+no stubs, no mocked protocol calls.
+<break time="300ms"/>
+HomeOps, for the Alexa+ track.
+<break time="200ms"/>
+Built, shipped, and shaped for the household that actually runs itself.
+
+</amazon:domain>
+</speak>
