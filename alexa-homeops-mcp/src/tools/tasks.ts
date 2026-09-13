@@ -22,7 +22,10 @@ const taskShape = {
   done: z.boolean(),
 };
 
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+// Exported so capture_note (tools/capture.ts) can validate a sampled due
+// date the same way import_tasks validates a caller-supplied one, instead of
+// a second, potentially-drifting copy of the same pattern.
+export const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /** Fires a task_overdue household alert if any newly-relevant tasks are already past due. No-op if no webhook is registered (see webhookDelivery.ts). */
@@ -229,12 +232,25 @@ export function registerTaskTools(server: McpServer, notify: NotifyFn, household
       annotations: { title: "Mark task done", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ taskId }) => {
-      const task = markTaskDone(householdId, taskId);
-      if (!task) {
+      const result = markTaskDone(householdId, taskId);
+      if (!result) {
         return { content: [{ type: "text", text: `No task found with ID ${taskId}.` }], isError: true };
       }
+      const { task, rewardAwarded, newBalance } = result;
       await notify(RESOURCE_URIS.upcomingTasks);
-      return { content: [{ type: "text", text: `Marked "${task.title}" as done.` }] };
+      const rewardNote =
+        rewardAwarded !== undefined
+          ? ` ${task.assignee} earned ${rewardAwarded.toFixed(2)} (allowance balance: ${newBalance!.toFixed(2)}).`
+          : "";
+      if (rewardAwarded !== undefined) {
+        await logEvent(server, "info", "Allowance awarded", {
+          taskId: task.id,
+          member: task.assignee,
+          amount: rewardAwarded,
+          newBalance,
+        });
+      }
+      return { content: [{ type: "text", text: `Marked "${task.title}" as done.${rewardNote}` }] };
     }
   );
 

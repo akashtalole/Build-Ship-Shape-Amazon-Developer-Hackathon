@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AlertWebhookRegistration, BudgetStatus, Expense, Household, ShoppingItem, Task } from "./types.js";
 
+export type { Expense };
+
 // The household used for any request that carries no (or an unrecognized)
 // bearer token — see src/auth.ts. Kept as a fixed ID so its seeded demo data
 // (below) and existing docs/tests keep working without a token.
@@ -63,6 +65,7 @@ function seedHousehold(householdId: string): Household {
       ],
       expenses: [],
       budgets: { groceries: 150, pets: 60, utilities: 200 },
+      allowanceBalances: {},
     };
   }
 
@@ -79,6 +82,7 @@ function seedHousehold(householdId: string): Household {
     shoppingItems: [],
     expenses: [],
     budgets: {},
+    allowanceBalances: {},
   };
 }
 
@@ -283,14 +287,96 @@ export function importTasks(householdId: string, items: ImportTaskInput[]): Task
   return created;
 }
 
-export function markTaskDone(householdId: string, taskId: string): Task | undefined {
+export interface MarkTaskDoneResult {
+  task: Task;
+  // Set only when this task carried a rewardAmount (see set_task_reward) and
+  // had an assignee — the amount just credited to that member's allowance
+  // balance, so the tool layer can mention it without a second store call.
+  rewardAwarded?: number;
+  newBalance?: number;
+}
+
+export function markTaskDone(householdId: string, taskId: string): MarkTaskDoneResult | undefined {
   const household = loadHousehold(householdId);
   const task = household.tasks.find((t) => t.id === taskId);
-  if (task) {
-    task.done = true;
-    saveHousehold(householdId, household);
+  if (!task) return undefined;
+
+  task.done = true;
+  let rewardAwarded: number | undefined;
+  let newBalance: number | undefined;
+  if (task.rewardAmount && task.rewardAmount > 0 && task.assignee) {
+    if (!household.allowanceBalances) household.allowanceBalances = {};
+    const current = household.allowanceBalances[task.assignee] ?? 0;
+    newBalance = Math.round((current + task.rewardAmount) * 100) / 100;
+    household.allowanceBalances[task.assignee] = newBalance;
+    rewardAwarded = task.rewardAmount;
   }
+  saveHousehold(householdId, household);
+  return { task, rewardAwarded, newBalance };
+}
+
+// --------------------------------------------------------------------------
+// Chore-to-allowance ledger
+//
+// A task can optionally carry a `rewardAmount` (set via setTaskReward,
+// independent of add_task so an existing task can be turned into a paid
+// chore after the fact). markTaskDone above credits that amount to the
+// task's assignee the moment it's completed. Balances accumulate until a
+// household explicitly records a payout, which zeroes (or partially reduces)
+// them — this is a running ledger, not an auto-cleared one, so a household
+// can let allowance build up across several chores before cashing out.
+// --------------------------------------------------------------------------
+
+export function setTaskReward(householdId: string, taskId: string, amount: number): Task | undefined {
+  const household = loadHousehold(householdId);
+  const task = household.tasks.find((t) => t.id === taskId);
+  if (!task) return undefined;
+  task.rewardAmount = amount;
+  saveHousehold(householdId, household);
   return task;
+}
+
+/** Every household member's current allowance balance, defaulting absent members to 0. */
+export function getAllowanceBalances(householdId: string): Record<string, number> {
+  const household = loadHousehold(householdId);
+  const stored = household.allowanceBalances ?? {};
+  const result: Record<string, number> = {};
+  for (const member of household.members) {
+    result[member] = stored[member] ?? 0;
+  }
+  // A member who has since left the household list but still has an unpaid
+  // balance shouldn't have it silently disappear from view.
+  for (const [member, balance] of Object.entries(stored)) {
+    if (!(member in result)) result[member] = balance;
+  }
+  return result;
+}
+
+export function getAllowanceBalance(householdId: string, member: string): number {
+  return getAllowanceBalances(householdId)[member] ?? 0;
+}
+
+export interface AllowancePayoutResult {
+  member: string;
+  paidOut: number;
+  remainingBalance: number;
+}
+
+/**
+ * Records a payout against a member's balance. Omitting `amount` pays out
+ * (and zeroes) the full balance — the common "settle up" case; passing an
+ * explicit amount reduces the balance by that much instead (clamped so it
+ * never goes negative or pays out more than is actually owed).
+ */
+export function recordAllowancePayout(householdId: string, member: string, amount?: number): AllowancePayoutResult {
+  const household = loadHousehold(householdId);
+  if (!household.allowanceBalances) household.allowanceBalances = {};
+  const current = household.allowanceBalances[member] ?? 0;
+  const paidOut = Math.round(Math.min(amount ?? current, current) * 100) / 100;
+  const remainingBalance = Math.round((current - paidOut) * 100) / 100;
+  household.allowanceBalances[member] = remainingBalance;
+  saveHousehold(householdId, household);
+  return { member, paidOut, remainingBalance };
 }
 
 export function getTaskById(householdId: string, taskId: string): Task | undefined {
@@ -308,6 +394,30 @@ export function findItemByName(householdId: string, name: string): ShoppingItem 
 
 export function itemsRunningLow(householdId: string): ShoppingItem[] {
   return loadHousehold(householdId).shoppingItems.filter((i) => i.quantityOnHand <= i.reorderThreshold);
+}
+
+/**
+ * Marks an item as running low by name — creating it if it isn't already
+ * tracked — so a freeform mention like "we're almost out of coffee" (see
+ * capture_note) can land on the shopping/low-stock list without the caller
+ * first needing to know whether that item already exists. An existing item
+ * is pulled down to (at most) its own reorder threshold, i.e. exactly the
+ * same "running low" state itemsRunningLow already checks for; a brand-new
+ * item is seeded at quantity 0 with a threshold of 1 so it shows up as low
+ * immediately.
+ */
+export function reportLowStock(householdId: string, itemName: string): ShoppingItem {
+  const household = loadHousehold(householdId);
+  const needle = itemName.trim().toLowerCase();
+  let item = household.shoppingItems.find((i) => i.name.toLowerCase() === needle);
+  if (item) {
+    item.quantityOnHand = Math.min(item.quantityOnHand, item.reorderThreshold);
+  } else {
+    item = { id: randomUUID(), name: itemName.trim(), quantityOnHand: 0, reorderThreshold: 1 };
+    household.shoppingItems.push(item);
+  }
+  saveHousehold(householdId, household);
+  return item;
 }
 
 export function recordReorder(householdId: string, itemId: string): ShoppingItem | undefined {

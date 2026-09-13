@@ -32,6 +32,12 @@ Alexa+'s agent can call these tools, in combination, to complete multi-step requ
 | `issue_household_token` | Mint a new bearer token for this household as `full-access` or `read-only` |
 | `register_alert_webhook` | Register an HMAC-signed callback URL for proactive budget/overdue-task alerts |
 | `get_alert_webhook_status` | Check whether a webhook is registered and how its last delivery went |
+| `suggest_meal_plan` | **Smart meal planner**: cross-references low stock, remaining groceries budget, and busy days into a plan |
+| `set_task_reward` | Attach an allowance amount to an existing task, paid to its assignee once it's completed |
+| `get_allowance_balance` | Check one (or every) household member's running allowance balance |
+| `record_allowance_payout` | Record an allowance payout, reducing (or zeroing) a member's balance |
+| `capture_note` | **Freeform dispatcher**: classifies one sentence via MCP sampling and routes it to shopping/task/expense |
+| `get_proactive_alerts` | Surface anomalies nobody asked about: task pileup, a budget trending high, stale low-stock items |
 
 Beyond tools, the server also exposes:
 
@@ -136,10 +142,48 @@ Beyond tools, the server also exposes:
   trash every Tuesday" survives across weeks without a background job re-adding it, and a 30-day lookahead shows
   every occurrence that falls in that window in one `list_upcoming_tasks` call.
 - **Household digest export.** `export_household_digest` produces one combined text report — upcoming tasks,
-  budget status, and low-stock items — for a household member to read at a glance, save, or share. Its summary
-  paragraph reuses the exact same sampling-backed narrative generation `generate_weekly_narrative` and
-  `run_morning_briefing` already use (falling back to the same kind of templated summary when the client doesn't
-  support MCP sampling) rather than duplicating that logic a third time.
+  budget status, low-stock items, and proactive anomaly flags — for a household member to read at a glance, save,
+  or share. Its summary paragraph reuses the exact same sampling-backed narrative generation `generate_weekly_narrative`
+  and `run_morning_briefing` already use (falling back to the same kind of templated summary when the client doesn't
+  support MCP sampling), and its anomaly section reuses `get_proactive_alerts`' exact detection logic, rather than
+  duplicating either.
+
+### Household copilot features (round 6)
+
+These four are the genuinely new *capabilities* this round adds — not more infrastructure hardening, but things a
+household would actually want that didn't exist in any form before, each wired for real against the same store
+every other tool already shares (no shadow data model, no stubs).
+
+- **Smart meal planner (`suggest_meal_plan`).** The one genuinely new cross-tool orchestration in this round: it
+  reads `itemsRunningLow` (what's about to run out — bias meal choice toward using it up instead of buying more),
+  `getBudgetStatusFor(householdId, "groceries")` (what's actually left to spend this week), and `listUpcomingTasks`
+  (which of the next N days already has something due — those get a quick meal, not an hour-long recipe) and turns
+  all three into a day-by-day plan against a small built-in meal catalog, capping total estimated cost at the real
+  remaining budget rather than a guess. No single existing tool could answer "what should we eat this week" — it's
+  a genuinely new combination of data three different domains already track.
+- **Chore-to-allowance ledger (`set_task_reward`, `get_allowance_balance`, `record_allowance_payout`).** Extends the
+  existing fair-chore-assignment system instead of building a second, parallel task concept: any task can carry an
+  optional `rewardAmount` (set independently of creation, so an existing chore can be turned into a paid one), and
+  `mark_task_done` — the one place "this chore just got done" is already known — credits that amount to the task's
+  `assignee` the moment it completes, into a running per-member balance that accumulates until explicitly paid out.
+  Ties the chore-rotation system and the expense-tracking concept together in a way neither does alone.
+- **Freeform capture / dispatcher tool (`capture_note`).** The front door for one unstructured sentence a household
+  member might actually say to Alexa+ — "we're almost out of coffee and I need to pick up dry cleaning by Friday" —
+  instead of requiring the caller to already know which of `add_task`/`reorder_item`/`add_expense` to call. Uses the
+  exact same MCP-sampling pattern `generate_weekly_narrative` already uses (no bundled model key) to ask the
+  connected client's own model to classify the note as strict JSON (shopping/task/expense), then dispatches into the
+  matching *existing* store function — never a fourth, competing way to create any of those records. Falls back to
+  treating the whole sentence as a task (rather than losing it) both when the client doesn't support sampling at
+  all, and when it does but its response can't be parsed as valid classification JSON.
+- **Proactive household digest with anomaly flags (`get_proactive_alerts`, and folded into `export_household_digest`).**
+  Every existing read tool answers a direct question ("what's due", "are we over budget *right now*", "what's low
+  *right now*"). This answers a question nobody asked: is anything trending toward a problem. Three detectors, all
+  reading data other tools already expose (`src/anomalies.ts`, no new persisted state) — a task-load pileup on one
+  member relative to the least-loaded one; a budget category that isn't over budget yet but whose spend-so-far,
+  projected out at its current pace (spend so far ÷ days since its first expense this rolling week × 7), is on track
+  to land well over it; and a low-stock item that's been sitting low for a long stretch (or has never been
+  reordered at all) without being restocked. `export_household_digest` reuses the identical detection function for
+  its own "WORTH ATTENTION" section rather than a second copy.
 
 ## Persistence
 
@@ -170,6 +214,11 @@ an existing household possible at all (see "Role-based access control" above). A
 (last attempt/success/error) is the one piece of round-5 state that is intentionally **not** persisted — it's
 process-lifetime observability only, the same tradeoff round 4 made for the reorder-idempotency cache.
 
+Round 6 adds one new field to the same per-household JSON file rather than a separate store: `allowanceBalances`
+(a `member -> running balance` map, credited by `mark_task_done` when a task carries a `rewardAmount`). It's
+optional on the `Household` type and every reader defaults a missing map to `{}`, so a household file written by an
+earlier round still loads without a migration step.
+
 ## Project layout
 
 ```
@@ -192,17 +241,29 @@ src/
                    household ID
   eventStore.ts    InMemoryEventStore — Streamable HTTP resumability (replay after a dropped connection)
   prompts.ts       weekly_household_briefing prompt template
-  types.ts         Shared data model, including RecurrenceRule, AlertWebhookRegistration, AccessRole
+  mealPlanner.ts   buildMealPlan() — pure planning logic for suggest_meal_plan, reading low-stock/budget/task
+                   data from store.ts and combining it against a small built-in meal catalog; no store writes
+  anomalies.ts     computeHouseholdAnomalies() (+ the three individual detectors) for get_proactive_alerts and
+                   export_household_digest's WORTH ATTENTION section — reads existing store data, no new state
+  types.ts         Shared data model, including RecurrenceRule, AlertWebhookRegistration, AccessRole,
+                   Task.rewardAmount, Household.allowanceBalances
   tools/
-    tasks.ts       list_upcoming_tasks, add_task, add_recurring_task, import_tasks, mark_task_done,
-                   suggest_assignee, sync_household_calendar (the last three also fire overdue-task alerts)
+    tasks.ts       list_upcoming_tasks, add_task, add_recurring_task, import_tasks, mark_task_done (also credits
+                   an allowance reward if one was set), suggest_assignee, sync_household_calendar (the last two
+                   also fire overdue-task alerts)
     shopping.ts    list_low_stock_items, reorder_item (elicitation-backed, idempotency-key protected)
-    expenses.ts    add_expense (also fires budget-exceeded alerts), get_weekly_summary, set_budget,
-                   get_budget_status
-    insights.ts    generate_weekly_narrative, run_morning_briefing, export_household_digest (MCP sampling +
-                   compound orchestration + combined report, all sharing one sampleNarrative() helper)
+    expenses.ts    add_expense, get_weekly_summary, set_budget, get_budget_status — plus applyExpenseFollowUps(),
+                   the shared over-budget-check/log/webhook logic add_expense and capture_note's expense branch
+                   both call, so that behavior lives in exactly one place
+    insights.ts    generate_weekly_narrative, run_morning_briefing, get_proactive_alerts, export_household_digest
+                   (MCP sampling + compound orchestration + anomaly detection + combined report, sharing one
+                   sampleNarrative() helper and one computeHouseholdAnomalies() call)
     access.ts      issue_household_token — mint a full-access or read-only token for this household
     webhooks.ts    register_alert_webhook, get_alert_webhook_status
+    mealPlan.ts    suggest_meal_plan — thin tool wrapper around mealPlanner.ts's buildMealPlan()
+    allowance.ts   set_task_reward, get_allowance_balance, record_allowance_payout (the chore-to-allowance ledger)
+    capture.ts     capture_note — sampling-backed classification + dispatch into shopping/task/expense, reusing
+                   reportLowStock/addTask/addExpense and expenses.ts's applyExpenseFollowUps rather than a new path
 data/              JSON-file-backed household storage, one file per household ID, plus _tokens.json (the
                    role-aware token registry) — gitignored, created on first use
 test/
@@ -211,8 +272,11 @@ test/
                    progress-streaming tool call, idempotent retry, compound tool, a direct EventStore unit
                    test, bearer-token household isolation, structured logging notifications, file-backed
                    persistence across a simulated restart, bulk task import, recurring-task materialization
-                   across multiple weeks, the household digest export, read-only token enforcement, and
-                   HMAC-signed webhook delivery against a real local HTTP listener
+                   across multiple weeks, the household digest export, read-only token enforcement,
+                   HMAC-signed webhook delivery against a real local HTTP listener, the chore-to-allowance
+                   ledger, capture_note's shopping/task/expense routing (plus its two fallback paths),
+                   suggest_meal_plan's budget/low-stock/busy-day cross-referencing, and proactive anomaly
+                   detection (task pileup, spending-pace trend, stale low stock)
 ```
 
 ## Running it
@@ -298,6 +362,27 @@ Verify it the same way `ring-porchpass`'s Ring-event ingress verifies inbound si
 `get_alert_webhook_status` reports the outcome of the most recent delivery attempt without ever re-exposing the
 secret.
 
+### Trying the household copilot features
+
+```jsonc
+// tools/call suggest_meal_plan { "days": 3 }
+// -> structuredContent: { days: [{ date, meal, quickMeal, busyDay, estCost, usesLowStockItems }, ...],
+//                          totalEstCost, groceryBudgetRemaining, withinBudget, lowStockConsidered, busyDayCount }
+
+// tools/call set_task_reward { "taskId": "<id from list_upcoming_tasks>", "amount": 2.5 }
+// tools/call mark_task_done { "taskId": "<same id>" }
+// -> text includes "Jordan earned 2.50 (allowance balance: 2.50)."
+// tools/call get_allowance_balance {}                       // every member's balance
+// tools/call record_allowance_payout { "member": "Jordan" } // pays out (and zeroes) the full balance
+
+// tools/call capture_note { "text": "we're almost out of coffee and I need to pick up dry cleaning by Friday" }
+// -> classifies via MCP sampling and routes to reportLowStock/addTask/addExpense; structuredContent names
+//    which one (routedTo) and whether sampling was actually used (usedSampling)
+
+// tools/call get_proactive_alerts {}
+// -> structuredContent: { anomalies: [{ type, severity, message, data }, ...], count }
+```
+
 ## Testing
 
 ```bash
@@ -317,10 +402,19 @@ its tasks/budget/low-stock sections against the equivalent individual tool calls
 effect — when it calls `add_task`; and registers an alert webhook against a real local `http` listener spun up in
 the test process, then verifies a subsequent over-budget expense (and a subsequent already-overdue `add_task`)
 each deliver a payload to it whose `X-HomeOps-Signature` header is exactly the HMAC-SHA256 the test independently
-recomputes from the secret `register_alert_webhook` returned. It then connects two more clients under two
-different bearer tokens and confirms their household data is completely isolated, and finally spins up two
-independent server instances pointed at the same on-disk data directory to confirm a household's data survives a
-simulated restart. No external services required.
+recomputes from the secret `register_alert_webhook` returned. It then exercises all four round-6 features: sets a
+reward on a task, marks it done, and confirms the assignee's allowance balance is credited and then zeroed by a
+payout; sends several freeform sentences through `capture_note` and confirms each lands in the right place
+(shopping, task-with-a-due-date, expense) via a scripted mock "model" keyed off the sentence, plus confirms the
+fallback-to-task behavior both when the mocked model's reply isn't valid classification JSON and when a second
+client connects with no sampling capability at all; calls `suggest_meal_plan` and checks its plan actually reflects
+the real remaining groceries budget and the low-stock items `capture_note` just added; and forces a task-load
+imbalance and an over-pace (but not yet over-budget) spending category, then confirms `get_proactive_alerts` flags
+all three anomaly types (including the never-reordered low-stock items) and that `export_household_digest`'s
+WORTH ATTENTION section reflects the same findings. It then connects two more clients under two different bearer
+tokens and confirms their household data is completely isolated, and finally spins up two independent server
+instances pointed at the same on-disk data directory to confirm a household's data survives a simulated restart.
+No external services required.
 
 You can also point the [MCP Inspector](https://modelcontextprotocol.io/legacy/tools/inspector) at the running
 server for interactive exploration:
@@ -348,6 +442,12 @@ npx @modelcontextprotocol/inspector
    - "Give me the full household report" (`export_household_digest` — tasks, budget, and low stock in one report)
    - "Set up a read-only token for the kitchen display" (`issue_household_token` with `role: "read-only"`)
    - "Notify me at this URL if we go over budget or something's overdue" (`register_alert_webhook`)
+   - "What should we eat for the next few days?" (`suggest_meal_plan` — uses up what's running low, fits the budget)
+   - "The trash chore is worth two dollars" → *(kid takes out the trash, marks it done)* → "How much have I earned?"
+     (`set_task_reward` → `mark_task_done` credits it → `get_allowance_balance` / `record_allowance_payout` to settle up)
+   - "We're almost out of coffee and I need to pick up dry cleaning by Friday" (`capture_note` — one sentence, no
+     need to say which tool handles it)
+   - "Is there anything I should know about?" (`get_proactive_alerts` — surfaces what nobody explicitly asked about)
 
 ## Verifying resumability by hand
 
@@ -387,25 +487,37 @@ curl -N http://localhost:3333/mcp -H "Accept: text/event-stream" -H "mcp-session
   now carrying an access role as well as a household ID, and enforced by wrapping the SDK's own tool-registration
   API rather than hand-checking a role in every handler. Outbound alert delivery reuses the exact HMAC-SHA256 +
   retry-with-backoff pattern this repo's other services (`ring-porchpass`, `firetv-courtside`) use for their own
-  webhooks, applied in the opposite (outbound) direction.
+  webhooks, applied in the opposite (outbound) direction. Round 6 adds a fifth genuine MCP-sampling consumer
+  (`capture_note`, classifying freeform text into strict JSON rather than just narrating data), and two modules
+  (`mealPlanner.ts`, `anomalies.ts`) that orchestrate *across* the existing store instead of adding a new isolated
+  data domain.
 - **Design:** Tools are scoped and composable so the agent can chain them (check → decide → act), with
   `run_morning_briefing` collapsing the common four-tool chain into one round trip for latency-sensitive voice
   interactions, `import_tasks` collapsing a whole batch of adds into one round trip and one notification, and
-  `export_household_digest` collapsing the same three-domain check into one shareable report. The one spending
-  tool (`reorder_item`) confirms through the protocol's own elicitation mechanism and is safe to retry via an
-  idempotency key, and every capability degrades gracefully when a client doesn't support it.
+  `export_household_digest` collapsing the same three-domain check (now four, with anomalies) into one shareable
+  report. The one spending tool (`reorder_item`) confirms through the protocol's own elicitation mechanism and is
+  safe to retry via an idempotency key, and every capability degrades gracefully when a client doesn't support it —
+  `capture_note` is the clearest new example, falling back to "just add it as a task" rather than erroring both
+  when sampling isn't supported and when the model's answer can't be parsed.
 - **Potential Impact:** A genuinely useful daily-use pattern (household coordination, fair chore-splitting, budget
   awareness) rather than a novelty demo, with production-grade concerns actually handled — safe retries on the
   spending path, connection resumability, per-household data isolation via bearer tokens, data that survives a
   restart, least-privilege access for household members who shouldn't be able to spend or edit, and proactive
   alerts that don't require an open session to receive — not just a happy-path demo. Recurring tasks close a real
-  daily-use gap (nobody re-adds "take out the trash" every single week by hand). The remaining hackathon-specific
-  shortcuts are the persistence layer (a JSON file per household, no real database) and the in-memory token/webhook
-  delivery-status registries — explicitly documented as such, not hidden.
+  daily-use gap (nobody re-adds "take out the trash" every single week by hand). Round 6's four features are the
+  ones squarely aimed at *this* criterion specifically: a meal plan that actually accounts for what's already
+  running low and what's left in the budget, an allowance system that makes fair chore-splitting mean something to
+  a kid, a capture tool that removes the "which tool do I even use" friction entirely, and anomaly flags that
+  surface a problem before anyone has to go looking for it. The remaining hackathon-specific shortcuts are the
+  persistence layer (a JSON file per household, no real database) and the in-memory token/webhook delivery-status
+  registries — explicitly documented as such, not hidden.
 - **Quality of Idea:** Demonstrates multi-tool agentic orchestration *and* deep MCP protocol usage (resources with
   live push updates, sampling instead of a bundled model key, resumable transport, idempotent writes, structured
   logging as a first-class observability channel, and now role-aware tool registration plus signed outbound
-  webhooks) — the actual differentiators between an "Agent Skill" and a legacy single-intent Alexa Skill.
+  webhooks) — the actual differentiators between an "Agent Skill" and a legacy single-intent Alexa Skill. Round 6 is
+  where that orchestration stops being purely infrastructural: `suggest_meal_plan` genuinely combines three
+  domains' data into an answer no single tool could give, and `capture_note` removes the requirement that the
+  caller already know the server's tool taxonomy at all.
 
 ## Friction log
 
