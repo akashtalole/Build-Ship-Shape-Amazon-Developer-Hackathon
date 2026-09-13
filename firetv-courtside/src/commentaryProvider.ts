@@ -1,4 +1,4 @@
-import type { CommentaryLine, EventType, GameEvent, GameState, ViewerPreferences } from "./types.js";
+import { DEFAULT_LOCALE, type CommentaryLine, type CommentaryLocale, type EventType, type GameEvent, type GameState, type ViewerPreferences } from "./types.js";
 
 /**
  * The seam between CourtSide's game logic and whatever actually generates
@@ -29,12 +29,14 @@ export interface EventCommentaryData {
   kind: "event";
   event: GameEvent;
   game: GameState;
+  locale: CommentaryLocale;
 }
 
 export interface QuestionAnswerData {
   kind: "question";
   question: string;
   game: GameState;
+  locale: CommentaryLocale;
 }
 
 /** Structured data behind a `GET /games/:id/recap` window — see `CommentaryProvider.generateRecap`. */
@@ -47,6 +49,7 @@ export interface RecapData {
   events: GameEvent[];
   /** Commentary lines within the window, chronological (oldest first). */
   commentaryLines: CommentaryLine[];
+  locale: CommentaryLocale;
 }
 
 /**
@@ -55,17 +58,45 @@ export interface RecapData {
  * question into a line of text to display/speak.
  */
 export interface CommentaryProvider {
-  /** Generates a natural-language line of commentary for a single game event. */
-  narrateEvent(game: GameState, event: GameEvent): Promise<string>;
-  /** Answers an on-demand viewer question, grounded in current game state. */
-  answerQuestion(game: GameState, question: string): Promise<string>;
-  /** Generates a natural-language recap summarizing a window of events/commentary — see `GET /games/:id/recap`. */
-  generateRecap(game: GameState, events: GameEvent[], commentaryLines: CommentaryLine[], windowLabel: string): Promise<string>;
+  /** Generates a natural-language line of commentary for a single game event, in the requested locale/style (defaults to `"en-broadcast"`). */
+  narrateEvent(game: GameState, event: GameEvent, locale?: CommentaryLocale): Promise<string>;
+  /** Answers an on-demand viewer question, grounded in current game state, in the requested locale/style. */
+  answerQuestion(game: GameState, question: string, locale?: CommentaryLocale): Promise<string>;
+  /** Generates a natural-language recap summarizing a window of events/commentary, in the requested locale/style — see `GET /games/:id/recap`. */
+  generateRecap(
+    game: GameState,
+    events: GameEvent[],
+    commentaryLines: CommentaryLine[],
+    windowLabel: string,
+    locale?: CommentaryLocale
+  ): Promise<string>;
 }
 
 const SYSTEM_PERSONA =
   "You are CourtSide, an upbeat but concise AI sports co-commentator overlaid on a live broadcast. " +
   "Keep responses to one or two sentences so they fit an on-screen overlay without blocking the action.";
+
+/**
+ * Per-locale system persona — a real Bedrock-backed provider would swap its
+ * whole system prompt per locale/style the same way `TemplateCommentaryProvider`
+ * swaps its whole template pack below, rather than asking one prompt to
+ * translate its own output on the fly. See "Localized commentary packs".
+ */
+function localeSystemPersona(locale: CommentaryLocale): string {
+  if (locale === "en-casual") {
+    return (
+      "You are CourtSide, hanging out and watching the game with the viewer like a hype friend on the couch. " +
+      "Casual, excited, first-person plural (\"we\"/\"our guys\") where it fits. One or two sentences, no jargon-y broadcast-speak."
+    );
+  }
+  if (locale === "es-broadcast") {
+    return (
+      "Eres CourtSide, un co-comentarista de IA formal para una transmisión deportiva en vivo, superpuesto en pantalla. " +
+      "Responde siempre en español, en un tono profesional de locutor. Una o dos oraciones como máximo."
+    );
+  }
+  return SYSTEM_PERSONA;
+}
 
 /**
  * Template-based fallback implementation. Produces reasonable, varied
@@ -76,39 +107,45 @@ const SYSTEM_PERSONA =
  * `gameService.ts` or `server.ts`, since both only depend on this interface.
  */
 export class TemplateCommentaryProvider implements CommentaryProvider {
-  async narrateEvent(game: GameState, event: GameEvent): Promise<string> {
-    const prompt = buildEventPrompt(game, event);
+  async narrateEvent(game: GameState, event: GameEvent, locale: CommentaryLocale = DEFAULT_LOCALE): Promise<string> {
+    const prompt = buildEventPrompt(game, event, locale);
     return templateNarrateEvent(prompt.data as EventCommentaryData);
   }
 
-  async answerQuestion(game: GameState, question: string): Promise<string> {
-    const prompt = buildQuestionPrompt(game, question);
+  async answerQuestion(game: GameState, question: string, locale: CommentaryLocale = DEFAULT_LOCALE): Promise<string> {
+    const prompt = buildQuestionPrompt(game, question, locale);
     return templateAnswerQuestion(prompt.data as QuestionAnswerData);
   }
 
-  async generateRecap(game: GameState, events: GameEvent[], commentaryLines: CommentaryLine[], windowLabel: string): Promise<string> {
-    const prompt = buildRecapPrompt(game, events, commentaryLines, windowLabel);
+  async generateRecap(
+    game: GameState,
+    events: GameEvent[],
+    commentaryLines: CommentaryLine[],
+    windowLabel: string,
+    locale: CommentaryLocale = DEFAULT_LOCALE
+  ): Promise<string> {
+    const prompt = buildRecapPrompt(game, events, commentaryLines, windowLabel, locale);
     return templateGenerateRecap(prompt.data as RecapData);
   }
 }
 
 /** Builds the Bedrock-shaped prompt for a single event. Exported so a real provider's tests can reuse it. */
-export function buildEventPrompt(game: GameState, event: GameEvent): CommentaryPrompt {
+export function buildEventPrompt(game: GameState, event: GameEvent, locale: CommentaryLocale = DEFAULT_LOCALE): CommentaryPrompt {
   return {
-    system: SYSTEM_PERSONA,
+    system: localeSystemPersona(locale),
     instruction: "Narrate this single play for a viewer who may not know the sport well. One or two sentences.",
     context: serializeGameContext(game, event),
-    data: { kind: "event", event, game },
+    data: { kind: "event", event, game, locale },
   };
 }
 
 /** Builds the Bedrock-shaped prompt for a viewer question. Exported so a real provider's tests can reuse it. */
-export function buildQuestionPrompt(game: GameState, question: string): CommentaryPrompt {
+export function buildQuestionPrompt(game: GameState, question: string, locale: CommentaryLocale = DEFAULT_LOCALE): CommentaryPrompt {
   return {
-    system: SYSTEM_PERSONA,
+    system: localeSystemPersona(locale),
     instruction: `Answer the viewer's question using only the game context below. Question: "${question}"`,
     context: serializeGameContext(game),
-    data: { kind: "question", question, game },
+    data: { kind: "question", question, game, locale },
   };
 }
 
@@ -117,13 +154,14 @@ export function buildRecapPrompt(
   game: GameState,
   events: GameEvent[],
   commentaryLines: CommentaryLine[],
-  windowLabel: string
+  windowLabel: string,
+  locale: CommentaryLocale = DEFAULT_LOCALE
 ): CommentaryPrompt {
   return {
-    system: SYSTEM_PERSONA,
+    system: localeSystemPersona(locale),
     instruction: `Summarize everything that happened ${windowLabel} in 2-4 sentences for a viewer catching up. Mention the score and any big moments.`,
     context: serializeRecapContext(game, events, windowLabel),
-    data: { kind: "recap", game, windowLabel, events, commentaryLines },
+    data: { kind: "recap", game, windowLabel, events, commentaryLines, locale },
   };
 }
 
@@ -335,11 +373,14 @@ function gameEndPhrase(sport: SportKey, game: GameState): string {
 }
 
 function templateNarrateEvent(data: EventCommentaryData): string {
-  const { event, game } = data;
+  const { event, game, locale } = data;
   const who = event.player ?? teamName(game, event.team) ?? "The team";
   const seed = event.id;
-  const sport = normalizeSport(game.sport);
 
+  if (locale === "en-casual") return pick(casualNarrateOptions(who, event, game), seed);
+  if (locale === "es-broadcast") return pick(spanishNarrateOptions(who, event, game), seed);
+
+  const sport = normalizeSport(game.sport);
   const templates: Record<EventType, () => string> = {
     score: () => pick(scoreTemplates(sport, who, event, game), seed),
     foul: () => pick(foulTemplates(sport, who, event), seed),
@@ -356,6 +397,90 @@ function templateNarrateEvent(data: EventCommentaryData): string {
   return templates[event.type]();
 }
 
+// --- Localized commentary packs ------------------------------------------
+//
+// Two additional, genuinely distinct phrasing packs alongside the original
+// (now-named) "en-broadcast" default above: a casual friend-watching-with-you
+// voice, and a formal Spanish-language broadcast voice. Deliberately *not*
+// translated word-for-word from the English broadcast templates above — each
+// pack has its own sentence rhythm and vocabulary appropriate to its style,
+// the same way a real bilingual or dual-tone broadcast booth would write two
+// completely separate scripts rather than running one through a translator.
+// Kept sport-neutral (unlike "en-broadcast", which is fully per-sport as of
+// round 4) — an honest scope line documented in FRICTION_LOG.md rather than
+// tripling the per-sport template surface for this round.
+
+function casualNarrateOptions(who: string, event: GameEvent, game: GameState): string[] {
+  const score = scoreLine(game);
+  switch (event.type) {
+    case "score":
+      return [
+        `Ohhh we love to see it — ${who} scores${event.points ? ` (+${event.points})` : ""}! ${score}.`,
+        `${who} just put that one home! ${score}.`,
+        `Yesss, ${who}'s heating up! ${score}.`,
+      ];
+    case "foul":
+      return [
+        `Ugh, foul on ${who}${event.description ? ` — ${event.description}` : ""}. Rough one.`,
+        `${who} picks up a foul there${event.description ? ` (${event.description})` : ""}.`,
+      ];
+    case "turnover":
+      return [
+        `Oof, ${who} coughs it up${event.description ? ` — ${event.description}` : ""}. That's gonna hurt.`,
+        `Turnover for ${who}, we'll take that back please.`,
+      ];
+    case "rebound":
+      return [`${who} snags that rebound, nice hustle!`, `${who} cleans it up on the boards.`];
+    case "steal":
+      return [`Ooh, ${who} jumps the passing lane and steals it! Love that.`, `${who} with the sticky fingers — steal!`];
+    case "block":
+      return [`Get that outta here! ${who} sends it back.`, `${who} says not today — big block!`];
+    case "timeout":
+      return [`${who} calls timeout, let's regroup for a sec.`];
+    case "period_end":
+      return [`And that's the ${game.periodLabel}! ${score}. Let's see what's next.`];
+    case "game_end":
+      return [`And that's a wrap, folks! Final: ${score}. What a watch.`];
+    default:
+      return [`${who} — something's happening out there. ${score}.`];
+  }
+}
+
+function spanishNarrateOptions(who: string, event: GameEvent, game: GameState): string[] {
+  const score = scoreLine(game);
+  switch (event.type) {
+    case "score":
+      return [
+        `¡Anota ${who}${event.points ? ` (+${event.points})` : ""}! ${score}.`,
+        `${who} pone el balón en la canasta. Marcador: ${score}.`,
+      ];
+    case "foul":
+      return [
+        `Falta de ${who}${event.description ? `: ${event.description}` : ""}.`,
+        `Se marca una falta sobre ${who}.`,
+      ];
+    case "turnover":
+      return [
+        `Pérdida de balón de ${who}${event.description ? ` — ${event.description}` : ""}.`,
+        `${who} pierde el balón.`,
+      ];
+    case "rebound":
+      return [`Rebote de ${who}.`, `${who} se hace con el rebote.`];
+    case "steal":
+      return [`¡Robo de balón de ${who}!`, `${who} le quita el balón al rival.`];
+    case "block":
+      return [`¡Bloqueo de ${who}!`, `${who} rechaza el intento de tiro.`];
+    case "timeout":
+      return [`${who} pide tiempo fuera.`];
+    case "period_end":
+      return [`Termina el ${game.periodLabel} ${event.period ?? game.period}. ${score}.`];
+    case "game_end":
+      return [`¡Ese es el final del partido! ${score}.`];
+    default:
+      return [`Jugada de ${who}. ${score}.`];
+  }
+}
+
 /**
  * Template fallback for `GET /games/:id/recap`: reuses the same
  * sport-neutral `describeEvent` helper the live-context serialization uses
@@ -364,7 +489,27 @@ function templateNarrateEvent(data: EventCommentaryData): string {
  * needing its own per-sport phrasing.
  */
 function templateGenerateRecap(data: RecapData): string {
-  const { game, events, windowLabel } = data;
+  const { game, events, windowLabel, locale } = data;
+
+  if (locale === "en-casual") {
+    if (events.length === 0) return `Nothing much going on ${windowLabel}, still hanging at ${scoreLine(game)}.`;
+    const MAX_MENTIONED = 8;
+    const mentioned = events.slice(-MAX_MENTIONED);
+    const recap = mentioned.map((e) => describeEvent(e)).join("; ");
+    const omitted = events.length - mentioned.length;
+    const omittedNote = omitted > 0 ? ` (and ${omitted} more play${omitted === 1 ? "" : "s"} before that)` : "";
+    return `Ok here's the rundown for ${windowLabel}: ${recap}${omittedNote}. We're at ${scoreLine(game)} now!`;
+  }
+  if (locale === "es-broadcast") {
+    if (events.length === 0) return `No ha pasado nada ${windowLabel}. Sigue ${scoreLine(game)}.`;
+    const MAX_MENTIONED = 8;
+    const mentioned = events.slice(-MAX_MENTIONED);
+    const recap = mentioned.map((e) => describeEvent(e)).join("; ");
+    const omitted = events.length - mentioned.length;
+    const omittedNote = omitted > 0 ? ` (además de ${omitted} jugada${omitted === 1 ? "" : "s"} anteriores)` : "";
+    return `Resumen de lo ocurrido ${windowLabel}: ${recap}${omittedNote}. Marcador actual: ${scoreLine(game)}.`;
+  }
+
   if (events.length === 0) {
     return `Nothing happened ${windowLabel}. Still ${scoreLine(game)}.`;
   }
@@ -378,8 +523,11 @@ function templateGenerateRecap(data: RecapData): string {
 }
 
 function templateAnswerQuestion(data: QuestionAnswerData): string {
-  const { question, game } = data;
+  const { question, game, locale } = data;
   const q = question.toLowerCase();
+
+  if (locale === "en-casual") return casualAnswerQuestion(q, game);
+  if (locale === "es-broadcast") return spanishAnswerQuestion(q, game);
 
   if (/score|winning|losing|ahead/.test(q)) {
     const diff = game.homeScore - game.awayScore;
@@ -420,4 +568,64 @@ function templateAnswerQuestion(data: QuestionAnswerData): string {
 
   // Generic fallback: ground the answer in the current state even without matching a known intent.
   return `Right now it's ${scoreLine(game)}, ${game.periodLabel} ${game.period} with ${game.clock} remaining. Ask about the score, a foul, or a turnover for more detail.`;
+}
+
+function casualAnswerQuestion(q: string, game: GameState): string {
+  if (/score|winning|losing|ahead/.test(q)) {
+    const diff = game.homeScore - game.awayScore;
+    const leader = diff === 0 ? "it's all tied up" : diff > 0 ? `${game.homeTeam}'s up by ${diff}` : `${game.awayTeam}'s up by ${-diff}`;
+    return `Right now ${leader}! ${scoreLine(game)}, ${game.periodLabel} ${game.period}, ${game.clock} left on the clock.`;
+  }
+  if (/foul/.test(q)) {
+    const lastFoul = game.recentEvents.find((e) => e.type === "foul");
+    if (lastFoul) {
+      const who = lastFoul.player ?? teamName(game, lastFoul.team) ?? "somebody";
+      return `Yeah, that was on ${who}${lastFoul.description ? ` — ${lastFoul.description}` : ""}.`;
+    }
+    return "No fouls to talk about lately, game's flowing!";
+  }
+  if (/turnover/.test(q)) {
+    const lastTurnover = game.recentEvents.find((e) => e.type === "turnover");
+    if (lastTurnover) {
+      const who = lastTurnover.player ?? teamName(game, lastTurnover.team) ?? "somebody";
+      return `${who} gave that one up${lastTurnover.description ? ` — ${lastTurnover.description}` : ""}. Happens.`;
+    }
+    return "Nobody's turned it over in a bit, clean stretch of ball.";
+  }
+  if (/happen|going on|update|catch me up/.test(q)) {
+    if (game.recentEvents.length === 0) return `Nothing yet, we're just getting started at ${scoreLine(game)}.`;
+    const recap = game.recentEvents.slice(0, 3).map((e) => describeEvent(e)).join("; ");
+    return `Here's what you missed: ${recap}. We're at ${scoreLine(game)} right now.`;
+  }
+  return `We're at ${scoreLine(game)}, ${game.periodLabel} ${game.period}, ${game.clock} to go. Ask me about the score, a foul, or a turnover!`;
+}
+
+function spanishAnswerQuestion(q: string, game: GameState): string {
+  if (/score|winning|losing|ahead|marcador|ganando/.test(q)) {
+    const diff = game.homeScore - game.awayScore;
+    const leader = diff === 0 ? "Están empatados" : diff > 0 ? `${game.homeTeam} gana por ${diff}` : `${game.awayTeam} gana por ${-diff}`;
+    return `${leader}. Marcador actual: ${scoreLine(game)}, ${game.periodLabel} ${game.period}, quedan ${game.clock}.`;
+  }
+  if (/foul|falta/.test(q)) {
+    const lastFoul = game.recentEvents.find((e) => e.type === "foul");
+    if (lastFoul) {
+      const who = lastFoul.player ?? teamName(game, lastFoul.team) ?? "un jugador";
+      return `La última falta fue de ${who}${lastFoul.description ? `: ${lastFoul.description}` : ""}.`;
+    }
+    return "No ha habido faltas recientemente.";
+  }
+  if (/turnover|pérdida|perdida/.test(q)) {
+    const lastTurnover = game.recentEvents.find((e) => e.type === "turnover");
+    if (lastTurnover) {
+      const who = lastTurnover.player ?? teamName(game, lastTurnover.team) ?? "un jugador";
+      return `La última pérdida de balón fue de ${who}${lastTurnover.description ? ` — ${lastTurnover.description}` : ""}.`;
+    }
+    return "No ha habido pérdidas de balón recientemente.";
+  }
+  if (/happen|going on|update|catch me up|qué pasó|resumen/.test(q)) {
+    if (game.recentEvents.length === 0) return `Todavía no ha pasado nada. Empezamos con ${scoreLine(game)}.`;
+    const recap = game.recentEvents.slice(0, 3).map((e) => describeEvent(e)).join("; ");
+    return `Esto es lo último: ${recap}. Marcador actual: ${scoreLine(game)}.`;
+  }
+  return `Ahora mismo va ${scoreLine(game)}, ${game.periodLabel} ${game.period}, quedan ${game.clock}. Pregúntame por el marcador, una falta o una pérdida de balón.`;
 }

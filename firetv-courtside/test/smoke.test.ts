@@ -649,6 +649,289 @@ async function main() {
 
   await playerWebhook.close();
 
+  // ======================================================================
+  // Round 5 features: fantasy-relevant play detection, live
+  // prediction/trivia mode, shared watch-party sessions, localized
+  // commentary packs.
+  // ======================================================================
+
+  // --- 16. Fantasy-relevant play detection: a viewer's registered roster
+  // tags matching plays into a separate, retrievable lens on the same event
+  // stream — including a backfill of plays that already happened. ---
+  const fantasyGame = (await postJson("/games", { homeTeam: "Bucks", awayTeam: "Celtics" })).body;
+
+  // A play before the roster is registered — should still show up once the
+  // roster is set, via backfill.
+  const preRosterPlay = await postJson(`/games/${fantasyGame.id}/events`, {
+    type: "rebound",
+    team: "home",
+    player: "Giannis",
+  });
+  assert.equal(preRosterPlay.status, 201);
+
+  const setRosterRes = await postJson(`/games/${fantasyGame.id}/fantasy/fantasy-viewer`, {
+    players: ["Giannis", "Tatum"],
+  });
+  assert.equal(setRosterRes.status, 200);
+  assert.deepEqual(setRosterRes.body.roster, ["Giannis", "Tatum"]);
+  assert.equal(setRosterRes.body.highlights.length, 1, "registering a roster should backfill plays already ingested for a rostered player");
+  assert.equal(setRosterRes.body.highlights[0].event.id, preRosterPlay.body.event.id);
+  console.log("✓ POST /games/:id/fantasy/:viewerId registers a roster and backfills plays already ingested for a rostered player");
+
+  // A play naming a rostered player after registration — tagged live.
+  const giannisScore = await postJson(`/games/${fantasyGame.id}/events`, {
+    type: "score",
+    team: "home",
+    player: "Giannis",
+    points: 2,
+  });
+  // A play naming a non-rostered player — must not show up for this viewer.
+  await postJson(`/games/${fantasyGame.id}/events`, { type: "score", team: "away", player: "Brown", points: 2 });
+  // A play naming the other rostered player.
+  const tatumFoul = await postJson(`/games/${fantasyGame.id}/events`, {
+    type: "foul",
+    team: "away",
+    player: "Tatum",
+    description: "reaching-in foul",
+  });
+
+  const fantasyHighlightsRes = await fetch(`${base}/games/${fantasyGame.id}/fantasy/fantasy-viewer`);
+  assert.equal(fantasyHighlightsRes.status, 200);
+  const fantasyHighlights = await fantasyHighlightsRes.json();
+  assert.equal(fantasyHighlights.highlights.length, 3, "roster started at 1 backfilled play, plus the 2 new plays naming rostered players");
+  assert.equal(fantasyHighlights.highlights[0].event.id, tatumFoul.body.event.id, "fantasy highlights are newest-first");
+  assert.ok(
+    fantasyHighlights.highlights.some((h: { event: { id: string } }) => h.event.id === giannisScore.body.event.id),
+    "a live play naming a rostered player must be tagged as fantasy-relevant"
+  );
+  assert.ok(
+    !fantasyHighlights.highlights.some((h: { event: { player?: string } }) => h.event.player === "Brown"),
+    "a play naming a non-rostered player must not appear in this viewer's fantasy highlights"
+  );
+  console.log("✓ GET /games/:id/fantasy/:viewerId returns fantasy-relevant plays (backfilled + live), newest-first, excluding non-rostered players");
+
+  const noRosterYet = await (await fetch(`${base}/games/${fantasyGame.id}/fantasy/never-registered`)).json();
+  assert.deepEqual(noRosterYet.roster, []);
+  assert.deepEqual(noRosterYet.highlights, []);
+  console.log("✓ GET /games/:id/fantasy/:viewerId for a viewer with no registered roster returns an empty (not error) result");
+
+  const badRoster = await postJson(`/games/${fantasyGame.id}/fantasy/bad-viewer`, { players: [] });
+  assert.equal(badRoster.status, 400);
+  console.log("✓ registering an empty fantasy roster is rejected with 400");
+
+  // --- 17. Live prediction/trivia mode: a prediction genuinely resolves off
+  // a real subsequent event, and per-viewer accuracy tracks correctness. ---
+  const predictionGame = (await postJson("/games", { homeTeam: "Suns", awayTeam: "Kings" })).body;
+
+  const poseRes = await postJson(`/games/${predictionGame.id}/predictions`, {});
+  assert.equal(poseRes.status, 201);
+  assert.equal(poseRes.body.type, "next_possession_score");
+  assert.deepEqual(poseRes.body.options, ["yes", "no"]);
+  assert.equal(poseRes.body.status, "open");
+  const predictionId = poseRes.body.id;
+  console.log("✓ POST /games/:id/predictions poses a genuine yes/no prediction tied to live game state");
+
+  const answerYesRes = await postJson(`/games/${predictionGame.id}/predictions/${predictionId}/answer`, {
+    viewerId: "pred-viewer-1",
+    answer: "yes",
+  });
+  assert.equal(answerYesRes.status, 201);
+  const answerNoRes = await postJson(`/games/${predictionGame.id}/predictions/${predictionId}/answer`, {
+    viewerId: "pred-viewer-2",
+    answer: "no",
+  });
+  assert.equal(answerNoRes.status, 201);
+  console.log("✓ POST /games/:id/predictions/:id/answer accepts an answer from each of two viewers before the outcome is known");
+
+  const duplicateAnswer = await postJson(`/games/${predictionGame.id}/predictions/${predictionId}/answer`, {
+    viewerId: "pred-viewer-1",
+    answer: "no",
+  });
+  assert.equal(duplicateAnswer.status, 400, "a viewer answering the same prediction twice should be rejected");
+  console.log("✓ answering the same prediction twice as the same viewer is rejected with 400");
+
+  // A routine, unrelated event (rebound) must not resolve the prediction.
+  await postJson(`/games/${predictionGame.id}/events`, { type: "rebound", team: "home", player: "Booker" });
+  const stillOpen = await (await fetch(`${base}/games/${predictionGame.id}/predictions/${predictionId}`)).json();
+  assert.equal(stillOpen.prediction.status, "open", "an unrelated event (rebound) must not resolve a next_possession_score prediction");
+  console.log("✓ an unrelated event does not resolve an open prediction — resolution is genuinely event-driven");
+
+  // A real score event resolves it as "yes".
+  const resolvingScore = await postJson(`/games/${predictionGame.id}/events`, { type: "score", team: "home", points: 2 });
+  assert.equal(resolvingScore.status, 201);
+  const resolvedDetail = await (await fetch(`${base}/games/${predictionGame.id}/predictions/${predictionId}`)).json();
+  assert.equal(resolvedDetail.prediction.status, "resolved");
+  assert.equal(resolvedDetail.prediction.outcome, "yes");
+  assert.equal(resolvedDetail.prediction.resolvedEventId, resolvingScore.body.event.id);
+  const answerByViewer: Record<string, { correct?: boolean }> = {};
+  for (const a of resolvedDetail.answers) answerByViewer[a.viewerId] = a;
+  assert.equal(answerByViewer["pred-viewer-1"].correct, true, "the viewer who answered 'yes' should be scored correct");
+  assert.equal(answerByViewer["pred-viewer-2"].correct, false, "the viewer who answered 'no' should be scored incorrect");
+  console.log("✓ a real subsequent score event resolves the prediction 'yes' and scores each viewer's answer correctly");
+
+  const accuracy1 = await (await fetch(`${base}/viewers/pred-viewer-1/predictions/accuracy`)).json();
+  assert.equal(accuracy1.correct, 1);
+  assert.equal(accuracy1.total, 1);
+  assert.equal(accuracy1.accuracy, 1);
+  const accuracy2 = await (await fetch(`${base}/viewers/pred-viewer-2/predictions/accuracy`)).json();
+  assert.equal(accuracy2.correct, 0);
+  assert.equal(accuracy2.total, 1);
+  console.log("✓ GET /viewers/:viewerId/predictions/accuracy tracks running accuracy per viewer");
+
+  // Answering after resolution is rejected.
+  const answerAfterResolved = await postJson(`/games/${predictionGame.id}/predictions/${predictionId}/answer`, {
+    viewerId: "pred-viewer-3",
+    answer: "yes",
+  });
+  assert.equal(answerAfterResolved.status, 400, "answering a resolved prediction should be rejected");
+  console.log("✓ answering an already-resolved prediction is rejected with 400");
+
+  // A multiple-choice prediction, voided when the game ends before it resolves.
+  const mcPredictionRes = await postJson(`/games/${predictionGame.id}/predictions`, { type: "next_team_to_score" });
+  assert.equal(mcPredictionRes.status, 201);
+  assert.deepEqual(mcPredictionRes.body.options, ["home", "away"]);
+  await postJson(`/games/${predictionGame.id}/predictions/${mcPredictionRes.body.id}/answer`, {
+    viewerId: "pred-viewer-4",
+    answer: "home",
+  });
+  await postJson(`/games/${predictionGame.id}/events`, { type: "game_end" });
+  const voidedDetail = await (await fetch(`${base}/games/${predictionGame.id}/predictions/${mcPredictionRes.body.id}`)).json();
+  assert.equal(voidedDetail.prediction.status, "voided", "a prediction still open when the game ends should be voided, not left open forever");
+  const accuracy4 = await (await fetch(`${base}/viewers/pred-viewer-4/predictions/accuracy`)).json();
+  assert.equal(accuracy4.total, 0, "a voided prediction must not count against a viewer's accuracy");
+  console.log("✓ a prediction still open at game_end is voided rather than left open forever, and doesn't count against accuracy");
+
+  const badPredictionAnswer = await postJson(`/games/${predictionGame.id}/predictions`, {});
+  const invalidAnswer = await postJson(`/games/${predictionGame.id}/predictions/${badPredictionAnswer.body.id}/answer`, {
+    viewerId: "v",
+    answer: "maybe",
+  });
+  assert.equal(invalidAnswer.status, 400, "an answer outside the prediction's options should be rejected");
+  console.log("✓ an answer outside a prediction's valid options is rejected with 400");
+
+  // --- 18. Shared watch-party session: a question asked with a partyId is
+  // visible to the whole party over SSE, tagged with the party id, and
+  // recorded in the party's durable Q&A history. ---
+  const partyGame = (await postJson("/games", { homeTeam: "Heat", awayTeam: "Magic" })).body;
+
+  const createPartyRes = await postJson(`/games/${partyGame.id}/parties`, { name: "Living Room", viewerId: "party-host" });
+  assert.equal(createPartyRes.status, 201);
+  const partyId = createPartyRes.body.party.id;
+  assert.deepEqual(createPartyRes.body.party.members, ["party-host"]);
+  console.log("✓ POST /games/:id/parties creates a named watch party and joins the creating viewer");
+
+  const duplicatePartyRes = await postJson(`/games/${partyGame.id}/parties`, { name: "living room", viewerId: "party-friend" });
+  assert.equal(duplicatePartyRes.status, 200, "a case-insensitive duplicate party name should join the existing party, not create a new one");
+  assert.equal(duplicatePartyRes.body.party.id, partyId);
+  assert.ok(duplicatePartyRes.body.party.members.includes("party-friend") && duplicatePartyRes.body.party.members.includes("party-host"));
+  console.log("✓ re-registering the same (case-insensitive) party name joins the existing party instead of creating a duplicate");
+
+  const joinPartyRes = await postJson(`/games/${partyGame.id}/parties/${partyId}/join`, { viewerId: "party-third" });
+  assert.equal(joinPartyRes.status, 200);
+  assert.ok(joinPartyRes.body.members.includes("party-third"));
+  console.log("✓ POST /games/:id/parties/:partyId/join adds a viewer to an existing party");
+
+  // Connect to the game's SSE stream and ask a question tagged with the party.
+  const partyStreamRes = await fetch(`${base}/games/${partyGame.id}/stream`);
+  const partyReader = (partyStreamRes.body as ReadableStream<Uint8Array>).getReader();
+  const partyDecoder = new TextDecoder();
+  const partyStreamed = (async () => {
+    let buffer = "";
+    while (!buffer.includes('"party_qa"')) {
+      const { value, done } = await partyReader.read();
+      if (done) break;
+      buffer += partyDecoder.decode(value, { stream: true });
+    }
+    return buffer;
+  })();
+
+  const partyAskRes = await postJson(`/games/${partyGame.id}/ask`, {
+    question: "what's the score?",
+    viewerId: "party-host",
+    partyId,
+  });
+  assert.equal(partyAskRes.status, 200);
+  assert.equal(partyAskRes.body.partyId, partyId);
+
+  const partyStreamedText = await Promise.race([
+    partyStreamed,
+    new Promise<string>((_, reject) => setTimeout(() => reject(new Error("party_qa SSE push timed out")), 5000)),
+  ]);
+  assert.match(partyStreamedText, /"party_qa"/);
+  assert.match(partyStreamedText, new RegExp(partyId));
+  await partyReader.cancel().catch(() => {});
+  console.log("✓ a question asked with a partyId is pushed over GET /games/:id/stream tagged with type 'party_qa' and the partyId");
+
+  const partyQnAHistory = await (await fetch(`${base}/games/${partyGame.id}/parties/${partyId}/qa`)).json();
+  assert.equal(partyQnAHistory.length, 1);
+  assert.equal(partyQnAHistory[0].viewerId, "party-host");
+  assert.equal(partyQnAHistory[0].question, "what's the score?");
+  console.log("✓ GET /games/:id/parties/:partyId/qa keeps a durable history of Q&A shared into the party");
+
+  // A private question (no partyId) must not appear in the party's history.
+  await postJson(`/games/${partyGame.id}/ask`, { question: "why was that a foul?", viewerId: "someone-else" });
+  const partyQnAHistoryAfterPrivate = await (await fetch(`${base}/games/${partyGame.id}/parties/${partyId}/qa`)).json();
+  assert.equal(partyQnAHistoryAfterPrivate.length, 1, "a question asked without a partyId must stay private, not join the party history");
+  console.log("✓ a question asked without a partyId stays private and does not appear in any party's shared history");
+
+  const askPartyNoViewer = await postJson(`/games/${partyGame.id}/ask`, { question: "what's the score?", partyId });
+  assert.equal(askPartyNoViewer.status, 400, "sharing a question into a party without a viewerId should be rejected");
+  console.log("✓ asking into a watch party without a viewerId is rejected with 400");
+
+  const askUnknownParty = await postJson(`/games/${partyGame.id}/ask`, {
+    question: "what's the score?",
+    viewerId: "party-host",
+    partyId: "does-not-exist",
+  });
+  assert.equal(askUnknownParty.status, 404, "asking into an unknown partyId should return a clean 404");
+  console.log("✓ asking into an unknown watch party returns a clean 404 error");
+
+  // --- 19. Localized commentary packs: at least two genuinely distinct,
+  // non-default styles are available via a locale parameter, backed by real
+  // per-locale templates rather than a translated string swap. ---
+  const localeGame = (await postJson("/games", { homeTeam: "Nets", awayTeam: "Wizards" })).body;
+
+  const localeScoreRes = await postJson(`/games/${localeGame.id}/events`, {
+    type: "score",
+    team: "home",
+    player: "Bridges",
+    points: 2,
+  });
+  assert.equal(localeScoreRes.status, 201);
+  const defaultLocaleText = localeScoreRes.body.commentary.text;
+
+  const casualCommentary = await (await fetch(`${base}/games/${localeGame.id}/commentary?locale=en-casual`)).json();
+  assert.match(casualCommentary[0].text, /Bridges/);
+  assert.notEqual(casualCommentary[0].text, defaultLocaleText, "the casual locale must produce genuinely different phrasing, not the same default text");
+  console.log("✓ GET /games/:id/commentary?locale=en-casual regenerates commentary in a genuinely distinct casual style");
+
+  const spanishCommentary = await (await fetch(`${base}/games/${localeGame.id}/commentary?locale=es-broadcast`)).json();
+  assert.match(spanishCommentary[0].text, /Bridges/);
+  assert.match(spanishCommentary[0].text, /Anota|canasta/i, "the es-broadcast locale should produce real Spanish phrasing, not a translated copy of the English template");
+  console.log("✓ GET /games/:id/commentary?locale=es-broadcast produces real Spanish-language broadcast phrasing");
+
+  const defaultAgain = await (await fetch(`${base}/games/${localeGame.id}/commentary`)).json();
+  assert.equal(defaultAgain[0].text, defaultLocaleText, "omitting locale must return the original en-broadcast text unchanged");
+  console.log("✓ omitting ?locale= keeps the original en-broadcast commentary text byte-for-byte unchanged");
+
+  const badLocale = await fetch(`${base}/games/${localeGame.id}/commentary?locale=fr-FR`);
+  assert.equal(badLocale.status, 400, "an unsupported locale should be rejected, not silently ignored");
+  console.log("✓ an unsupported locale value is rejected with 400");
+
+  // Locale also applies to Q&A and to a stored per-viewer default.
+  const casualAsk = await postJson(`/games/${localeGame.id}/ask`, { question: "what's the score?", locale: "en-casual" });
+  assert.equal(casualAsk.status, 200);
+  const spanishAsk = await postJson(`/games/${localeGame.id}/ask`, { question: "what's the score?", locale: "es-broadcast" });
+  assert.equal(spanishAsk.status, 200);
+  assert.notEqual(casualAsk.body.answer, spanishAsk.body.answer);
+  assert.match(spanishAsk.body.answer, /Marcador|gana|empatados/i);
+  console.log("✓ POST /games/:id/ask?locale=... answers a question in the requested locale/style");
+
+  await postJson(`/games/${localeGame.id}/viewers/locale-viewer/preferences`, { locale: "es-broadcast" });
+  const storedLocaleCommentary = await (await fetch(`${base}/games/${localeGame.id}/commentary?viewerId=locale-viewer`)).json();
+  assert.match(storedLocaleCommentary[0].text, /Anota|canasta/i, "a viewer's stored locale preference should apply when no explicit ?locale= is given");
+  console.log("✓ a viewer's stored locale preference (set via /preferences) applies automatically without an explicit ?locale=");
+
   httpServer.close();
   console.log("\nAll CourtSide smoke tests passed.");
 }

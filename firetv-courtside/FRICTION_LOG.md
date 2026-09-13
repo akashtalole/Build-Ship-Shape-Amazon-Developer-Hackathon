@@ -171,6 +171,69 @@ Notes captured while building the Fire TV CourtSide submission, for the hackatho
    what "the same subscription" means, and a subscription with no `playerName` still keys identically to before
    (pure `callbackUrl`) — the round-3 idempotency test needed zero changes to keep passing.
 
+## Round 5: fantasy plays, live predictions, watch parties, localized commentary
+
+1. **"Genuinely event-driven" predictions forced a real design decision about what counts as a resolving event,
+   and what doesn't.** The tempting shortcut for `next_possession_score` was "resolve on the very next event, whatever
+   it is" — simple, but wrong: a `foul`, `rebound`, `steal`, `block`, or `timeout` doesn't actually end a possession,
+   so resolving on any of those would produce a prediction that's "resolved" by an event that has nothing to do with
+   the question asked. The correct rule needed an actual definition of "a possession ended" in terms of the existing
+   event vocabulary — a `score` (ends in a score) or a `turnover` (ends without one) — and everything else has to
+   leave the prediction open for a later event to decide. This is the same shape of design work `isNotableEvent`
+   needed in round 2 (a heuristic that's cheap to compute from data already in hand, not a new classifier), applied
+   to a new problem: deciding what real-world fact an event actually proves, not just reacting to "an event happened."
+2. **Voiding, not just "leaving open forever," turned out to be a genuine requirement, not a nice-to-have.** The first
+   cut of prediction resolution had no notion of a prediction outliving the game — an open `next_team_to_score`
+   prediction posed near the end of a blowout, with no more scores coming, would just sit `"open"` forever, and a
+   viewer's answer would never be scored either way. That's a silent bug from the viewer's perspective (their
+   accuracy never updates, with no explanation) rather than an honest limitation, so `game_end` now explicitly voids
+   every still-open prediction for that game — a third status (`"voided"`) distinct from `"resolved"`, specifically so
+   voided predictions are excluded from accuracy math rather than accidentally counted as answered-and-wrong.
+3. **Fantasy highlights needed a backfill, and getting the ordering right took a second pass.** The naive
+   implementation only tagged plays ingested *after* a roster was registered — technically correct per the request
+   ("register a roster, get future plays"), but a bad experience: a viewer who registers mid-game (the realistic
+   case — nobody sets up their fantasy roster before tipoff on this kind of companion app) would silently lose every
+   play their rostered players already made. The fix was to compute the initial highlight reel from the game's full,
+   uncapped event history (`listFullEvents`, the same store round 4's recap feature introduced) at registration time,
+   then let `ingestEvent` append to it incrementally afterward — but this meant two different code paths write into
+   the same per-viewer list (a wholesale rebuild vs. an incremental append), so `store.ts` needed both
+   `setFantasyHighlights` (replace) and `addFantasyHighlight` (append) as distinct operations rather than trying to
+   force one function to do both safely.
+4. **Reusing the SSE stream for watch-party Q&A instead of building a second delivery mechanism was the right call,
+   but it meant the `StreamEvent` payload shape needed to become a real union, not a single fixed shape.** It would
+   have been easy to bolt "also emit party Q&A" onto the existing single-shape `{ type: "commentary", commentary,
+   state }` payload by just stuffing extra fields on it, but that leaves every client having to guess which fields
+   are meaningful for which `type`. Making `commentary`/`state` optional and adding a genuinely separate `partyQnA`
+   field, keyed off `type`, means a client can `switch` on `type` and know exactly what's populated — the same
+   discipline a real WebSocket/event-bus payload contract would need once there's more than one kind of thing riding
+   the same pipe.
+5. **Locale support looked like "add a parameter" and was actually "figure out where regeneration is honest and
+   where it's wasteful."** Commentary is deliberately generated once per event and shared across every viewer (see
+   round 2's `personalizeText` reasoning) — a real Bedrock call happens once, not once per viewer. A locale request
+   breaks that assumption on its face: different viewers now genuinely want different *text*, not just a decorated
+   copy of the same text the way `personalizeText`'s fan-view note is. The honest fix wasn't to make every commentary
+   read regenerate through the provider (that would silently reintroduce a per-viewer LLM call the whole fast/
+   escalated design in round 2 exists to avoid) — it was to store which generation path (`fast` vs. `escalated`) each
+   line originally took (a new `CommentaryLine.path` field) so a locale-driven regeneration replays the *same*
+   routing decision through the *same* provider (`TemplateCommentaryProvider` for a fast-path line, the configured
+   `provider` for an escalated one) instead of promoting every line to the expensive path just because a locale was
+   requested. The default-locale read path is completely untouched by any of this — it still just returns the
+   already-stored text, so this round adds real cost only when a viewer actually asks for something different.
+6. **"Distinct phrasing, not translation" is a real audit each locale needed individually, the same lesson round 4
+   already learned once for sport.** It would have been easy to write `es-broadcast`'s templates by literally
+   translating the English `en-broadcast` sentences word for word (`"${who} scores!"` → `"¡${who} anota!"`) and call
+   it done — technically a different language, but not a genuinely different broadcast voice, since Spanish
+   sports broadcasting has its own conventions (leading with the verb — "¡Anota Bridges!" rather than "¡Bridges
+   anota!" — and a more clipped, exclamation-forward rhythm than the English default). Writing `en-casual` surfaced
+   the same trap from the other direction: it's easy to reskin one or two templates ("Ohhh we love to see it!") and
+   leave the rest identical to broadcast, which would leave the "genuinely distinct" bar half-met. Both packs needed
+   every event type (score/foul/turnover/rebound/steal/block/timeout/period_end/game_end) actually rewritten, not
+   translated or lightly reskinned — the same template-by-template audit discipline round 4's multi-sport work
+   required, now applied to locale/style instead of sport. The one deliberate scope line drawn here (documented in
+   the README, not silently skipped): the two new locale packs are sport-neutral, unlike `en-broadcast`'s full
+   per-sport phrasing from round 4 — tripling the per-sport surface for two more locales this round would have
+   traded real breadth (three genuinely distinct voices) for depth (one voice, three sports) that wasn't asked for.
+
 ## Feature requests
 
 - A minimal, published schema for a "generic play-by-play event" (type, team/player, timestamp, description) that
