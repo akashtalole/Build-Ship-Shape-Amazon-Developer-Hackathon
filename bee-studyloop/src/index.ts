@@ -21,4 +21,8 @@ app.listen(PORT, () => {
   console.log(`Review session:   GET  http://localhost:${PORT}/review/session?studentId=<id>&maxCards=20`);
   console.log(`Import (Anki-style TSV): POST http://localhost:${PORT}/import   { "tsv": "..." }`);
   console.log(`Regenerate a card: POST http://localhost:${PORT}/flashcards/<cardId>/regenerate`);
+  console.log(`Concept graph:    GET  http://localhost:${PORT}/concepts/<name>`);
+  console.log(`Explain a card:   POST http://localhost:${PORT}/review/<cardId>/explain   { "explanation": "..." }`);
+  console.log(`Study guide:      GET  http://localhost:${PORT}/topics/<topic>/study-guide`);
+  console.log(`Exam readiness:   GET  http://localhost:${PORT}/topics/<topic>/readiness?studentId=<id>`);
 });

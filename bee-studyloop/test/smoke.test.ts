@@ -15,7 +15,11 @@ import { initialSchedulerState, scheduleReview } from "../src/scheduler.js";
 import { initialLeechState, LEECH_THRESHOLD, updateLeechState } from "../src/leech.js";
 import { priorityScore } from "../src/priority.js";
 import { extractTopics } from "../src/topics.js";
-import { getReminderDigest, listDueCards, recordReviewForStudent } from "../src/studyService.js";
+import { getReminderDigest, getTopicReadiness, listDueCards, recordReviewForStudent } from "../src/studyService.js";
+import { conceptsMatch, extractConceptsFromCard } from "../src/conceptGraph.js";
+import { gradeExplanation, scoreToRecallGrade } from "../src/explainGrader.js";
+import { buildStudyGuide } from "../src/studyGuide.js";
+import { computeReadiness } from "../src/readiness.js";
 
 async function main() {
   const generator = new TemplateFlashcardGenerator();
@@ -1017,6 +1021,322 @@ async function main() {
   const regenMissingCardRes = await fetch(`${base}/flashcards/not-a-real-card-id/regenerate`, { method: "POST" });
   assert.equal(regenMissingCardRes.status, 404, "regenerating an unknown card id returns a clean 404");
   console.log("✓ POST /flashcards/:cardId/regenerate for an unknown card id returns a clean 404");
+
+  // ===================================================================
+  // Round 5: concept graph, Feynman mode, study guide synthesis, readiness
+  // ===================================================================
+
+  // --- Feature 15: concept graph ---
+  // Two separate sessions, ingested independently, that both discuss the
+  // same underlying term via genuinely different card phrasings — one a
+  // "What is X?" definition-style card, the other a generic Q&A pair whose
+  // question doesn't start with "what is" at all — so the only thing linking
+  // them is real text analysis of their own content, not a shared tag either
+  // session was ingested with.
+  const conceptSessionA = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Cell energy lecture",
+        transcript: [
+          { text: "What is Mitochondrion?" },
+          { text: "Mitochondrion is the organelle that produces ATP for the cell." },
+        ],
+      }),
+    })
+  ).json();
+  const conceptSessionB = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Biology review (unrelated deck)",
+        transcript: [
+          { text: "What does Mitochondrion do?" },
+          { text: "Mitochondrion converts nutrients into usable energy for the cell." },
+        ],
+      }),
+    })
+  ).json();
+  assert.ok(conceptSessionA.flashcards.length >= 1 && conceptSessionB.flashcards.length >= 1, "both concept-graph test sessions generate at least one flashcard");
+
+  const conceptRes = await fetch(`${base}/concepts/mitochondrion`);
+  assert.equal(conceptRes.status, 200);
+  const conceptBody = await conceptRes.json();
+  assert.equal(conceptBody.concept, "mitochondrion");
+  const conceptSessionIds = new Set(conceptBody.cards.map((c: { sessionId: string }) => c.sessionId));
+  assert.ok(
+    conceptSessionIds.has(conceptSessionA.session.id) && conceptSessionIds.has(conceptSessionB.session.id),
+    "GET /concepts/:name links cards from two entirely separate sessions/decks that reference the same concept, with no manual tag connecting them"
+  );
+  console.log(`✓ GET /concepts/mitochondrion finds cards across ${conceptSessionIds.size} separate sessions purely from card content`);
+
+  const conceptCaseInsensitiveRes = await (await fetch(`${base}/concepts/Mitochondrion`)).json();
+  assert.equal(conceptCaseInsensitiveRes.cards.length, conceptBody.cards.length, "concept lookup is case-insensitive");
+  console.log("✓ GET /concepts/:name is case-insensitive");
+
+  const unknownConceptRes = await fetch(`${base}/concepts/not-a-real-concept-xyz`);
+  assert.equal(unknownConceptRes.status, 200, "an unrecognized concept returns an empty result, not an error (the concept space isn't a stored resource)");
+  const unknownConceptBody = await unknownConceptRes.json();
+  assert.deepEqual(unknownConceptBody.cards, []);
+  console.log("✓ GET /concepts/:name for a concept no card resolves to returns a clean empty list");
+
+  // Direct unit checks of extractConceptsFromCard's three tiers.
+  assert.deepEqual(
+    extractConceptsFromCard({ front: "What is Osmoregulation?", back: "It maintains fluid balance." }),
+    ["osmoregulation"],
+    "a 'What is X?' front yields the defined term as the concept"
+  );
+  assert.deepEqual(
+    extractConceptsFromCard({ front: "Fill in the blank: Osmosis is the movement of ____ across a membrane.", back: "water" }),
+    ["water"],
+    "a cloze card yields its blanked answer as the concept"
+  );
+  const genericConcepts = extractConceptsFromCard({ front: "What does photosynthesis produce?", back: "It produces glucose and oxygen." });
+  assert.ok(genericConcepts.length >= 1 && genericConcepts.length <= 2, "a generic Q&A card yields 1-2 concepts from shared significant words");
+  assert.ok(conceptsMatch("Photosynthesis", "photosynthesis") && !conceptsMatch("photosynthesis", "osmosis"), "conceptsMatch is case-insensitive but not a fuzzy match");
+  console.log("✓ conceptGraph.ts: direct unit checks of extractConceptsFromCard's definition/cloze/generic tiers");
+
+  // --- Feature 16: Feynman/peer-teaching explanation mode ---
+  const explainSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Feynman test deck",
+        transcript: [
+          { text: "What is Osmoregulation?" },
+          { text: "Osmoregulation is the process of maintaining fluid and electrolyte balance in an organism." },
+        ],
+      }),
+    })
+  ).json();
+  assert.ok(explainSessionRes.flashcards.length >= 1, "the Feynman-test session yields at least one flashcard");
+  const explainCard = explainSessionRes.flashcards[0];
+
+  // A solid, in-your-own-words explanation covering most of the answer's key terms.
+  const goodExplainRes = await fetch(`${base}/review/${explainCard.id}/explain`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ explanation: "Osmoregulation is the process that keeps an organism's fluid and electrolyte balance steady." }),
+  });
+  assert.equal(goodExplainRes.status, 200);
+  const goodExplainBody = await goodExplainRes.json();
+  assert.equal(goodExplainBody.passed, true, "an explanation covering most key terms passes the rubric");
+  assert.ok(goodExplainBody.score >= 0.5 && goodExplainBody.score <= 1, "the coverage score is a fraction between 0 and 1");
+  assert.ok(["good", "easy"].includes(goodExplainBody.grade), "a passing explanation maps to a good/easy recall grade");
+  assert.ok(goodExplainBody.matchedTerms.includes("osmoregulation"), "matchedTerms reports the specific key terms the explanation covered");
+  assert.ok(goodExplainBody.feedback.length > 0, "the response includes plain-language feedback");
+  assert.ok(goodExplainBody.card.interval > 0, "a passing explanation reschedules the card exactly like a normal passing grade would");
+  console.log(`✓ POST /review/:cardId/explain grades a solid explanation as "${goodExplainBody.grade}" (score ${goodExplainBody.score.toFixed(2)}) and reschedules the card`);
+
+  // A poor explanation, submitted three times in a row for one student, should behave
+  // exactly like three consecutive "again" grades — including becoming a leech.
+  const feynmanStudent = "feynman-student-1";
+  let lastExplain: { passed: boolean; grade: string; card: { isLeech: boolean; consecutiveFailures: number } } | undefined;
+  for (let i = 0; i < LEECH_THRESHOLD; i++) {
+    const r = await fetch(`${base}/review/${explainCard.id}/explain`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ explanation: "I don't remember what this is about.", studentId: feynmanStudent }),
+    });
+    lastExplain = await r.json();
+  }
+  assert.equal(lastExplain!.passed, false, "an explanation covering none of the key terms fails the rubric");
+  assert.equal(lastExplain!.grade, "again");
+  assert.equal(lastExplain!.card.isLeech, true, `failing the explanation ${LEECH_THRESHOLD} times in a row flags the card a leech, exactly like a normal "again" streak would`);
+  assert.equal(lastExplain!.card.consecutiveFailures, LEECH_THRESHOLD);
+  console.log(`✓ POST /review/:cardId/explain with a poor explanation ${LEECH_THRESHOLD}x in a row flags the card as a leech, reusing the exact same leech state machine as normal grading`);
+
+  const clearExplainRes = await (
+    await fetch(`${base}/review/${explainCard.id}/explain`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ explanation: "Osmoregulation is the process that keeps an organism's fluid and electrolyte balance steady.", studentId: feynmanStudent }),
+    })
+  ).json();
+  assert.equal(clearExplainRes.card.isLeech, false, "a subsequent solid explanation clears the leech flag");
+  assert.equal(clearExplainRes.card.consecutiveFailures, 0);
+  console.log("✓ a solid explanation after a leeched streak clears the leech flag, same as a normal good/easy grade would");
+
+  const missingExplanationRes = await fetch(`${base}/review/${explainCard.id}/explain`, { method: "POST", headers, body: JSON.stringify({}) });
+  assert.equal(missingExplanationRes.status, 400, "submitting without an explanation returns a clean 400");
+  const explainMissingCardRes = await fetch(`${base}/review/not-a-real-card-id/explain`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ explanation: "whatever" }),
+  });
+  assert.equal(explainMissingCardRes.status, 404, "explaining an unknown card id returns a clean 404");
+  console.log("✓ POST /review/:cardId/explain returns clean errors for a missing explanation and an unknown card id");
+
+  // Direct unit checks of the grading rubric itself.
+  const directGoodGrade = gradeExplanation("Mitochondria produces ATP through cellular respiration.", "The mitochondria makes ATP using cellular respiration processes.");
+  assert.ok(directGoodGrade.score > 0.5 && directGoodGrade.matchedTerms.includes("mitochondria"));
+  const directBadGrade = gradeExplanation("Mitochondria produces ATP through cellular respiration.", "It's a cell part.");
+  assert.equal(directBadGrade.score, 0);
+  assert.equal(scoreToRecallGrade(0), "again");
+  assert.equal(scoreToRecallGrade(1), "easy");
+  console.log("✓ explainGrader.ts: direct unit checks of the key-term coverage rubric and score-to-grade mapping");
+
+  // --- Feature 17: cross-session study guide synthesis ---
+  // Reuses topicSessionA/topicSessionB from Feature 3 above — two separate
+  // sessions already tagged "ribosome" — to prove the guide merges real
+  // stored sessions, not just synthetic fixtures.
+  const guideRes = await fetch(`${base}/topics/ribosome/study-guide`);
+  assert.equal(guideRes.status, 200);
+  const guide = await guideRes.json();
+  assert.equal(guide.topic, "ribosome");
+  assert.equal(guide.sessionCount, 2, "the study guide covers exactly the two sessions tagged 'ribosome'");
+  const guideSessionIds = new Set(guide.sessions.map((s: { id: string }) => s.id));
+  assert.ok(guideSessionIds.has(topicSessionA.session.id) && guideSessionIds.has(topicSessionB.session.id));
+  assert.equal(guide.cardCount, topicSessionA.flashcards.length + topicSessionB.flashcards.length, "cardCount is the sum of both sessions' flashcards");
+  assert.ok(guide.concepts.length > 0, "the guide reports the union of concepts covered across both sessions");
+  assert.ok(guide.combinedSummary.length > 0);
+  const guideSentences = guide.combinedSummary
+    .split(/(?<=[.?!])\s+/)
+    .map((s: string) => s.trim().toLowerCase())
+    .filter(Boolean);
+  assert.equal(new Set(guideSentences).size, guideSentences.length, "the merged summary has no duplicate sentences");
+  console.log(`✓ GET /topics/ribosome/study-guide merges ${guide.sessionCount} sessions into one deduplicated guide with ${guide.concepts.length} concept(s)`);
+
+  const missingGuideRes = await fetch(`${base}/topics/not-a-real-topic-xyz/study-guide`);
+  assert.equal(missingGuideRes.status, 404, "requesting a study guide for a topic no session is tagged with returns a clean 404");
+  console.log("✓ GET /topics/:topic/study-guide for an unused topic returns a clean 404");
+
+  // Direct unit check of the actual dedup mechanism: two synthetic sessions whose
+  // summaries share one verbatim sentence must contribute it to the guide once.
+  const fakeSessionX = {
+    id: "fake-session-x",
+    title: "X",
+    createdAt: new Date().toISOString(),
+    segments: [],
+    summary: "Session covered 3 statement(s) across 1 speaker(s). Water boils at 100 degrees Celsius. Ice melts at 0 degrees Celsius.",
+    topics: ["thermo-fixture"],
+    shared: false,
+  };
+  const fakeSessionY = {
+    id: "fake-session-y",
+    title: "Y",
+    createdAt: new Date().toISOString(),
+    segments: [],
+    summary: "Session covered 2 statement(s). Water boils at 100 degrees Celsius. Steam is water vapor.",
+    topics: ["thermo-fixture"],
+    shared: false,
+  };
+  const fakeCard = (id: string, sessionId: string, front: string, back: string) => ({
+    id,
+    sessionId,
+    front,
+    back,
+    createdAt: new Date().toISOString(),
+    tags: ["thermo-fixture"],
+    interval: 0,
+    easeFactor: 2.5,
+    repetitions: 0,
+    dueAt: new Date().toISOString(),
+    consecutiveFailures: 0,
+    isLeech: false,
+  });
+  const directGuide = buildStudyGuide(
+    "thermo-fixture",
+    [fakeSessionX, fakeSessionY],
+    new Map([
+      ["fake-session-x", [fakeCard("fx1", "fake-session-x", "What is Water?", "Water is a molecule made of hydrogen and oxygen.")]],
+      ["fake-session-y", [fakeCard("fy1", "fake-session-y", "What is Steam?", "Steam is water vapor produced by boiling.")]],
+    ])
+  );
+  const waterBoilsOccurrences = (directGuide.combinedSummary.match(/Water boils at 100 degrees Celsius\./g) ?? []).length;
+  assert.equal(waterBoilsOccurrences, 1, "a sentence repeated verbatim across two sessions' summaries appears exactly once in the merged guide");
+  assert.ok(directGuide.combinedSummary.includes("Ice melts at 0 degrees Celsius.") && directGuide.combinedSummary.includes("Steam is water vapor."));
+  assert.ok(directGuide.concepts.includes("water") && directGuide.concepts.includes("steam"));
+  console.log("✓ studyGuide.ts: direct unit check proving verbatim-duplicate sentences across sessions are merged, not concatenated twice");
+
+  // --- Feature 18: exam readiness score ---
+  const readinessSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Thermogenesis basics",
+        transcript: [
+          { text: "What is Thermogenesis?" },
+          { text: "Thermogenesis is the process of heat production in an organism." },
+          { text: "What triggers thermogenesis?" },
+          { text: "Cold exposure and diet can trigger thermogenesis." },
+        ],
+      }),
+    })
+  ).json();
+  assert.ok(readinessSessionRes.flashcards.length >= 2, "the readiness-test session yields at least two flashcards");
+  assert.ok(readinessSessionRes.session.topics.includes("thermogenesis"), "the readiness-test session is tagged with the thermogenesis topic");
+
+  // Unscoped, fresh, ungraded: a real HTTP round trip against the live server/clock —
+  // safe here because nothing depends on future scheduling (freshly generated cards
+  // are due right now regardless of exactly when "now" is evaluated).
+  const freshReadinessRes = await fetch(`${base}/topics/thermogenesis/readiness`);
+  assert.equal(freshReadinessRes.status, 200);
+  const freshReadiness = await freshReadinessRes.json();
+  assert.equal(freshReadiness.topic, "thermogenesis");
+  assert.equal(freshReadiness.cardCount, readinessSessionRes.flashcards.length);
+  assert.equal(freshReadiness.dueCount, readinessSessionRes.flashcards.length, "freshly generated cards are all immediately due");
+  assert.equal(freshReadiness.notDueFraction, 0);
+  assert.ok(freshReadiness.reasons.includes("no review history yet"));
+  assert.ok(freshReadiness.reasons.includes("no active study streak"));
+  console.log(`✓ GET /topics/:topic/readiness reports a low score (${freshReadiness.score}/100) for a freshly-ingested, ungraded topic, with plain-language reasons why`);
+
+  // Scoped to a student with good recent grades and an active streak: grading pushes
+  // dueAt/streak state relative to an injected "now", which (like the adaptive-ordering
+  // and streak tests above) would drift arbitrarily from the real wall clock by the
+  // time an HTTP request used the real "now" — so call getTopicReadiness directly with
+  // the same fixed "now", the same documented pattern used throughout this file.
+  const readinessStudent = "readiness-student-good";
+  const [readinessCardA, readinessCardB] = readinessSessionRes.flashcards;
+  const readinessNow = new Date("2026-02-10T09:00:00.000Z");
+  recordReviewForStudent(readinessStudent, readinessCardA.id, "good", new Date("2026-02-08T09:00:00.000Z"));
+  recordReviewForStudent(readinessStudent, readinessCardA.id, "good", new Date("2026-02-09T09:00:00.000Z"));
+  recordReviewForStudent(readinessStudent, readinessCardA.id, "good", readinessNow);
+  recordReviewForStudent(readinessStudent, readinessCardB.id, "good", readinessNow);
+
+  const goodReadiness = getTopicReadiness("thermogenesis", readinessStudent, readinessNow);
+  assert.equal(goodReadiness.cardCount, 2);
+  assert.equal(goodReadiness.dueCount, 0, "every card was just graded 'good', so none are due right at readinessNow");
+  assert.equal(goodReadiness.notDueFraction, 1);
+  assert.ok(goodReadiness.recentPerformance > 0.5, "recent 'good' grades push recentPerformance above the neutral 0.5 baseline");
+  assert.equal(goodReadiness.streakDays, 3, "three simulated consecutive days of review produce a 3-day streak, folded into the score");
+  assert.ok(
+    goodReadiness.score > freshReadiness.score,
+    "a student with good recent grades, nothing due, and an active streak scores higher than a freshly-ingested, ungraded topic"
+  );
+  assert.ok(!goodReadiness.reasons.includes("no active study streak"));
+  console.log(`✓ getTopicReadiness(studentId=...) reports a higher score (${goodReadiness.score}/100) once a student has good grades, nothing due, and a streak`);
+
+  // A different student who has leeched one of the same topic's cards sees that named explicitly.
+  const readinessLeechStudent = "readiness-student-leech";
+  for (let i = 0; i < LEECH_THRESHOLD; i++) {
+    recordReviewForStudent(readinessLeechStudent, readinessCardA.id, "again", readinessNow);
+  }
+  const leechReadiness = getTopicReadiness("thermogenesis", readinessLeechStudent, readinessNow);
+  assert.equal(leechReadiness.leechCount, 1);
+  assert.ok(leechReadiness.reasons.some((r: string) => r.includes("leech")), "the breakdown names the unresolved leech as a specific drag on the score");
+  console.log(`✓ getTopicReadiness surfaces an unresolved leech as an explicit reason: ${JSON.stringify(leechReadiness.reasons)}`);
+
+  const unknownTopicReadinessRes = await fetch(`${base}/topics/not-a-real-topic-xyz/readiness`);
+  assert.equal(unknownTopicReadinessRes.status, 200, "a topic nobody tagged a session with still returns a valid response, not an error");
+  const unknownTopicReadiness = await unknownTopicReadinessRes.json();
+  assert.equal(unknownTopicReadiness.score, 0);
+  assert.ok(unknownTopicReadiness.reasons.length > 0);
+  console.log("✓ GET /topics/:topic/readiness for a topic with zero cards returns a valid zero score with an explanatory reason, not an error");
+
+  // Direct unit check of the composite formula on fully synthetic input, independent of the store.
+  const emptyReadiness = computeReadiness([], 0);
+  assert.equal(emptyReadiness.score, 0);
+  const strongReadiness = computeReadiness(
+    [{ dueAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(), isLeech: false, lastGrade: "easy", lastReviewedAt: new Date().toISOString() }],
+    7
+  );
+  assert.equal(strongReadiness.score, 100, "a not-due, perfectly-graded card with a maxed-out streak scores a perfect 100");
+  console.log("✓ readiness.ts: direct unit checks of computeReadiness's weighted formula at both extremes");
 
   httpServer.close();
   console.log("\nAll StudyLoop smoke tests passed.");

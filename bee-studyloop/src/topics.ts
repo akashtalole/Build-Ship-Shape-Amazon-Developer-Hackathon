@@ -2,8 +2,10 @@ import type { TranscriptSegment } from "./types.js";
 
 // Deliberately small: common words plus the question words already
 // special-cased in flashcardGenerator.ts, so they never crowd out an
-// actual content word as a "topic."
-const STOPWORDS = new Set([
+// actual content word as a "topic." Exported so conceptGraph.ts and
+// explainGrader.ts (round 5) can reuse the exact same content-word
+// heuristic rather than maintaining a second, drifting copy of it.
+export const STOPWORDS = new Set([
   "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
   "of", "in", "on", "at", "to", "for", "and", "or", "but", "if", "so",
   "because", "this", "that", "these", "those", "it", "its", "what", "who",
