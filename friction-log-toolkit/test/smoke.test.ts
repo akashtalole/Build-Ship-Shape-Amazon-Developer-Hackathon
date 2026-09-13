@@ -8,7 +8,7 @@
  */
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,8 @@ import assert from "node:assert/strict";
 import { handleWatchLine, resolveWatchTag } from "../dist/watch.js";
 import { mergeEntries } from "../dist/commands.js";
 import { suggestTag } from "../dist/autotag.js";
+import { scoreEntries } from "../dist/severity.js";
+import { clusterByTheme } from "../dist/cluster.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const CLI_PATH = join(__dirname, "..", "dist", "cli.js");
@@ -149,6 +151,18 @@ function createFakeRemote(): { server: ReturnType<typeof createServer>; getEntri
     res.end();
   });
   return { server, getEntries: () => store };
+}
+
+/**
+ * A read-only stand-in "teammate's instance" for `aggregate` tests: always
+ * answers `GET` with a fixed `{entries}` payload (unlike `createFakeRemote`,
+ * which also accepts `POST` for `sync` — `aggregate` only ever does `GET`).
+ */
+function createStaticRemote(entries: any[]): ReturnType<typeof createServer> {
+  return createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ entries }));
+  });
 }
 
 function listenOnEphemeralPort(server: ReturnType<typeof createServer>): Promise<number> {
@@ -1168,5 +1182,397 @@ await (async () => {
     rmSync(dirB, { recursive: true, force: true });
   }
 })();
+
+// --- Feature: severity scoring (`severity.ts`) + `top` -----------------------
+
+check("scoreEntries ranks a blocker-worded friction entry above a plain worked-well entry", () => {
+  const entries = [
+    { id: "a", timestamp: "2026-09-02T09:00:00.000Z", note: "OAuth sandbox mode worked painlessly", tag: "worked-well" },
+    { id: "b", timestamp: "2026-09-02T10:00:00.000Z", note: "The deploy step was a total blocker, everything crashed", tag: "friction" },
+  ] as any;
+  const scored = scoreEntries(entries);
+  assert.equal(scored[0].entry.id, "b");
+  assert.ok(scored[0].total > scored[1].total);
+});
+
+check("scoreEntries' keyword score rewards blocker/crash wording and penalizes 'minor'-style hedging", () => {
+  const entries = [
+    { id: "a", timestamp: "2026-09-02T09:00:00.000Z", note: "Minor: button color is slightly off", tag: "friction" },
+    { id: "b", timestamp: "2026-09-02T09:00:00.000Z", note: "Build crashed and blocked the whole demo", tag: "friction" },
+  ] as any;
+  const scored = scoreEntries(entries);
+  const minor = scored.find((s: any) => s.entry.id === "a")!;
+  const blocker = scored.find((s: any) => s.entry.id === "b")!;
+  assert.ok(minor.keywordScore < 0, "minor/slightly wording should pull the score down");
+  assert.ok(blocker.keywordScore > 0, "blocker/crashed wording should raise the score");
+  assert.ok(blocker.total > minor.total);
+});
+
+check("scoreEntries gives a more recent entry a higher recency component than an older one, all else equal", () => {
+  const entries = [
+    { id: "a", timestamp: "2026-09-01T09:00:00.000Z", note: "Docs page was unclear", tag: "note" },
+    { id: "b", timestamp: "2026-09-03T09:00:00.000Z", note: "Docs page was unclear", tag: "note" },
+  ] as any;
+  const scored = scoreEntries(entries);
+  const older = scored.find((s: any) => s.entry.id === "a")!;
+  const newer = scored.find((s: any) => s.entry.id === "b")!;
+  assert.ok(newer.recencyScore > older.recencyScore);
+});
+
+check("scoreEntries always returns human-readable reasons explaining every component of the score", () => {
+  const scored = scoreEntries([
+    { id: "a", timestamp: "2026-09-02T09:00:00.000Z", note: "Something broke", tag: "friction" },
+  ] as any);
+  assert.ok(scored[0].reasons.length >= 2);
+  assert.ok(scored[0].reasons.some((r: string) => r.includes('tagged "friction"')));
+});
+
+check("scoreEntries on an empty array returns an empty array", () => {
+  assert.deepEqual(scoreEntries([]), []);
+});
+
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  runCli(dir, ["add", "Minor: slightly off spacing in the footer", "--tag", "friction"]);
+  runCli(dir, ["add", "The API gateway crashed and blocked every request, a total showstopper", "--tag", "friction"]);
+  runCli(dir, ["add", "Ring sandbox credentials worked painlessly", "--tag", "worked-well"]);
+  runCli(dir, ["add", "Should add a dark mode toggle", "--tag", "feature-request"]);
+
+  const topDefault = runCli(dir, ["top"]);
+  check("top with no N defaults to 5 and exits zero", () => {
+    assert.equal(topDefault.status, 0);
+    assert.match(topDefault.stdout, /^Top 4 entr(y|ies) by severity score:/m);
+  });
+  check("top ranks the showstopper/crashed friction entry first, with its reasons printed", () => {
+    const lines = topDefault.stdout.split("\n");
+    assert.match(lines[1], /\[friction\] The API gateway crashed and blocked every request/);
+    assert.match(topDefault.stdout, /wording "blocked" raises severity/);
+  });
+  check("top never ranks the worked-well entry above the crashed friction entry", () => {
+    const crashedIndex = topDefault.stdout.indexOf("API gateway crashed");
+    const workedIndex = topDefault.stdout.indexOf("Ring sandbox credentials");
+    assert.ok(crashedIndex !== -1 && workedIndex !== -1 && crashedIndex < workedIndex);
+  });
+
+  const topTwo = runCli(dir, ["top", "2"]);
+  check("top N limits the number of entries printed", () => {
+    assert.match(topTwo.stdout, /^Top 2 entries by severity score:/);
+    assert.equal((topTwo.stdout.match(/^\d+\. \[score/gm) ?? []).length, 2);
+  });
+
+  const invalidN = runCli(dir, ["top", "not-a-number"]);
+  check("top with a non-numeric N fails clearly", () => {
+    assert.notEqual(invalidN.status, 0);
+  });
+
+  const zeroN = runCli(dir, ["top", "0"]);
+  check("top 0 fails clearly (N must be positive)", () => {
+    assert.notEqual(zeroN.status, 0);
+  });
+});
+
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  const empty = runCli(dir, ["top"]);
+  check("top on an empty log reports no entries instead of erroring", () => {
+    assert.equal(empty.status, 0);
+    assert.match(empty.stdout, /No entries logged yet in range\./);
+  });
+});
+
+// --- Feature: theme clustering (`cluster.ts`) --------------------------------
+
+check("clusterByTheme groups entries that share an acronym even with otherwise different wording", () => {
+  const entries = [
+    { id: "a", timestamp: "2026-09-02T09:00:00.000Z", note: "MCP schema validation kept failing with no line numbers", tag: "friction" },
+    { id: "b", timestamp: "2026-09-02T10:00:00.000Z", note: "Our MCP request handler blew up on a totally different endpoint", tag: "friction" },
+    { id: "c", timestamp: "2026-09-02T11:00:00.000Z", note: "Unrelated docs page about billing was confusing", tag: "friction" },
+  ] as any;
+  const clusters = clusterByTheme(entries);
+  const mcpCluster = clusters.find((c: any) => c.entries.some((e: any) => e.id === "a"));
+  assert.equal(mcpCluster.entries.length, 2);
+  assert.ok(mcpCluster.entries.some((e: any) => e.id === "b"));
+  assert.ok(!mcpCluster.entries.some((e: any) => e.id === "c"));
+  assert.match(mcpCluster.theme, /mcp/);
+});
+
+check("clusterByTheme requires at least two shared ordinary words (one alone is not enough) to group two entries", () => {
+  const entries = [
+    { id: "a", timestamp: "2026-09-02T09:00:00.000Z", note: "The documentation page about tokens was confusing", tag: "friction" },
+    { id: "b", timestamp: "2026-09-02T10:00:00.000Z", note: "A completely unrelated build documentation issue", tag: "friction" },
+  ] as any;
+  const clusters = clusterByTheme(entries);
+  // Both notes share only "documentation" (one word) — not enough to merge.
+  assert.equal(clusters.length, 2);
+});
+
+check("clusterByTheme groups entries sharing two or more ordinary significant words", () => {
+  const entries = [
+    { id: "a", timestamp: "2026-09-02T09:00:00.000Z", note: "The schema validation errors were impossible to debug", tag: "friction" },
+    { id: "b", timestamp: "2026-09-02T10:00:00.000Z", note: "More schema validation errors popped up overnight", tag: "friction" },
+  ] as any;
+  const clusters = clusterByTheme(entries);
+  assert.equal(clusters.length, 1);
+  assert.equal(clusters[0].entries.length, 2);
+});
+
+check("clusterByTheme falls back to the auto-tag heuristic for a theme label when no significant words can be extracted", () => {
+  // "Bug" alone has no word >= 4 chars and isn't an ALL-CAPS acronym, so
+  // extractProfile finds nothing distinctive — the fallback kicks in and
+  // reuses suggestTag("Bug"), which matches the "bug" keyword -> "friction".
+  const entries = [{ id: "a", timestamp: "2026-09-02T09:00:00.000Z", note: "Bug", tag: "friction" }] as any;
+  const clusters = clusterByTheme(entries);
+  assert.equal(clusters.length, 1);
+  assert.equal(clusters[0].theme, "friction");
+});
+
+check("clusterByTheme reports the dominant tag among a cluster's entries", () => {
+  const entries = [
+    { id: "a", timestamp: "2026-09-02T09:00:00.000Z", note: "MCP schema validation errors again", tag: "friction" },
+    { id: "b", timestamp: "2026-09-02T10:00:00.000Z", note: "MCP schema validation errors resolved", tag: "friction" },
+  ] as any;
+  const clusters = clusterByTheme(entries);
+  assert.equal(clusters[0].dominantTag, "friction");
+});
+
+// --- Feature: `aggregate` across multiple teammates' remotes -----------------
+
+await (async () => {
+  const remoteAEntries = [
+    {
+      id: "aaaa1111",
+      timestamp: "2026-09-02T09:00:00.000Z",
+      note: "MCP schema validation kept failing with no line numbers",
+      tag: "friction",
+    },
+    {
+      id: "aaaa2222",
+      timestamp: "2026-09-02T09:30:00.000Z",
+      note: "Ring OAuth sandbox mode worked painlessly",
+      tag: "worked-well",
+    },
+    {
+      // Deliberately shared id with remote B, to exercise cross-source dedup.
+      id: "shared001",
+      timestamp: "2026-09-02T08:00:00.000Z",
+      note: "Docs for the token endpoint were split across three pages",
+      tag: "friction",
+    },
+  ];
+  const remoteBEntries = [
+    {
+      id: "bbbb1111",
+      timestamp: "2026-09-02T10:00:00.000Z",
+      note: "Our MCP schema validator also crashed constantly, lost hours",
+      tag: "friction",
+    },
+    {
+      id: "bbbb2222",
+      timestamp: "2026-09-02T10:30:00.000Z",
+      note: "Should add a bulk export option",
+      tag: "feature-request",
+    },
+    {
+      id: "shared001", // same id + content as remote A's entry — a genuine duplicate
+      timestamp: "2026-09-02T08:00:00.000Z",
+      note: "Docs for the token endpoint were split across three pages",
+      tag: "friction",
+    },
+  ];
+
+  const serverA = createStaticRemote(remoteAEntries);
+  const serverB = createStaticRemote(remoteBEntries);
+  const tempDir = mkdtempSync(join(tmpdir(), "friction-log-test-"));
+  try {
+    const portA = await listenOnEphemeralPort(serverA);
+    const portB = await listenOnEphemeralPort(serverB);
+    const urlA = `http://127.0.0.1:${portA}/`;
+    const urlB = `http://127.0.0.1:${portB}/`;
+
+    const result = await runCliAsync(tempDir, ["aggregate", urlA, urlB]);
+    check("aggregate exits zero against two reachable remotes", () => {
+      assert.equal(result.status, 0);
+    });
+    check("aggregate de-duplicates an entry with a shared id across two sources", () => {
+      assert.match(result.stdout, /5 entries after de-duplication \(1 duplicate id\(s\) skipped\)/);
+    });
+    check("aggregate groups both teammates' independent MCP schema-validation entries into one theme", () => {
+      const mcpSection = result.stdout.split(/### \d+\. /).find((section) => /\bmcp\b/.test(section));
+      assert.ok(mcpSection, "expected a theme section mentioning mcp");
+      assert.match(mcpSection!, /2 entries/);
+      assert.match(mcpSection!, /kept failing with no line numbers/);
+      assert.match(mcpSection!, /also crashed constantly/);
+    });
+    check("aggregate keeps the unrelated feature-request entry in its own theme, not lumped into MCP's", () => {
+      assert.match(result.stdout, /Should add a bulk export option/);
+    });
+    check("aggregate reports the correct total theme count in its summary line", () => {
+      // 3 themes: {mcp cluster}, {ring oauth}, {feature-request} (the shared-id docs entry merges into one, forming a 4th single-entry theme).
+      assert.match(result.stdout, /grouped into 4 themes/);
+    });
+
+    // --- one unreachable source alongside one reachable one ---
+    const mixedResult = await runCliAsync(tempDir, ["aggregate", urlA, "http://127.0.0.1:1/"]);
+    check("aggregate against one reachable + one unreachable source still exits zero", () => {
+      assert.equal(mixedResult.status, 0);
+    });
+    check("aggregate lists the unreachable source under 'Unreachable sources' instead of failing entirely", () => {
+      assert.match(mixedResult.stdout, /## Unreachable sources/);
+      assert.match(mixedResult.stdout, /http:\/\/127\.0\.0\.1:1\//);
+    });
+    check("aggregate still reports the reachable source's entries despite the other source failing", () => {
+      assert.match(mixedResult.stdout, /kept failing with no line numbers/);
+    });
+
+    // --- --out writes the report to a file instead of stdout ---
+    const outFile = join(tempDir, "team-report.md");
+    const outResult = await runCliAsync(tempDir, ["aggregate", urlA, urlB, "--out", outFile]);
+    check("aggregate --out writes the report to a file and confirms on stdout", () => {
+      assert.equal(outResult.status, 0);
+      assert.match(outResult.stdout, /✓ Aggregated 5 entries from 2 source\(s\)/);
+      assert.ok(existsSync(outFile));
+    });
+    check("the file aggregate --out wrote contains the same theme report content", () => {
+      const written = readFileSync(outFile, "utf8");
+      assert.match(written, /# Team Friction Log — Aggregated/);
+      assert.match(written, /kept failing with no line numbers/);
+    });
+
+    const noUrls = runCli(tempDir, ["aggregate"]);
+    check("aggregate with no URLs fails clearly", () => {
+      assert.notEqual(noUrls.status, 0);
+    });
+  } finally {
+    serverA.close();
+    serverB.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+})();
+
+// --- Feature: `export --format github-issues` (local file export only) ------
+
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  runCli(dir, ["add", "MCP schema validation errors had no line numbers", "--tag", "friction"]);
+  runCli(dir, ["add", "MCP schema validation errors also hit the staging deploy", "--tag", "friction"]);
+  runCli(dir, ["add", "Should add a dark mode toggle", "--tag", "feature-request"]);
+  runCli(dir, ["add", "Ring sandbox credentials worked painlessly", "--tag", "worked-well"]);
+
+  const outDir = join(dir, "issues-out");
+  const result = runCli(dir, ["export", "--format", "github-issues", "acme/my-repo", "--out", outDir]);
+  check("export --format github-issues exits zero and reports how many files it wrote", () => {
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /✓ Wrote 2 GitHub issue file\(s\) to .*issues-out\/ for acme\/my-repo\./);
+  });
+  check("export --format github-issues is explicit that this is local-file export only, not automatic filing", () => {
+    assert.match(result.stdout, /LOCAL FILE EXPORT ONLY/);
+    assert.match(result.stdout, /nothing was filed on GitHub/);
+  });
+  check("export --format github-issues excludes worked-well entries (not a problem to file) from the file count", () => {
+    // 2 clusters expected: the MCP theme (2 entries) and the feature-request (1 entry) — worked-well entry produces no file.
+    const files = readdirSync(outDir);
+    assert.equal(files.length, 2);
+  });
+
+  const files = readdirSync(outDir).sort();
+  const mcpFile = files.find((f) => f.includes("mcp"));
+  check("one issue file groups both MCP-themed friction entries together instead of filing them separately", () => {
+    assert.ok(mcpFile, `expected a file mentioning mcp among: ${files.join(", ")}`);
+    const content = readFileSync(join(outDir, mcpFile!), "utf8");
+    assert.match(content, /had no line numbers/);
+    assert.match(content, /also hit the staging deploy/);
+    assert.match(content, /Suggested target repository: \*\*acme\/my-repo\*\*/);
+    assert.match(content, /gh issue create -R acme\/my-repo --title/);
+    assert.match(content, /## Suggested labels/);
+    assert.match(content, /`friction-log`, `friction`/);
+  });
+
+  const missingRepo = runCli(dir, ["export", "--format", "github-issues"]);
+  check("export --format github-issues with no <owner/repo> fails clearly", () => {
+    assert.notEqual(missingRepo.status, 0);
+  });
+
+  const invalidRepo = runCli(dir, ["export", "--format", "github-issues", "not-a-valid-repo-arg"]);
+  check("export --format github-issues with a malformed <owner/repo> (no slash) fails clearly", () => {
+    assert.notEqual(invalidRepo.status, 0);
+  });
+});
+
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  runCli(dir, ["add", "Ring sandbox credentials worked painlessly", "--tag", "worked-well"]);
+  const outDir = join(dir, "issues-out-empty");
+  const result = runCli(dir, ["export", "--format", "github-issues", "acme/my-repo", "--out", outDir]);
+  check("export --format github-issues on a log with only worked-well entries writes nothing and says so", () => {
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /No friction\/feature-request .* entries to export/);
+    assert.ok(!existsSync(outDir));
+  });
+});
+
+// --- Feature: `export --format timeline` (narrative export) -----------------
+
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  runCli(dir, ["add", "MCP schema validation errors had no line numbers", "--tag", "friction"]);
+  runCli(dir, ["add", "The MCP schema validator crashed on a valid payload", "--tag", "friction"]);
+  runCli(dir, ["add", "Fixed the MCP schema validator issue by pinning an older version", "--tag", "worked-well"]);
+  runCli(dir, ["add", "Should add a dark mode toggle", "--tag", "feature-request"]);
+  runCli(dir, ["add", "Ring OAuth sandbox mode worked painlessly", "--tag", "worked-well"]);
+
+  const result = runCli(dir, ["export", "--format", "timeline"]);
+  check("export --format timeline exits zero", () => {
+    assert.equal(result.status, 0);
+  });
+  check("export --format timeline folds consecutive same-tag entries into one connected paragraph", () => {
+    assert.match(
+      result.stdout,
+      /friction showed up more than once: first MCP schema validation errors had no line numbers, then the MCP schema validator crashed on a valid payload\./
+    );
+  });
+  check("export --format timeline phrases a later worked-well entry sharing wording with earlier friction as a resolution", () => {
+    assert.match(result.stdout, /this was resolved: fixed the MCP schema validator issue by pinning an older version\./);
+  });
+  check("export --format timeline preserves acronyms instead of mangling them mid-sentence (no 'mCP')", () => {
+    assert.ok(!/\bmCP\b/.test(result.stdout));
+    assert.match(result.stdout, /\bMCP\b/);
+  });
+  check("export --format timeline phrases an unrelated worked-well entry as smooth sailing, not a resolution", () => {
+    assert.match(result.stdout, /ring OAuth sandbox mode worked painlessly — a welcome bit of smooth sailing\./);
+  });
+  check("export --format timeline phrases a feature-request entry with its own template", () => {
+    assert.match(result.stdout, /the team noted a feature request: should add a dark mode toggle\./);
+  });
+  check("export --format timeline uses phase language and avoids repeating the same phase word back to back", () => {
+    assert.match(result.stdout, /Early on|Partway through|Later on/);
+  });
+
+  const outFile = join(dir, "TIMELINE.md");
+  const outResult = runCli(dir, ["export", "--format", "timeline", "--out", outFile]);
+  check("export --format timeline --out writes the narrative to a file", () => {
+    assert.equal(outResult.status, 0);
+    assert.ok(existsSync(outFile));
+    const written = readFileSync(outFile, "utf8");
+    assert.match(written, /# Friction Log — Timeline/);
+  });
+});
+
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  runCli(dir, ["add", "The only entry in this log broke everything"]);
+  const result = runCli(dir, ["export", "--format", "timeline"]);
+  check("export --format timeline on a single-entry log produces one plain capitalized sentence (no phase prefix)", () => {
+    assert.match(result.stdout, /^The only entry in this log broke everything\.$/m);
+  });
+});
+
+withTempDir((dir) => {
+  runCli(dir, ["init"]);
+  const result = runCli(dir, ["export", "--format", "timeline"]);
+  check("export --format timeline on an empty log says there's nothing to narrate instead of erroring", () => {
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /No entries logged yet — nothing to narrate\./);
+  });
+});
 
 console.log(`\nAll ${passed} checks passed.`);
