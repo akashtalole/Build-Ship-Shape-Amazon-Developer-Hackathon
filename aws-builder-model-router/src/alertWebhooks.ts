@@ -14,12 +14,17 @@ import { randomBytes, createHmac } from "node:crypto";
  *
  * Scope is deliberately narrow for this demo: exactly one registered
  * callback (like `ring-porchpass`'s one-webhook-per-household granularity),
- * and exactly two alert types — the two conditions an operator actually
- * wants to know about *without* polling `/metrics`:
+ * and three alert types — conditions an operator actually wants to know
+ * about *without* polling `/metrics`:
  *   - `budget_exceeded`: a (global or per-caller) cost budget was just
  *     exhausted, so the router started auto-throttling escalations.
  *   - `circuit_open`: the foundation-model circuit breaker just tripped, so
  *     requests are falling back to the sidecar's best-effort answer.
+ *   - `drift_alert` (round 5): the sidecar's rolling agreement rate with the
+ *     foundation model — sampled on a small fraction of otherwise-confident
+ *     traffic, see `ModelRouter.configureDriftDetection()` — just dropped
+ *     below the configured threshold, suggesting the sidecar's behavior has
+ *     drifted from what the foundation model would say.
  *
  * Fire-and-forget by construction: `fire()` is called from deep inside
  * `ModelRouter.route()` and must never make a slow or failing operator
@@ -30,7 +35,7 @@ import { randomBytes, createHmac } from "node:crypto";
  * `ModelRouter.flushAlertWebhooks()`.
  */
 
-export type AlertEventType = "budget_exceeded" | "circuit_open";
+export type AlertEventType = "budget_exceeded" | "circuit_open" | "drift_alert";
 
 export interface AlertEvent {
   type: AlertEventType;

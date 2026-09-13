@@ -81,6 +81,66 @@ function validateCanaryConfig(config: unknown): SidecarClassifierConfig | { erro
   return { extraKeywords: parsedExtraKeywords, confidenceScale: confidenceScale as number | undefined };
 }
 
+/** Validates a `POST /router/ensemble` body into `{members, primaryWeight}`, or returns an error string. Each member's own `config` reuses `validateCanaryConfig`'s exact validation (both ultimately construct a `MockSidecarClassifier`). */
+function validateEnsembleBody(body: unknown): { members: { classifier: MockSidecarClassifier; weight?: number; name?: string }[]; primaryWeight?: number } | { error: string } {
+  const { members, primaryWeight } = (body ?? {}) as Record<string, unknown>;
+
+  if (!Array.isArray(members) || members.length === 0) {
+    return { error: "A non-empty 'members' array is required — each entry may have 'weight' (positive number) and/or 'config' (like /router/canary's)." };
+  }
+  if (primaryWeight !== undefined && (typeof primaryWeight !== "number" || !Number.isFinite(primaryWeight) || primaryWeight <= 0)) {
+    return { error: "'primaryWeight', if provided, must be a positive number." };
+  }
+
+  const parsedMembers: { classifier: MockSidecarClassifier; weight?: number; name?: string }[] = [];
+  for (const entry of members) {
+    if (typeof entry !== "object" || entry === null) {
+      return { error: "Each 'members' entry must be an object." };
+    }
+    const { weight, name, config } = entry as Record<string, unknown>;
+    if (weight !== undefined && (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0)) {
+      return { error: "Each member's 'weight', if provided, must be a positive number." };
+    }
+    if (name !== undefined && typeof name !== "string") {
+      return { error: "Each member's 'name', if provided, must be a string." };
+    }
+    const parsedConfig = validateCanaryConfig(config);
+    if ("error" in parsedConfig) return { error: `member config: ${parsedConfig.error}` };
+    parsedMembers.push({ classifier: new MockSidecarClassifier(parsedConfig), weight: weight as number | undefined, name: name as string | undefined });
+  }
+
+  return { members: parsedMembers, primaryWeight: primaryWeight as number | undefined };
+}
+
+/** Validates a `POST /drift/config` body, or returns an error string. */
+function validateDriftConfigBody(body: unknown): { sampleRate: number; windowSize?: number; alertThreshold?: number } | { error: string } {
+  const { sampleRate, windowSize, alertThreshold } = (body ?? {}) as Record<string, unknown>;
+
+  if (typeof sampleRate !== "number" || !Number.isFinite(sampleRate) || sampleRate < 0 || sampleRate > 1) {
+    return { error: "A numeric 'sampleRate' between 0 and 1 (inclusive) is required." };
+  }
+  if (windowSize !== undefined && (typeof windowSize !== "number" || !Number.isInteger(windowSize) || windowSize < 1)) {
+    return { error: "'windowSize', if provided, must be a positive integer." };
+  }
+  if (alertThreshold !== undefined && (typeof alertThreshold !== "number" || !Number.isFinite(alertThreshold) || alertThreshold < 0 || alertThreshold > 1)) {
+    return { error: "'alertThreshold', if provided, must be a number between 0 and 1 (inclusive)." };
+  }
+
+  return { sampleRate, windowSize: windowSize as number | undefined, alertThreshold: alertThreshold as number | undefined };
+}
+
+/** Parses `GET /audit/export`'s optional `?since=` query param (an ISO timestamp or epoch-milliseconds string) into epoch milliseconds, or returns an error string. */
+function parseSinceParam(value: unknown): number | undefined | { error: string } {
+  if (value === undefined) return undefined;
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== "string" || raw.trim().length === 0) return { error: "'since', if provided, must be a non-empty string (an ISO timestamp or epoch milliseconds)." };
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber) && raw.trim() === String(asNumber)) return asNumber;
+  const parsed = Date.parse(raw);
+  if (Number.isNaN(parsed)) return { error: "'since' must be a valid ISO timestamp or epoch-milliseconds value." };
+  return parsed;
+}
+
 /**
  * Builds the model-router Express app. Kept as a factory (rather than a
  * module-level app) so tests can wire in a fresh ModelRouter (and therefore
@@ -271,6 +331,86 @@ export function createApp(router: ModelRouter, options: { rateLimiter?: RateLimi
   app.delete("/router/canary", (_req, res) => {
     router.clearCanary();
     res.status(200).json(router.getCanaryStatus());
+  });
+
+  // Multi-sidecar ensemble voting (round 5): registers 2+ voting members
+  // (the primary plus one or more extras) whose votes are *combined* into
+  // one weighted answer per request — distinct from canary/A-B routing just
+  // above, which *splits* traffic between two versions instead. See
+  // ModelRouter.setEnsemble()'s doc comment and the README's "Multi-sidecar
+  // ensemble voting" section for exactly how the two differ.
+  app.post("/router/ensemble", (req, res) => {
+    const parsed = validateEnsembleBody(req.body);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    router.setEnsemble(parsed.members, parsed.primaryWeight);
+    res.status(200).json(router.getEnsembleStatus());
+  });
+
+  app.get("/router/ensemble", (_req, res) => {
+    res.json(router.getEnsembleStatus());
+  });
+
+  app.delete("/router/ensemble", (_req, res) => {
+    router.clearEnsemble();
+    res.status(200).json(router.getEnsembleStatus());
+  });
+
+  // Sidecar drift detection (round 5): samples a configurable fraction of
+  // otherwise-confident sidecar-path traffic through the foundation model
+  // purely to watch for drift, tracked over a rolling window with alerting
+  // via the existing outbound webhook mechanism. See
+  // ModelRouter.configureDriftDetection()'s doc comment for exactly how this
+  // differs from shadow evaluation.
+  app.post("/drift/config", (req, res) => {
+    const parsed = validateDriftConfigBody(req.body);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    router.configureDriftDetection(parsed);
+    res.status(200).json(router.getDriftStatus());
+  });
+
+  app.get("/drift/status", (_req, res) => {
+    res.json(router.getDriftStatus());
+  });
+
+  app.delete("/drift/config", (_req, res) => {
+    router.disableDriftDetection();
+    res.status(200).json(router.getDriftStatus());
+  });
+
+  // Cost-optimization recommender (round 5): a concrete, numerically-computed
+  // suggestion derived from the router's own accumulated escalation history
+  // and feedback/shadow-evaluation accuracy data — never a canned message.
+  // See ModelRouter.generateCostRecommendation()'s doc comment.
+  app.get("/recommendations/cost", (_req, res) => {
+    res.json(router.generateCostRecommendation());
+  });
+
+  // Per-request audit trail export (round 5): a compliance/cost-review-ready
+  // export of routing decisions, reusing the metrics-persistence file-based
+  // approach (see auditTrail.ts) rather than a second storage mechanism.
+  app.get("/audit/export", (req, res) => {
+    const since = parseSinceParam(req.query.since);
+    if (since !== undefined && typeof since === "object") {
+      res.status(400).json({ error: since.error });
+      return;
+    }
+    const limitRaw = req.query.limit;
+    let limit: number | undefined;
+    if (limitRaw !== undefined) {
+      const limitValue = Number(Array.isArray(limitRaw) ? limitRaw[0] : limitRaw);
+      if (!Number.isFinite(limitValue) || !Number.isInteger(limitValue) || limitValue <= 0) {
+        res.status(400).json({ error: "'limit', if provided, must be a positive integer." });
+        return;
+      }
+      limit = limitValue;
+    }
+    res.json(router.exportAuditTrail({ sinceMs: since, limit }));
   });
 
   // Outbound alert webhooks (round 4): a registered callback URL gets an

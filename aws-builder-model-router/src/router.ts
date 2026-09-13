@@ -11,10 +11,17 @@ import type {
   FoundationResult,
   CallerBudgetSnapshot,
   CanaryStatus,
+  EnsembleStatus,
+  EnsembleVoteEntry,
+  DriftStatus,
+  CostRecommendation,
+  AuditRecord,
+  AuditExportResult,
 } from "./types.js";
 import { BudgetTracker, type BudgetStatus } from "./budgetTracker.js";
 import { loadMetricsState, saveMetricsState, type PersistedMetricsState } from "./metricsPersistence.js";
 import { AlertWebhookDispatcher, type AlertWebhookRegistration, type AlertWebhookStatus } from "./alertWebhooks.js";
+import { appendAuditRecord, loadAuditRecords } from "./auditTrail.js";
 
 /** Confidence at/above which the sidecar's own answer is trusted, unless the caller overrides it per request. */
 export const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
@@ -67,6 +74,21 @@ const THRESHOLD_SUGGESTION_STEP = 0.05;
 // --- Persistent metrics (round 3) ---
 const DEFAULT_PERSIST_EVERY_N_REQUESTS = 20;
 
+// --- Sidecar drift detection (round 5) ---
+/** How many of the most recent drift comparisons the rolling agreement rate is computed over. */
+export const DEFAULT_DRIFT_WINDOW_SIZE = 20;
+/** Rolling agreement rate below which a `drift_alert` webhook fires (once, on the transition — see `recordDriftSample`). */
+export const DEFAULT_DRIFT_ALERT_THRESHOLD = 0.8;
+
+// --- Cost-optimization recommender (round 5) ---
+const MIN_ESCALATION_SAMPLES_FOR_RECOMMENDATION = 5;
+const ESCALATION_SAMPLES_MAX_ENTRIES = 1000; // bounded ring buffer, same spirit as FEEDBACK_LOG_MAX_ENTRIES
+const RECOMMENDATION_THRESHOLD_STEP = 0.05;
+const RECOMMENDATION_THRESHOLD_FLOOR = 0.3;
+
+// --- Per-request audit trail (round 5) ---
+const DEFAULT_AUDIT_LOG_MAX_IN_MEMORY_RECORDS = 2000;
+
 export interface RouteOptions {
   threshold?: number;
   /**
@@ -115,8 +137,12 @@ export interface ModelRouterOptions {
   metricsPersistPath?: string;
   /** Auto-save cadence: persist after this many `route()` calls. Default 20. Ignored when `metricsPersistPath` isn't set. */
   persistEveryNRequests?: number;
-  /** Source of randomness for canary/A-B traffic-split decisions (round 4). Overridable purely for deterministic tests — production code should never need to set this. Default `Math.random`. */
+  /** Source of randomness for canary/A-B traffic-split decisions (round 4) and drift-detection sampling (round 5). Overridable purely for deterministic tests — production code should never need to set this. Default `Math.random`. */
   random?: () => number;
+  /** File path to append per-request audit records to, JSON-Lines-formatted (round 5). Omit to keep the audit trail in-memory only (see `auditLogMaxRecords`) — records are still available via `exportAuditTrail()`/`GET /audit/export` for the life of the process, just not durable across a restart. See `auditTrail.ts`. */
+  auditLogPath?: string;
+  /** Bound on the in-memory audit-record buffer used when `auditLogPath` isn't set (or as a fast path alongside it). Default 2000 — oldest records are evicted first, the same bounded-log convention as the feedback log and the escalation-sample buffer. */
+  auditLogMaxRecords?: number;
 }
 
 interface CacheEntry {
@@ -216,6 +242,35 @@ export class ModelRouter {
   private readonly persistEveryNRequests: number;
   private requestsSincePersist = 0;
 
+  // --- Multi-sidecar ensemble voting (round 5) ---
+  /** Extra voting members beyond the primary (`this.sidecar`), registered via `setEnsemble()`. Empty means "no ensemble configured" — the primary alone decides, exactly as before this feature existed. */
+  private ensembleMembers: { classifier: SidecarClassifier; weight: number; name: string }[] = [];
+  private ensemblePrimaryWeight = 1;
+  private ensembleEvaluations = 0;
+  private ensembleDisagreements = 0;
+
+  // --- Sidecar drift detection (round 5) ---
+  private driftSampleRate = 0; // 0 disables drift sampling entirely — opt-in, like the canary and the cost budget
+  private driftWindowSize = DEFAULT_DRIFT_WINDOW_SIZE;
+  private driftAlertThreshold = DEFAULT_DRIFT_ALERT_THRESHOLD;
+  /** Ring buffer of the most recent `driftWindowSize` comparisons (true = agreed), oldest evicted first. */
+  private driftWindow: boolean[] = [];
+  private driftTotalEvaluations = 0;
+  private driftTotalAgreements = 0;
+  /** True once the rolling agreement rate has dropped below threshold and an alert has fired for it — cleared the moment it recovers, so a later drop fires a fresh alert rather than staying permanently silent (mirrors the circuit breaker's transition-only alerting). */
+  private driftAlertActive = false;
+  private lastDriftAlertFiredAt: string | null = null;
+  private pendingDriftEvaluations: Promise<void>[] = [];
+
+  // --- Cost-optimization recommender (round 5) ---
+  /** Bounded log of every escalated (non-sidecar-path) request's sidecar confidence and the marginal cost that escalation incurred beyond the sidecar's own flat fee — the real traffic data `generateCostRecommendation()` reasons over. Oldest evicted first once over `ESCALATION_SAMPLES_MAX_ENTRIES`. */
+  private escalationSamples: { confidence: number; marginalCostUsd: number }[] = [];
+
+  // --- Per-request audit trail (round 5) ---
+  private readonly auditLogPath?: string;
+  private readonly auditLogMaxRecords: number;
+  private auditBuffer: AuditRecord[] = [];
+
   constructor(
     private readonly sidecar: SidecarClassifier,
     private readonly foundation: FoundationModelProvider,
@@ -238,6 +293,9 @@ export class ModelRouter {
     if (this.metricsPersistPath) {
       this.hydrateFromDisk(this.metricsPersistPath);
     }
+
+    this.auditLogPath = options.auditLogPath;
+    this.auditLogMaxRecords = options.auditLogMaxRecords ?? DEFAULT_AUDIT_LOG_MAX_IN_MEMORY_RECORDS;
   }
 
   /**
@@ -294,6 +352,7 @@ export class ModelRouter {
           )}s, so no model was invoked this time.)`,
         };
         this.recordForFeedback(result);
+        this.recordAudit(result, callerId, budget);
         this.notePersist();
         return result;
       }
@@ -301,13 +360,13 @@ export class ModelRouter {
     }
     this.cacheMisses += 1;
 
-    const sidecarResult = await this.resolveSidecarResult(input);
+    const { sidecarResult, callCount: sidecarCallCount } = await this.resolveSidecarResult(input);
     const sidecarRecord: SidecarResult & CostEstimate = {
       ...sidecarResult,
-      costUsd: SIDECAR_COST_USD,
+      costUsd: SIDECAR_COST_USD * sidecarCallCount,
       latencyMs: SIDECAR_LATENCY_MS,
     };
-    const signalDescription = this.describeSidecarSignal(sidecarRecord);
+    const signalDescription = sidecarRecord.ensembleVotes ? this.describeEnsembleVote(sidecarRecord) : this.describeSidecarSignal(sidecarRecord);
 
     let cacheable: Omit<RouteResult, "requestId" | "cacheHit">;
 
@@ -323,14 +382,21 @@ export class ModelRouter {
           2
         )} (${signalDescription}), meeting the ${threshold.toFixed(2)} threshold — no escalation needed.`,
         sidecar: sidecarRecord,
-        totalCostUsd: SIDECAR_COST_USD,
-        totalLatencyMs: SIDECAR_LATENCY_MS,
+        totalCostUsd: sidecarRecord.costUsd,
+        totalLatencyMs: sidecarRecord.latencyMs,
       };
 
       if (shadowMode) {
         // Fire-and-forget: never awaited, so it cannot add latency to (or
         // fail) the response we're about to return.
         this.runShadowEvaluation(input, sidecarResult);
+      }
+      if (this.driftSampleRate > 0 && this.random() < this.driftSampleRate) {
+        // Independent of shadowMode: a router-level *sampled* fraction of all
+        // confident traffic, not an opt-in per request — see
+        // `runDriftEvaluation()`'s doc comment for how this differs from
+        // shadow evaluation despite the similar mechanism.
+        this.runDriftEvaluation(input, sidecarResult);
       }
     } else if (budget.isExceeded()) {
       // Auto-throttle: escalation is needed, but the configured cost budget
@@ -340,20 +406,32 @@ export class ModelRouter {
       // best-effort answer instead.
       this.budgetThrottledRequests += 1;
       this.fireBudgetExceededAlert(callerId, budget);
-      cacheable = this.buildBudgetCappedResult(input, threshold, sidecarRecord, signalDescription, SIDECAR_COST_USD, SIDECAR_LATENCY_MS, budget);
+      cacheable = this.buildBudgetCappedResult(input, threshold, sidecarRecord, signalDescription, sidecarRecord.costUsd, sidecarRecord.latencyMs, budget);
     } else if (this.reviewerProvider && sidecarResult.confidence >= this.reviewerConfidenceThreshold) {
       cacheable = await this.runReviewerTier(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, budget, callerId);
     } else {
       cacheable = await this.escalateToFoundation(input, threshold, sidecarResult, sidecarRecord, signalDescription, now, budget, {
-        priorCostUsd: SIDECAR_COST_USD,
-        priorLatencyMs: SIDECAR_LATENCY_MS,
+        priorCostUsd: sidecarRecord.costUsd,
+        priorLatencyMs: sidecarRecord.latencyMs,
       });
+    }
+
+    if (cacheable.path === "foundation" || cacheable.path === "fallback") {
+      // Cost-optimization recommender (round 5): a real, bounded sample of
+      // "what did actually reaching (or attempting) the costly top tier cost
+      // beyond the sidecar's own flat fee, and at what sidecar confidence" —
+      // see `generateCostRecommendation()`. Deliberately excludes `"reviewer"`-
+      // resolved requests: those already found the *cheap* tier working as
+      // intended, so they're not the "reduce foundation-model calls" problem
+      // this recommender targets.
+      this.recordEscalationSample(sidecarResult.confidence, cacheable.totalCostUsd - sidecarRecord.costUsd);
     }
 
     const result: RouteResult = { ...cacheable, requestId: randomUUID() };
     this.cache.set(cacheKey, { result: cacheable, expiresAt: now + this.cacheTtlMs });
     this.evictOldestCacheEntryIfOverCapacity();
     this.recordForFeedback(result);
+    this.recordAudit(result, callerId, budget);
     this.cumulativeActualCostUsd += cacheable.totalCostUsd;
     this.notePersist();
     return result;
@@ -389,10 +467,27 @@ export class ModelRouter {
    * response is already on its way out. Both mock sidecar calls are cheap
    * enough (~45ms simulated, near-instant in practice) that awaiting them
    * concurrently via `Promise.all` doesn't meaningfully add latency.
+   *
+   * Ensemble voting (round 5, see below) takes priority when configured: if
+   * `ensembleMembers` is non-empty, every member (plus the primary) votes on
+   * the same input and their combined answer is what the rest of `route()`
+   * acts on — canary's traffic-split logic is skipped entirely in that case,
+   * since "which single answer wins" and "how do several answers combine
+   * into one" are different questions with different traffic-cost profiles
+   * (see `EnsembleStatus`'s doc comment in types.ts for exactly how the two
+   * features differ). Returns the sidecar-tier call count too, so `route()`
+   * can bill `SIDECAR_COST_USD` once per real endpoint invocation this
+   * request actually made — 1 for the primary alone or a canary comparison
+   * (unchanged pre-round-5 billing), `1 + ensembleMembers.length` for an
+   * ensemble vote.
    */
-  private async resolveSidecarResult(input: string): Promise<SidecarResult> {
+  private async resolveSidecarResult(input: string): Promise<{ sidecarResult: SidecarResult; callCount: number }> {
+    if (this.ensembleMembers.length > 0) {
+      return { sidecarResult: await this.runEnsembleVote(input), callCount: 1 + this.ensembleMembers.length };
+    }
+
     if (!this.candidateSidecar) {
-      return this.sidecar.classify(input);
+      return { sidecarResult: await this.sidecar.classify(input), callCount: 1 };
     }
 
     const [primaryResult, candidateResult] = await Promise.all([this.sidecar.classify(input), this.candidateSidecar.classify(input)]);
@@ -403,7 +498,7 @@ export class ModelRouter {
 
     const useCandidate = this.random() < this.canaryPercentage;
     if (useCandidate) this.canaryServedRequests += 1;
-    return useCandidate ? candidateResult : primaryResult;
+    return { sidecarResult: useCandidate ? candidateResult : primaryResult, callCount: 1 };
   }
 
   /** Registers (or replaces) a candidate sidecar classifier and the traffic share actually served by its answer. `percentage` is a fraction in [0, 1] — 0.3 means "the candidate serves ~30% of requests," not "30 requests." */
@@ -429,6 +524,203 @@ export class ModelRouter {
       servedRequests: this.canaryServedRequests,
       servedRate: this.canaryEvaluations === 0 ? 0 : this.canaryServedRequests / this.canaryEvaluations,
     };
+  }
+
+  // --- Multi-sidecar ensemble voting internals (round 5) ---
+
+  /**
+   * Registers 1+ additional sidecar classifiers that, together with the
+   * primary, *combine* their votes into a single answer for every request —
+   * as opposed to canary/A-B routing (above), which *splits* traffic so each
+   * request is served by exactly one of two versions. Once configured, every
+   * classification runs all `1 + members.length` classifiers concurrently
+   * (cheap — the same "sub-millisecond mock, ~45ms simulated" reasoning as
+   * canary's own concurrent `Promise.all`) and combines them via a weighted
+   * vote (see `runEnsembleVote()`): each member's vote for its own label
+   * contributes `weight * confidence` toward that label's score, the label
+   * with the highest total score wins, and the combined confidence is that
+   * winning score as a fraction of the total weight — so a member that's
+   * unsure of its own answer contributes less evidence than one that's
+   * confident, not just "one vote regardless of how confident it is."
+   *
+   * Real deployments would point each member at a genuinely different
+   * trained-model endpoint (e.g. three independently-trained classifiers, or
+   * the same architecture retrained on different data slices) — here, since
+   * every mock is the same keyword-heuristic class, distinctness comes from
+   * `SidecarClassifierConfig` the same way canary's candidate does.
+   */
+  setEnsemble(members: { classifier: SidecarClassifier; weight?: number; name?: string }[], primaryWeight = 1): void {
+    this.ensemblePrimaryWeight = primaryWeight;
+    this.ensembleMembers = members.map((m, i) => ({ classifier: m.classifier, weight: m.weight ?? 1, name: m.name ?? `member-${i + 1}` }));
+  }
+
+  /** Unregisters every ensemble member — the primary alone decides again, with no vote-combination overhead. Cumulative ensemble counters are left as-is, matching `clearCanary()`'s convention. */
+  clearEnsemble(): void {
+    this.ensembleMembers = [];
+    this.ensemblePrimaryWeight = 1;
+  }
+
+  /** Current ensemble configuration and cumulative vote-comparison stats. `enabled: false` (and `memberCount: 1`) when no extra members are registered — the primary alone always counts as one member. */
+  getEnsembleStatus(): EnsembleStatus {
+    const members = [{ name: "primary", weight: this.ensemblePrimaryWeight }, ...this.ensembleMembers.map((m) => ({ name: m.name, weight: m.weight }))];
+    return {
+      enabled: this.ensembleMembers.length > 0,
+      memberCount: members.length,
+      members,
+      evaluations: this.ensembleEvaluations,
+      disagreements: this.ensembleDisagreements,
+      disagreementRate: this.ensembleEvaluations === 0 ? 0 : this.ensembleDisagreements / this.ensembleEvaluations,
+    };
+  }
+
+  /** Runs every registered member (primary + extras) concurrently on the same input and combines their votes via confidence-weighted scoring. Only called when `ensembleMembers.length > 0` — see `resolveSidecarResult()`. */
+  private async runEnsembleVote(input: string): Promise<SidecarResult> {
+    const members = [{ classifier: this.sidecar, weight: this.ensemblePrimaryWeight, name: "primary" }, ...this.ensembleMembers];
+    const results = await Promise.all(members.map((m) => m.classifier.classify(input)));
+
+    const scores = new Map<string, number>();
+    const totalWeight = members.reduce((sum, m) => sum + m.weight, 0);
+    results.forEach((r, i) => {
+      const contribution = members[i].weight * r.confidence;
+      scores.set(r.label, (scores.get(r.label) ?? 0) + contribution);
+    });
+
+    // Deterministic tie-break: iterate in member order (not Map insertion
+    // order alone, since two different labels could tie exactly) and keep
+    // the first-seen highest score — with real, varied confidences an exact
+    // tie is rare, and this keeps the outcome reproducible when it happens.
+    let winnerLabel = results[0].label;
+    let winnerScore = -1;
+    for (const [label, score] of scores) {
+      if (score > winnerScore) {
+        winnerScore = score;
+        winnerLabel = label;
+      }
+    }
+
+    const combinedConfidence = totalWeight === 0 ? 0 : Math.min(1, winnerScore / totalWeight);
+    const unanimous = results.every((r) => r.label === winnerLabel);
+    this.ensembleEvaluations += 1;
+    if (!unanimous) this.ensembleDisagreements += 1;
+
+    const ensembleVotes: EnsembleVoteEntry[] = results.map((r, i) => ({ name: members[i].name, label: r.label, confidence: r.confidence, weight: members[i].weight }));
+    const matchedKeywords = results.flatMap((r) => r.matchedKeywords ?? []);
+
+    return { label: winnerLabel, confidence: combinedConfidence, matchedKeywords, ensembleVotes };
+  }
+
+  /** Human-readable per-member vote breakdown for the `explanation` field, used instead of `describeSidecarSignal()` whenever a result carries `ensembleVotes`. */
+  private describeEnsembleVote(sidecarRecord: SidecarResult): string {
+    const votes = sidecarRecord.ensembleVotes ?? [];
+    const breakdown = votes.map((v) => `${v.name}="${v.label}" (confidence ${v.confidence.toFixed(2)}, weight ${v.weight})`).join(", ");
+    return `ensemble vote across ${votes.length} sidecar(s): ${breakdown}`;
+  }
+
+  // --- Sidecar drift detection internals (round 5) ---
+
+  /**
+   * Configures background drift sampling: on a random `sampleRate` fraction
+   * of requests that the sidecar answers confidently enough to resolve on
+   * its own (the same trigger point as shadow evaluation), also invoke the
+   * foundation model purely to compare labels — but unlike shadow mode
+   * (opt-in *per request* via `shadowMode: true`, and reported as an
+   * all-time agreement rate with no alerting), this is a router-level,
+   * always-on *sampled fraction* of real traffic, tracked over a *rolling*
+   * window (the last `windowSize` comparisons, not all-time), with an
+   * outbound `drift_alert` webhook when the rolling agreement rate drops
+   * below `alertThreshold`. The sampling is deliberately partial — modeling
+   * real production model-drift monitoring, where checking every single
+   * request against the expensive foundation model would defeat the whole
+   * point of having a cheap sidecar in the first place.
+   */
+  configureDriftDetection(options: { sampleRate: number; windowSize?: number; alertThreshold?: number }): void {
+    this.driftSampleRate = options.sampleRate;
+    if (options.windowSize !== undefined) {
+      this.driftWindowSize = options.windowSize;
+      if (this.driftWindow.length > this.driftWindowSize) {
+        this.driftWindow = this.driftWindow.slice(this.driftWindow.length - this.driftWindowSize);
+      }
+    }
+    if (options.alertThreshold !== undefined) this.driftAlertThreshold = options.alertThreshold;
+  }
+
+  /** Disables drift sampling entirely — no new comparisons are kicked off until reconfigured. Cumulative/rolling counters are left as-is, matching `clearCanary()`'s convention. */
+  disableDriftDetection(): void {
+    this.driftSampleRate = 0;
+  }
+
+  /** Current drift-detection configuration plus rolling and all-time comparison stats. `rollingAgreementRate` is 1 (no evidence of drift) when there are no samples yet, the same "absence of evidence isn't evidence of drift" convention as an unconfigured circuit breaker starting `"closed"`. */
+  getDriftStatus(): DriftStatus {
+    const rollingEvaluations = this.driftWindow.length;
+    const rollingAgreements = this.driftWindow.filter(Boolean).length;
+    return {
+      enabled: this.driftSampleRate > 0,
+      sampleRate: this.driftSampleRate,
+      windowSize: this.driftWindowSize,
+      alertThreshold: this.driftAlertThreshold,
+      rollingEvaluations,
+      rollingAgreements,
+      rollingAgreementRate: rollingEvaluations === 0 ? 1 : rollingAgreements / rollingEvaluations,
+      totalEvaluations: this.driftTotalEvaluations,
+      totalAgreements: this.driftTotalAgreements,
+      alertActive: this.driftAlertActive,
+      lastAlertFiredAt: this.lastDriftAlertFiredAt,
+    };
+  }
+
+  /** Fire-and-forget background comparison, mirroring `runShadowEvaluation()`'s mechanics exactly (never awaited by `route()`, so it can never add latency to or fail the fast-path response) but feeding the *separate* rolling drift window instead of the all-time shadow counters. */
+  private runDriftEvaluation(input: string, sidecarResult: SidecarResult): void {
+    const prompt = this.promptFor(input);
+    const evaluation = this.foundation
+      .invoke(prompt)
+      .then((foundationResult) => {
+        const impliedLabel = inferLabelFromFoundationText(foundationResult.text);
+        this.recordDriftSample(impliedLabel !== null && impliedLabel === sidecarResult.label);
+      })
+      .catch(() => {
+        // A failed comparison call yields no data point this round — same
+        // "never surface as an error to the triggering request" handling as
+        // shadow evaluation's own failure path.
+      });
+    this.pendingDriftEvaluations.push(evaluation);
+  }
+
+  private recordDriftSample(agreed: boolean): void {
+    this.driftTotalEvaluations += 1;
+    if (agreed) this.driftTotalAgreements += 1;
+
+    this.driftWindow.push(agreed);
+    if (this.driftWindow.length > this.driftWindowSize) this.driftWindow.shift();
+
+    // Require a *full* window before alerting, so a handful of early samples
+    // (which could easily be 1/1 or 0/1 by chance) can't trip an alert on
+    // noise — the same "decline to react without enough signal" spirit as
+    // the adaptive-threshold suggestion's own minimum-sample guard.
+    if (this.driftWindow.length < this.driftWindowSize) return;
+
+    const rollingRate = this.driftWindow.filter(Boolean).length / this.driftWindow.length;
+    const belowThreshold = rollingRate < this.driftAlertThreshold;
+
+    if (belowThreshold && !this.driftAlertActive) {
+      this.driftAlertActive = true;
+      this.lastDriftAlertFiredAt = new Date().toISOString();
+      this.alertWebhooks.fire("drift_alert", {
+        rollingAgreementRate: rollingRate,
+        alertThreshold: this.driftAlertThreshold,
+        windowSize: this.driftWindow.length,
+      });
+    } else if (!belowThreshold && this.driftAlertActive) {
+      // Recovered — clear the flag so a later drop fires a fresh alert
+      // instead of staying permanently silent after the first one.
+      this.driftAlertActive = false;
+    }
+  }
+
+  /** Waits for every drift-detection comparison kicked off so far to settle. Mirrors `flushShadowEvaluations()` for the same reason: drift sampling is fire-and-forget from `route()`'s perspective, so tests (and anything else that wants an up-to-date rolling agreement rate) need this instead of guessing with a sleep. */
+  async flushDriftEvaluations(): Promise<void> {
+    const pending = this.pendingDriftEvaluations;
+    this.pendingDriftEvaluations = [];
+    await Promise.all(pending);
   }
 
   // --- Three-tier cascade internals ---
@@ -850,7 +1142,18 @@ export class ModelRouter {
    * With too few samples it declines to suggest anything rather than react
    * to noise.
    */
-  private computeThresholdSuggestion(): { suggestedThreshold: number | null; reason: string } {
+  /**
+   * Pools the same two "was the sidecar's trusted answer actually right?"
+   * proxies `computeThresholdSuggestion()` uses — explicit feedback on
+   * fast-path requests, plus shadow-evaluation agreement — into a single
+   * accuracy estimate, extracted so the cost-optimization recommender
+   * (round 5, `generateCostRecommendation()`) can reuse the *exact* same
+   * pooled signal for its own accuracy-risk projection rather than
+   * recomputing a second, potentially-diverging notion of "current accuracy."
+   * Returns `accuracy: null` when there isn't yet the minimum sample count to
+   * trust it — same guard as `computeThresholdSuggestion()`.
+   */
+  private pooledAccuracyEstimate(): { accuracy: number | null; sampleSize: number } {
     let correct = 0;
     let total = 0;
     for (const entry of this.feedbackLog.values()) {
@@ -861,8 +1164,14 @@ export class ModelRouter {
     }
     correct += this.shadowAgreements;
     total += this.shadowEvaluations;
+    if (total < THRESHOLD_SUGGESTION_MIN_SAMPLES) return { accuracy: null, sampleSize: total };
+    return { accuracy: correct / total, sampleSize: total };
+  }
 
-    if (total < THRESHOLD_SUGGESTION_MIN_SAMPLES) {
+  private computeThresholdSuggestion(): { suggestedThreshold: number | null; reason: string } {
+    const { accuracy, sampleSize: total } = this.pooledAccuracyEstimate();
+
+    if (accuracy === null) {
       return {
         suggestedThreshold: null,
         reason:
@@ -871,7 +1180,6 @@ export class ModelRouter {
       };
     }
 
-    const accuracy = correct / total;
     const currentThresholdPct = this.lastThresholdUsed.toFixed(2);
 
     if (accuracy < THRESHOLD_SUGGESTION_TARGET_ACCURACY) {
@@ -904,6 +1212,242 @@ export class ModelRouter {
       reason: `Current threshold ${currentThresholdPct} looks fine: observed sidecar accuracy is ${(accuracy * 100).toFixed(
         1
       )}% over ${total} sample(s).`,
+    };
+  }
+
+  // --- Cost-optimization recommender internals (round 5) ---
+
+  /** Records one escalated request's sidecar confidence and marginal cost (beyond the sidecar's own flat fee) into the bounded sample log `generateCostRecommendation()` reasons over. Called from `route()` for every non-sidecar-path result (reviewer/foundation/fallback) — a budget-throttled request is still reported as `path: "sidecar"` and is correctly excluded, since it never actually incurred escalation cost to learn from. */
+  private recordEscalationSample(confidence: number, marginalCostUsd: number): void {
+    this.escalationSamples.push({ confidence, marginalCostUsd });
+    if (this.escalationSamples.length > ESCALATION_SAMPLES_MAX_ENTRIES) this.escalationSamples.shift();
+  }
+
+  /**
+   * Generates a concrete, numerically-justified cost-optimization suggestion
+   * from the router's own accumulated traffic — never a canned message. Two
+   * real levers are considered:
+   *
+   *   1. **Enable the reviewer tier**, checked first when applicable: if no
+   *      reviewer is currently configured and some recent escalations sat in
+   *      the reviewer band (`[reviewerConfidenceThreshold, threshold)`) —
+   *      exactly the confidence range the codebase's own architecture already
+   *      considers "not confident enough to trust outright, but worth a
+   *      cheaper second opinion before paying for the full model" (see
+   *      `DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD`'s doc comment) — recommend
+   *      configuring one, with projected savings computed from the real
+   *      `REVIEWER_COST_USD` vs. `FOUNDATION_COST_USD` gap on those specific
+   *      samples. Preferred over lever 2 for this band because it recovers
+   *      cost *without* trusting the sidecar any more than it already is.
+   *   2. **Lower the confidence threshold**, otherwise: walks candidate
+   *      thresholds downward in `RECOMMENDATION_THRESHOLD_STEP` increments
+   *      from the current one, never below `max(RECOMMENDATION_THRESHOLD_FLOOR,
+   *      reviewerConfidenceThreshold)` — the router never recommends trusting
+   *      the sidecar alone below the confidence band the architecture itself
+   *      treats as "essentially no real signal" (same doc comment). For each
+   *      candidate, counts how many recent escalations had confidence high
+   *      enough to have resolved at the sidecar tier instead, stopping once a
+   *      candidate covers a solid majority (>= 50%) of the sample so the
+   *      suggestion doesn't chase one outlier down to an unreasonably low
+   *      threshold. Projected savings come directly from those *specific*
+   *      sampled requests' own already-recorded marginal cost, not a
+   *      hypothetical average.
+   *
+   * Neither lever fires when the recent escalation sample has no headroom at
+   * all (every sample already below the reviewer band, or a reviewer is
+   * already configured and nothing sits above its own floor) — a `"no_change"`
+   * result, matching the honest, conservative spirit of the existing
+   * adaptive-threshold suggestion rather than manufacturing a suggestion.
+   *
+   * Accuracy risk is deliberately *not* independently measured for a
+   * lower-confidence band (this demo has no ground-truth labels to draw on)
+   * — instead, per the feature's own framing, it reuses the exact same pooled
+   * feedback + shadow-evaluation accuracy signal `computeThresholdSuggestion()`
+   * already collects (see `pooledAccuracyEstimate()`), honestly presented as
+   * an estimate carried over from the current threshold's observed accuracy
+   * rather than a directly-measured figure for the *new* one.
+   */
+  generateCostRecommendation(): CostRecommendation {
+    const generatedAt = new Date().toISOString();
+    const sampleSize = this.escalationSamples.length;
+    const currentThreshold = this.lastThresholdUsed;
+    const { accuracy, sampleSize: accuracySampleSize } = this.pooledAccuracyEstimate();
+    const projectedAccuracyRiskPct = accuracy === null ? null : (1 - accuracy) * 100;
+
+    if (sampleSize < MIN_ESCALATION_SAMPLES_FOR_RECOMMENDATION) {
+      return {
+        generatedAt,
+        recommendationType: "insufficient_data",
+        sampleSize,
+        currentThreshold,
+        suggestedThreshold: null,
+        projectedFoundationCallReductionPct: null,
+        projectedCostSavingsUsd: null,
+        projectedAccuracyRiskPct: null,
+        accuracySampleSize,
+        rationale:
+          `Only ${sampleSize} escalated request(s) observed so far — at least ${MIN_ESCALATION_SAMPLES_FOR_RECOMMENDATION} are ` +
+          `needed before a cost recommendation can be computed from real traffic data rather than guessed.`,
+      };
+    }
+
+    if (!this.reviewerProvider) {
+      const reviewerBandSamples = this.escalationSamples.filter((s) => s.confidence >= this.reviewerConfidenceThreshold && s.confidence < currentThreshold);
+      if (reviewerBandSamples.length > 0) {
+        const fraction = reviewerBandSamples.length / sampleSize;
+        const avgMarginalCost = reviewerBandSamples.reduce((sum, s) => sum + s.marginalCostUsd, 0) / reviewerBandSamples.length;
+        const perRequestSavings = Math.max(0, avgMarginalCost - REVIEWER_COST_USD);
+        const projectedCostSavingsUsd = perRequestSavings * reviewerBandSamples.length;
+        return {
+          generatedAt,
+          recommendationType: "enable_reviewer_tier",
+          sampleSize,
+          currentThreshold,
+          suggestedThreshold: null,
+          projectedFoundationCallReductionPct: fraction * 100,
+          projectedCostSavingsUsd,
+          projectedAccuracyRiskPct: null,
+          accuracySampleSize,
+          rationale:
+            `${reviewerBandSamples.length} of the last ${sampleSize} escalated request(s) (${(fraction * 100).toFixed(1)}%) had sidecar ` +
+            `confidence in the reviewer band [${this.reviewerConfidenceThreshold.toFixed(2)}, ${currentThreshold.toFixed(2)}), but no reviewer ` +
+            `model is currently configured, so each one paid full foundation-model cost ($${FOUNDATION_COST_USD.toFixed(4)}) instead of a ` +
+            `chance to resolve at the cheaper reviewer tier ($${REVIEWER_COST_USD.toFixed(4)}). Configuring a reviewer (see ` +
+            `ModelRouterOptions.reviewer) could save an estimated $${projectedCostSavingsUsd.toFixed(4)} over that sample.`,
+        };
+      }
+    }
+
+    const searchFloor = Math.max(RECOMMENDATION_THRESHOLD_FLOOR, this.reviewerConfidenceThreshold);
+    let bestCandidate: number | null = null;
+    let bestMovedCount = 0;
+    let bestMoveFraction = 0;
+    for (
+      let candidate = Math.round((currentThreshold - RECOMMENDATION_THRESHOLD_STEP) * 100) / 100;
+      candidate >= searchFloor - 1e-9;
+      candidate = Math.round((candidate - RECOMMENDATION_THRESHOLD_STEP) * 100) / 100
+    ) {
+      const moved = this.escalationSamples.filter((s) => s.confidence >= candidate);
+      if (moved.length === 0) continue;
+      bestCandidate = candidate;
+      bestMovedCount = moved.length;
+      bestMoveFraction = moved.length / sampleSize;
+      if (bestMoveFraction >= 0.5) break; // a solid majority is enough headroom to recommend; stop descending further
+    }
+
+    if (bestCandidate !== null) {
+      const moved = this.escalationSamples.filter((s) => s.confidence >= bestCandidate!);
+      const projectedCostSavingsUsd = moved.reduce((sum, s) => sum + s.marginalCostUsd, 0);
+      const accuracyClause =
+        accuracy === null
+          ? "accuracy risk is unknown — not enough shadow-evaluation/feedback data has been collected yet to estimate it"
+          : `an estimated ${projectedAccuracyRiskPct!.toFixed(1)}% accuracy risk, based on ${accuracySampleSize} pooled shadow-evaluation/feedback sample(s) observed at the current threshold`;
+      return {
+        generatedAt,
+        recommendationType: "lower_threshold",
+        sampleSize,
+        currentThreshold,
+        suggestedThreshold: bestCandidate,
+        projectedFoundationCallReductionPct: bestMoveFraction * 100,
+        projectedCostSavingsUsd,
+        projectedAccuracyRiskPct,
+        accuracySampleSize,
+        rationale:
+          `Of the last ${sampleSize} escalated request(s), ${bestMovedCount} (${(bestMoveFraction * 100).toFixed(1)}%) had sidecar ` +
+          `confidence >= ${bestCandidate.toFixed(2)}. Lowering the confidence threshold from ${currentThreshold.toFixed(2)} to ` +
+          `${bestCandidate.toFixed(2)} would let the sidecar resolve those directly instead of escalating, an estimated ` +
+          `$${projectedCostSavingsUsd.toFixed(4)} saved in reviewer/foundation-model spend over that sample, at ${accuracyClause}.`,
+      };
+    }
+
+    return {
+      generatedAt,
+      recommendationType: "no_change",
+      sampleSize,
+      currentThreshold,
+      suggestedThreshold: null,
+      projectedFoundationCallReductionPct: 0,
+      projectedCostSavingsUsd: 0,
+      projectedAccuracyRiskPct,
+      accuracySampleSize,
+      rationale:
+        `No cost-reducing change is currently indicated: none of the last ${sampleSize} escalated request(s) had sidecar confidence high ` +
+        `enough — above ${searchFloor.toFixed(2)} — for a lower threshold${this.reviewerProvider ? "" : " or the reviewer tier"} to resolve them more cheaply ` +
+        `without trusting a confidence band this architecture already treats as too ambiguous to shortcut.`,
+    };
+  }
+
+  // --- Per-request audit trail internals (round 5) ---
+
+  /**
+   * Builds a compact `AuditRecord` for one routing decision and records it —
+   * into the bounded in-memory buffer always, and appended to the durable
+   * on-disk log too when `auditLogPath` is configured. Reuses
+   * `metricsPersistence.ts`'s established file-persistence idioms (see
+   * `auditTrail.ts`) rather than a second storage mechanism. Called for
+   * every `route()` outcome, cache hits included — a cache hit is still a
+   * real routing decision (a compliance reviewer needs to see it was served
+   * from cache, not silently omitted from the trail).
+   */
+  private recordAudit(result: RouteResult, callerId: string | undefined, budget: BudgetTracker): void {
+    const budgetStatus = budget.status();
+    const record: AuditRecord = {
+      requestId: result.requestId,
+      timestamp: new Date(this.now()).toISOString(),
+      callerId: callerId ?? "anonymous",
+      path: result.path,
+      label: result.label,
+      confidence: result.confidence,
+      threshold: result.threshold,
+      totalCostUsd: result.totalCostUsd,
+      totalLatencyMs: result.totalLatencyMs,
+      cacheHit: result.cacheHit ?? false,
+      fallbackUsed: result.fallbackUsed ?? false,
+      budgetExceeded: result.budgetExceeded ?? false,
+      circuitState: this.circuitState,
+      budgetEnabled: budgetStatus.enabled,
+      budgetLimitUsd: budgetStatus.limitUsd,
+      budgetSpendUsd: budgetStatus.spendUsd,
+    };
+
+    this.auditBuffer.push(record);
+    if (this.auditBuffer.length > this.auditLogMaxRecords) this.auditBuffer.shift();
+
+    if (this.auditLogPath) appendAuditRecord(this.auditLogPath, record);
+  }
+
+  /**
+   * Produces a compliance/cost-review-ready export of routing decisions,
+   * optionally filtered to records at or after `sinceMs` (epoch
+   * milliseconds) and/or capped to the most recent `limit` records. Reads
+   * from the durable on-disk log when `auditLogPath` is configured (so the
+   * export covers the full retained history, restarts included); otherwise
+   * falls back to the bounded in-memory buffer (session-only — see
+   * `ModelRouterOptions.auditLogMaxRecords`). `persisted` on the result tells
+   * a caller which of the two it got.
+   */
+  exportAuditTrail(options: { sinceMs?: number; limit?: number } = {}): AuditExportResult {
+    const source = this.auditLogPath ? loadAuditRecords(this.auditLogPath, options.sinceMs) : this.auditBuffer.filter((r) => options.sinceMs === undefined || Date.parse(r.timestamp) >= options.sinceMs!);
+    const records = options.limit !== undefined ? source.slice(Math.max(0, source.length - options.limit)) : source;
+
+    const pathCounts: Record<string, number> = {};
+    let totalCostUsd = 0;
+    let totalLatencyMs = 0;
+    for (const r of records) {
+      pathCounts[r.path] = (pathCounts[r.path] ?? 0) + 1;
+      totalCostUsd += r.totalCostUsd;
+      totalLatencyMs += r.totalLatencyMs;
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      sinceMs: options.sinceMs ?? null,
+      persisted: this.auditLogPath !== undefined,
+      recordCount: records.length,
+      totalCostUsd,
+      totalLatencyMs,
+      pathCounts,
+      records,
     };
   }
 
@@ -951,10 +1495,24 @@ export class ModelRouter {
       canaryDisagreements: this.canaryDisagreements,
       canaryDisagreementRate: this.canaryEvaluations === 0 ? 0 : this.canaryDisagreements / this.canaryEvaluations,
       canaryServedRequests: this.canaryServedRequests,
+      ensembleEnabled: this.ensembleMembers.length > 0,
+      ensembleMemberCount: 1 + this.ensembleMembers.length,
+      ensembleEvaluations: this.ensembleEvaluations,
+      ensembleDisagreements: this.ensembleDisagreements,
+      ensembleDisagreementRate: this.ensembleEvaluations === 0 ? 0 : this.ensembleDisagreements / this.ensembleEvaluations,
+      driftEnabled: this.driftSampleRate > 0,
+      driftSampleRate: this.driftSampleRate,
+      driftWindowSize: this.driftWindowSize,
+      driftAlertThreshold: this.driftAlertThreshold,
+      driftRollingAgreementRate: this.driftWindow.length === 0 ? 1 : this.driftWindow.filter(Boolean).length / this.driftWindow.length,
+      driftRollingEvaluations: this.driftWindow.length,
+      driftTotalEvaluations: this.driftTotalEvaluations,
+      driftTotalAgreements: this.driftTotalAgreements,
+      driftAlertActive: this.driftAlertActive,
     };
   }
 
-  /** Resets cumulative metrics (and the cache/circuit-breaker/feedback/budget/canary state) to a fresh start. Mainly useful for tests. Alert-webhook registration is left untouched — it's configuration, not a cumulative metric, the same way the reviewer/foundation providers themselves aren't reset either. */
+  /** Resets cumulative metrics (and the cache/circuit-breaker/feedback/budget/canary/ensemble/drift/recommender state) to a fresh start. Mainly useful for tests. Alert-webhook registration and the durable audit-log path/in-memory buffer are left untouched — they're configuration/durable records, not cumulative metrics, the same way the reviewer/foundation providers themselves aren't reset either. */
   resetMetrics(): void {
     this.sidecarPathRequests = 0;
     this.reviewerPathRequests = 0;
@@ -980,6 +1538,20 @@ export class ModelRouter {
     this.canaryEvaluations = 0;
     this.canaryDisagreements = 0;
     this.canaryServedRequests = 0;
+    this.ensembleMembers = [];
+    this.ensemblePrimaryWeight = 1;
+    this.ensembleEvaluations = 0;
+    this.ensembleDisagreements = 0;
+    this.driftSampleRate = 0;
+    this.driftWindowSize = DEFAULT_DRIFT_WINDOW_SIZE;
+    this.driftAlertThreshold = DEFAULT_DRIFT_ALERT_THRESHOLD;
+    this.driftWindow = [];
+    this.driftTotalEvaluations = 0;
+    this.driftTotalAgreements = 0;
+    this.driftAlertActive = false;
+    this.lastDriftAlertFiredAt = null;
+    this.pendingDriftEvaluations = [];
+    this.escalationSamples = [];
     this.requestsSincePersist = 0;
   }
 

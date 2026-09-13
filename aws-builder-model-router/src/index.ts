@@ -12,9 +12,15 @@ const PORT = Number(process.env.PORT ?? 4567);
 // guarantee. Lives at the package root regardless of the process's cwd.
 const METRICS_PATH = process.env.MODEL_ROUTER_METRICS_PATH ?? fileURLToPath(new URL("../metrics-state.json", import.meta.url));
 
+// Demo-grade audit-trail persistence (feature: per-request audit trail
+// export, round 5) — see auditTrail.ts. Lives alongside the metrics file,
+// at the package root regardless of the process's cwd.
+const AUDIT_LOG_PATH = process.env.MODEL_ROUTER_AUDIT_LOG_PATH ?? fileURLToPath(new URL("../audit-log.jsonl", import.meta.url));
+
 const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), {
   reviewer: new MockReviewerProvider(),
   metricsPersistPath: METRICS_PATH,
+  auditLogPath: AUDIT_LOG_PATH,
 });
 const app = createApp(router);
 
@@ -27,9 +33,15 @@ const server = app.listen(PORT, () => {
   console.log(`View budget status:        GET  http://localhost:${PORT}/budget  (or GET /budget/all for every caller)`);
   console.log(`Register a canary sidecar: POST http://localhost:${PORT}/router/canary  { "percentage": 0.3, "config": { "confidenceScale": 0.8 } }`);
   console.log(`Register an alert webhook: POST http://localhost:${PORT}/alerts/webhook  { "url": "https://example.com/hook" }`);
+  console.log(`Configure drift sampling:  POST http://localhost:${PORT}/drift/config  { "sampleRate": 0.1, "windowSize": 20, "alertThreshold": 0.8 }`);
+  console.log(`View drift status:         GET  http://localhost:${PORT}/drift/status`);
+  console.log(`Register an ensemble:      POST http://localhost:${PORT}/router/ensemble  { "members": [{ "weight": 1, "config": {} }] }`);
+  console.log(`Cost-optimization report:  GET  http://localhost:${PORT}/recommendations/cost`);
+  console.log(`Audit trail export:        GET  http://localhost:${PORT}/audit/export?since=<ISO timestamp>`);
   console.log(`View metrics:              GET  http://localhost:${PORT}/metrics`);
   console.log(`View metrics (Prometheus): GET  http://localhost:${PORT}/metrics/prometheus`);
   console.log(`Metrics persisted to:      ${METRICS_PATH}`);
+  console.log(`Audit trail persisted to:  ${AUDIT_LOG_PATH}`);
 });
 
 // Graceful shutdown: persist cumulative metrics one last time so restarting

@@ -40,6 +40,23 @@ export interface SidecarResult {
   confidence: number; // 0..1
   /** Which keyword(s)/pattern(s) contributed to this classification, in the order they're listed in the matcher's keyword set. Empty when nothing matched. */
   matchedKeywords?: string[];
+  /**
+   * Present only when this result was produced by ensemble voting (round 5,
+   * `ModelRouter.setEnsemble()`) rather than a single sidecar — one entry per
+   * voting member, in the order they were registered (the primary sidecar
+   * first), so a caller can see exactly how the combined label/confidence was
+   * reached rather than trusting a black-box combination. See router.ts's
+   * `runEnsembleVote()` for the weighting formula.
+   */
+  ensembleVotes?: EnsembleVoteEntry[];
+}
+
+/** One ensemble member's individual vote, folded into `SidecarResult.ensembleVotes` — see that field's doc comment. */
+export interface EnsembleVoteEntry {
+  name: string;
+  label: string;
+  confidence: number;
+  weight: number;
 }
 
 /** Result shape returned by a Bedrock-runtime-style model invocation. */
@@ -175,4 +192,116 @@ export interface MetricsSnapshot {
   canaryDisagreements: number;
   canaryDisagreementRate: number; // 0 when no canary evaluations yet
   canaryServedRequests: number;
+
+  // --- Multi-sidecar ensemble voting (round 5) ---
+  /** Whether 2+ voting members (the primary plus at least one registered extra) are currently configured — see `ModelRouter.setEnsemble()`. */
+  ensembleEnabled: boolean;
+  /** Total voting members, including the primary. 1 when no ensemble is configured (the primary alone always counts). */
+  ensembleMemberCount: number;
+  /** Requests where the ensemble combined 2+ members' votes for the same input. 0 when no ensemble is configured. */
+  ensembleEvaluations: number;
+  /** Of those, how many times at least one member's label differed from the combined winning label. */
+  ensembleDisagreements: number;
+  ensembleDisagreementRate: number; // 0 when no ensemble evaluations yet
+
+  // --- Sidecar drift detection (round 5) ---
+  /** Whether background drift sampling is currently configured (`sampleRate > 0`) — see `ModelRouter.configureDriftDetection()`. */
+  driftEnabled: boolean;
+  /** Configured fraction (0..1) of confident sidecar-path requests also routed through the foundation model purely to watch for drift. */
+  driftSampleRate: number;
+  driftWindowSize: number;
+  driftAlertThreshold: number;
+  /** Agreement rate over just the most recent `driftWindowSize` sampled comparisons (or fewer, before the window first fills). 1 (no evidence of drift) when there are no samples yet. */
+  driftRollingAgreementRate: number;
+  driftRollingEvaluations: number;
+  driftTotalEvaluations: number;
+  driftTotalAgreements: number;
+  /** True once the rolling agreement rate has dropped below `driftAlertThreshold` with a full window of evidence and hasn't yet recovered — mirrors `circuitState`'s transition-only alerting. */
+  driftAlertActive: boolean;
+}
+
+/** Ensemble voting configuration + cumulative comparison stats, as returned by `GET /router/ensemble` — see `ModelRouter.setEnsemble()`/`getEnsembleStatus()`. Distinct from `CanaryStatus`: canary *splits* traffic between two sidecar versions (each request is served by exactly one of them); ensemble *combines* every member's vote into one answer for every request. */
+export interface EnsembleStatus {
+  enabled: boolean;
+  memberCount: number;
+  members: { name: string; weight: number }[];
+  evaluations: number;
+  disagreements: number;
+  disagreementRate: number;
+}
+
+/** Sidecar drift-detection configuration + rolling/cumulative stats, as returned by `GET /drift/status` — see `ModelRouter.configureDriftDetection()`. */
+export interface DriftStatus {
+  enabled: boolean;
+  sampleRate: number;
+  windowSize: number;
+  alertThreshold: number;
+  rollingEvaluations: number;
+  rollingAgreements: number;
+  rollingAgreementRate: number;
+  totalEvaluations: number;
+  totalAgreements: number;
+  alertActive: boolean;
+  lastAlertFiredAt: string | null;
+}
+
+/** One of the two concrete recommendation shapes `GET /recommendations/cost` can return, or the two "nothing to recommend yet" shapes — see `ModelRouter.generateCostRecommendation()` for exactly how each is computed from real accumulated traffic data. */
+export type CostRecommendationType = "lower_threshold" | "enable_reviewer_tier" | "no_change" | "insufficient_data";
+
+/** A concrete, numerically-justified cost-optimization suggestion computed from the router's own accumulated escalation history and feedback/shadow-evaluation accuracy data — never a canned message. See `ModelRouter.generateCostRecommendation()`. */
+export interface CostRecommendation {
+  generatedAt: string; // ISO timestamp
+  recommendationType: CostRecommendationType;
+  /** How many recent escalated (non-sidecar-path) requests this recommendation is based on. */
+  sampleSize: number;
+  currentThreshold: number;
+  /** Only present for `"lower_threshold"`. */
+  suggestedThreshold: number | null;
+  /** Estimated percentage (0..100) of escalations in the sample that the suggested change would have resolved more cheaply. Always 0 for `"no_change"`, null when not computable. */
+  projectedFoundationCallReductionPct: number | null;
+  /** Estimated dollar savings *over the sampled window itself* (not extrapolated to all-time traffic) — see the field's rationale string for exactly which requests it covers. */
+  projectedCostSavingsUsd: number | null;
+  /** Estimated accuracy risk (0..100) of trusting the sidecar more often, derived from the same pooled feedback + shadow-evaluation accuracy data the adaptive-threshold suggestion already collects. Null when there isn't yet enough of that data to estimate it. */
+  projectedAccuracyRiskPct: number | null;
+  /** How many pooled feedback/shadow-evaluation samples back `projectedAccuracyRiskPct`. */
+  accuracySampleSize: number;
+  /** Human-readable explanation of exactly how the numbers above were computed, citing the real sample counts involved. */
+  rationale: string;
+}
+
+/** One compact, queryable record of a single routing decision, as persisted by the audit trail (round 5) — see `auditTrail.ts` and `ModelRouter`'s `auditLogPath`/`exportAuditTrail()`. */
+export interface AuditRecord {
+  requestId: string;
+  timestamp: string; // ISO timestamp of when this request was handled
+  callerId: string;
+  path: RoutePath;
+  label: string;
+  confidence: number;
+  threshold: number;
+  totalCostUsd: number;
+  totalLatencyMs: number;
+  cacheHit: boolean;
+  fallbackUsed: boolean;
+  budgetExceeded: boolean;
+  /** Circuit-breaker state at the moment this request was handled (not necessarily the current state by the time the audit trail is read back). */
+  circuitState: CircuitState;
+  /** Snapshot of the budget that governed this specific request (that caller's own override, or the shared default) at the moment it was handled. */
+  budgetEnabled: boolean;
+  budgetLimitUsd: number | null;
+  budgetSpendUsd: number | null;
+}
+
+/** Result of `GET /audit/export` — see `ModelRouter.exportAuditTrail()`. */
+export interface AuditExportResult {
+  generatedAt: string; // ISO timestamp
+  /** The `since` filter actually applied, in epoch milliseconds, or null when the export covers every retained record. */
+  sinceMs: number | null;
+  /** True when this export was read from the durable on-disk audit log (`auditLogPath` configured); false when it came from the bounded in-memory buffer only (records older than that buffer's capacity, or from before the process last started, are not included). */
+  persisted: boolean;
+  recordCount: number;
+  totalCostUsd: number;
+  totalLatencyMs: number;
+  /** Count of records per routing path, e.g. `{ sidecar: 12, foundation: 3 }`. */
+  pathCounts: Record<string, number>;
+  records: AuditRecord[];
 }
