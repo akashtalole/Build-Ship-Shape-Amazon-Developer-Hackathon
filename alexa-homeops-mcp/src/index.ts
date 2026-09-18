@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createHomeOpsServer } from "./server.js";
 import { InMemoryEventStore } from "./eventStore.js";
+import { extractBearerToken, resolveHouseholdId } from "./auth.js";
 
 const PORT = Number(process.env.PORT ?? 3333);
 
@@ -29,6 +30,15 @@ async function handleMcpRequest(req: Request, res: Response): Promise<void> {
   }
 
   if (!sessionId && isInitializeRequest(req.body)) {
+    // Resolve the household for this session from its Authorization header,
+    // once, at session-initialize time. MCP tool handlers don't get raw HTTP
+    // headers, so this is the one place they're read — the resulting
+    // householdId is then closed over by every tool/resource this session's
+    // McpServer registers, giving each distinct bearer token (or none) its
+    // own isolated household with no pre-registration required.
+    const token = extractBearerToken(req);
+    const householdId = resolveHouseholdId(token);
+
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       eventStore,
@@ -41,7 +51,7 @@ async function handleMcpRequest(req: Request, res: Response): Promise<void> {
       if (transport.sessionId) transports.delete(transport.sessionId);
     };
 
-    const server = createHomeOpsServer();
+    const server = createHomeOpsServer(householdId);
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
     return;

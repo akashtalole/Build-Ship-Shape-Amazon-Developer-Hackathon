@@ -25,7 +25,7 @@ async function sampleNarrative(server: McpServer, instruction: string, facts: un
   }
 }
 
-export function registerInsightTools(server: McpServer): void {
+export function registerInsightTools(server: McpServer, householdId: string): void {
   server.registerTool(
     "generate_weekly_narrative",
     {
@@ -36,9 +36,9 @@ export function registerInsightTools(server: McpServer): void {
       annotations: { title: "Generate weekly narrative", readOnlyHint: true, openWorldHint: true },
     },
     async () => {
-      const tasks = listUpcomingTasks(7);
-      const lowStock = itemsRunningLow();
-      const budgets = getBudgetStatus();
+      const tasks = listUpcomingTasks(householdId, 7);
+      const lowStock = itemsRunningLow(householdId);
+      const budgets = getBudgetStatus(householdId);
 
       const narrated = await sampleNarrative(
         server,
@@ -88,11 +88,11 @@ export function registerInsightTools(server: McpServer): void {
       annotations: { title: "Run morning briefing", readOnlyHint: true, openWorldHint: true },
     },
     async () => {
-      const tasksToday = listUpcomingTasks(1);
-      const suggestedAssignee = suggestAssignee();
-      const workload = openTaskCounts();
-      const lowStock = itemsRunningLow();
-      const budgets = getBudgetStatus();
+      const tasksToday = listUpcomingTasks(householdId, 1);
+      const suggestedAssignee = suggestAssignee(householdId);
+      const workload = openTaskCounts(householdId);
+      const lowStock = itemsRunningLow(householdId);
+      const budgets = getBudgetStatus(householdId);
       const overBudget = budgets.filter((b) => b.overBudget);
 
       const facts = { tasksToday, suggestedAssignee, workload, lowStock, budgets };

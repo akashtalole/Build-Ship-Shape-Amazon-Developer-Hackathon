@@ -15,8 +15,12 @@ export type NotifyFn = (uri: string) => Promise<void>;
  * outputs) so a client can subscribe once and be pushed updates instead of
  * polling. Returns a `notify` function that tool handlers call after any
  * write that changes one of these resources.
+ *
+ * Scoped to a single household (`householdId`, resolved from the session's
+ * bearer token — see src/auth.ts) so a resource read only ever reflects that
+ * caller's own data.
  */
-export function registerResources(server: McpServer): { notify: NotifyFn } {
+export function registerResources(server: McpServer, householdId: string): { notify: NotifyFn } {
   const subscriptions = new Set<string>();
 
   server.registerResource(
@@ -28,7 +32,7 @@ export function registerResources(server: McpServer): { notify: NotifyFn } {
       mimeType: "application/json",
     },
     async (uri) => ({
-      contents: [{ uri: uri.href, text: JSON.stringify(listUpcomingTasks(7), null, 2) }],
+      contents: [{ uri: uri.href, text: JSON.stringify(listUpcomingTasks(householdId, 7), null, 2) }],
     })
   );
 
@@ -41,7 +45,7 @@ export function registerResources(server: McpServer): { notify: NotifyFn } {
       mimeType: "application/json",
     },
     async (uri) => ({
-      contents: [{ uri: uri.href, text: JSON.stringify(itemsRunningLow(), null, 2) }],
+      contents: [{ uri: uri.href, text: JSON.stringify(itemsRunningLow(householdId), null, 2) }],
     })
   );
 
@@ -54,7 +58,7 @@ export function registerResources(server: McpServer): { notify: NotifyFn } {
       mimeType: "application/json",
     },
     async (uri) => ({
-      contents: [{ uri: uri.href, text: JSON.stringify(getBudgetStatus(), null, 2) }],
+      contents: [{ uri: uri.href, text: JSON.stringify(getBudgetStatus(householdId), null, 2) }],
     })
   );
 
@@ -66,7 +70,7 @@ export function registerResources(server: McpServer): { notify: NotifyFn } {
     new ResourceTemplate("homeops://tasks/{taskId}", {
       list: undefined,
       complete: {
-        taskId: (partial) => listTaskIds().filter((id) => id.startsWith(partial)),
+        taskId: (partial) => listTaskIds(householdId).filter((id) => id.startsWith(partial)),
       },
     }),
     {
@@ -75,7 +79,7 @@ export function registerResources(server: McpServer): { notify: NotifyFn } {
       mimeType: "application/json",
     },
     async (uri, { taskId }) => {
-      const task = getTaskById(String(taskId));
+      const task = getTaskById(householdId, String(taskId));
       if (!task) {
         throw new Error(`No task found with ID ${taskId}`);
       }

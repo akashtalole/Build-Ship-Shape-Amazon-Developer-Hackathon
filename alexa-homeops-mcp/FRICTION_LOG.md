@@ -47,3 +47,44 @@ Notes captured while building the Alexa+ HomeOps submission, for the hackathon's
   returns, instead of only surfacing a mismatch as a runtime `tools/call` error.
 - A documented way to simulate a dropped Streamable HTTP connection from `StreamableHTTPClientTransport` itself
   (not just from a raw `fetch`), so resumability behavior is testable through the SDK's own client.
+
+## Round 4: multi-tenancy, logging, persistence, bulk import
+
+6. **MCP tool handlers never see raw HTTP headers, so auth has to be threaded through by hand.** A tool's handler
+   gets typed arguments and an `extra` object with things like the progress token and `sendNotification` — nothing
+   from the HTTP request itself. The only place `Authorization` is actually visible is the Express route handler in
+   `index.ts`, before the transport/`McpServer` for that session even exists. That forced a specific shape: resolve
+   the household ID once, right there, and pass it as a plain constructor argument into `createHomeOpsServer(householdId)`,
+   which then closes over it into every tool/resource registration. This works cleanly for Streamable HTTP's
+   one-`McpServer`-per-session model, but it's a pattern you have to arrive at yourself — there's no SDK-level
+   concept of "per-session context" a tool handler can just ask for. **Ask:** even a documented convention (let alone
+   an SDK helper) for "here's how a tool can access request-scoped data set at session-initialize time" would save
+   every self-hosted MCP server from re-deriving this same closure pattern.
+7. **Finding the logging notification API meant reading the SDK's compiled output, not searching docs.** `sendLoggingMessage`
+   doesn't show up prominently in the MCP spec's own docs (which describe `notifications/message` at the protocol
+   level, not the SDK method name), so the fastest path was `grep`-ing `node_modules/@modelcontextprotocol/sdk` for
+   "logging" directly and reading `server/index.d.ts`. That also surfaced a non-obvious gotcha: `sendLoggingMessage`
+   silently no-ops unless the `McpServer` was constructed with `capabilities: { logging: {} }` — there's no error,
+   no warning, the notification just never goes out. Easy to write a "logging" feature that quietly does nothing if
+   you don't happen to declare the capability first.
+8. **Deciding what "no in-memory cache" costs, and choosing it anyway.** The obvious way to add persistence without
+   disturbing every store function's signature (load-once into a module-level object, same as before, just now
+   hydrated from disk at startup) reintroduces exactly the "two instances share stale state" problem the
+   restart-durability requirement is testing for: two `createHomeOpsServer()` calls in the same process would just
+   read the same cached object and never re-touch the file the *other* one wrote. Reading and writing the household
+   file fresh on every store call (no cache at all) sidesteps that entirely and is simple to reason about, at the
+   cost of a stat+read (and a stat+write+rename on every mutation) per call — a real tradeoff, acceptable at this
+   scale, worth stating rather than discovering later as a subtle bug when someone *does* add caching back in.
+9. **Atomic-write edge case: the temp filename itself needs to not collide.** The obvious `${file}.tmp` temp path
+   works fine for one household with one writer, but two near-simultaneous mutations to the *same* household
+   (unlikely in this demo, not impossible if an agent double-calls a tool) could race on the same temp file. Using
+   `${file}.${pid}.${randomUUID()}.tmp` costs nothing and removes that class of collision entirely — a small thing,
+   but the kind of detail that's easy to skip when "atomic write" gets treated as a checkbox rather than as an
+   actual multi-writer scenario worth thinking through.
+10. **Shaping `import_tasks`'s per-item result meant deliberately *not* using a strict Zod `inputSchema` for the
+    array items.** The natural first instinct — `items: z.array(z.object({ title: z.string().min(1), dueDate: z.string() }))`
+    — validates cleanly, but a schema violation on *any* array element rejects the *entire* `tools/call` at the
+    protocol layer, before the handler ever runs, which makes per-item "added vs. rejected, and why" results
+    impossible: a bad item doesn't get a reason, the whole batch just errors out. The fix was to accept each item
+    loosely (`z.unknown().optional()` per field) and hand-validate title/date-format inside the handler instead —
+    less type safety at the schema boundary, but the tradeoff a "graceful partial failure" tool actually requires.

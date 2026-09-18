@@ -7,7 +7,7 @@ import { getBudgetStatus, itemsRunningLow, listUpcomingTasks, openTaskCounts } f
  * a ready-made "give me the household briefing" prompt instead of every
  * client having to hand-craft one from raw tool output.
  */
-export function registerPrompts(server: McpServer): void {
+export function registerPrompts(server: McpServer, householdId: string): void {
   server.registerPrompt(
     "weekly_household_briefing",
     {
@@ -21,10 +21,10 @@ export function registerPrompts(server: McpServer): void {
       },
     },
     ({ tone }) => {
-      const tasks = listUpcomingTasks(7);
-      const lowStock = itemsRunningLow();
-      const budgets = getBudgetStatus();
-      const workload = openTaskCounts();
+      const tasks = listUpcomingTasks(householdId, 7);
+      const lowStock = itemsRunningLow(householdId);
+      const budgets = getBudgetStatus(householdId);
+      const workload = openTaskCounts(householdId);
 
       const context = JSON.stringify({ tasks, lowStock, budgets, workload }, null, 2);
 
