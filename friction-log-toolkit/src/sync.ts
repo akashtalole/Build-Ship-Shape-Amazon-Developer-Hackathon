@@ -48,8 +48,14 @@ async function parseJsonResponse(res: Response, context: string): Promise<any> {
   return body;
 }
 
-/** Pulls the remote's entries at `url` and merges them into the local log at `dir`. */
-export async function pullSync(dir: string, url: string): Promise<SyncResult> {
+/**
+ * Fetches just the remote's raw entry list via the `GET` half of the sync
+ * contract — pulled out of `pullSync` so `aggregate` (which pulls from
+ * *multiple* teammates' remotes without writing any of them into a local
+ * log) can reuse the exact same request/validation logic instead of
+ * duplicating it.
+ */
+export async function fetchRemoteEntries(url: string): Promise<LogEntry[]> {
   let res: Response;
   try {
     res = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
@@ -63,9 +69,14 @@ export async function pullSync(dir: string, url: string): Promise<SyncResult> {
   if (!body || !Array.isArray(body.entries)) {
     throw new Error(`GET ${url} did not return a { entries: [...] } payload.`);
   }
+  return body.entries as LogEntry[];
+}
 
+/** Pulls the remote's entries at `url` and merges them into the local log at `dir`. */
+export async function pullSync(dir: string, url: string): Promise<SyncResult> {
+  const remoteEntries = await fetchRemoteEntries(url);
   const log = readLog(dir);
-  const { entries, added, duplicates } = mergeEntries(log.entries, body.entries as LogEntry[]);
+  const { entries, added, duplicates } = mergeEntries(log.entries, remoteEntries);
   writeLog(dir, { ...log, entries });
   return { added, duplicates, total: entries.length };
 }

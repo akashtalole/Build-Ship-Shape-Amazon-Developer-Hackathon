@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LogAlreadyExistsError, LogNotFoundError, logExists } from "./store.js";
 import {
   EntryNotFoundError,
   add,
   editEntry,
+  exportGithubIssuesToFiles,
   exportLog,
   init,
   list,
@@ -12,15 +14,17 @@ import {
   removeEntry,
   search,
   stats,
+  topEntries,
   useTemplate,
 } from "./commands.js";
 import { addTemplate, listTemplates, TemplateNotFoundError } from "./templates.js";
-import { formatTimestamp } from "./exporter.js";
+import { formatAggregateReport, formatTimestamp } from "./exporter.js";
 import type { ExportFormat } from "./exporter.js";
 import { renderBarChart } from "./chart.js";
 import { createFrictionLogServer } from "./server.js";
 import { runWatch } from "./watch.js";
 import { pullSync, pushSync } from "./sync.js";
+import { aggregate } from "./aggregate.js";
 
 const USAGE = `friction-log — capture friction points in the moment, export them as a Markdown report.
 
@@ -29,12 +33,15 @@ Usage:
   friction-log add "<note>" [--tag <tag>]
   friction-log list [--tag <tag>] [--since <date>] [--until <date>]
   friction-log search "<query>" [--tag <tag>]
-  friction-log export [--out <file>] [--title <title>] [--format json|md|txt] [--since <date>] [--until <date>]
+  friction-log export [--out <file>] [--title <title>] [--format json|md|txt|timeline] [--since <date>] [--until <date>]
+  friction-log export --format github-issues <owner/repo> [--out <dir>] [--since <date>] [--until <date>]
   friction-log stats [--since <date>] [--until <date>]
+  friction-log top [N] [--since <date>] [--until <date>]
   friction-log edit <id> [--note <note>] [--tag <tag>]
   friction-log remove <id>
   friction-log merge <otherFile> --into <targetFile>
   friction-log sync <url> [--push|--pull]
+  friction-log aggregate <url1> <url2> ... [--out <file>] [--title <title>]
   friction-log template add <name> "<text with {placeholders}>" [--tag <tag>]
   friction-log template use <name> [--set key=value ...] [--tag <tag>]
   friction-log template list
@@ -96,6 +103,38 @@ tokens (e.g. "Docs for {feature} were unclear"); "template use <name>
 using the template's own --tag (if it has one) unless overridden by --tag
 on "use"; "template list" shows what's saved.
 
+"top [N]" scores every entry with a real, explainable severity heuristic
+(tag weight + blocker/crash/dead-end wording in the note text, minus
+"minor"/"cosmetic"-style hedging, plus a recency bonus for entries still
+fresh near a deadline) and prints the N highest-scoring entries first (N
+defaults to 5), each with the reasons behind its score — the command to run
+right before writing the submission's own friction-log section instead of
+re-reading the whole log by hand.
+
+"aggregate <url1> <url2> ..." pulls entries from multiple teammates'
+running instances (over the same GET half of the "sync" HTTP contract, so
+anything already answering "sync" works here too), merges them with the
+same id-based dedup "merge"/"sync" use, and groups the combined set by
+shared theme — reusing the auto-tag keyword heuristic as a fallback label —
+so several people independently hitting the same underlying problem show up
+as one grouped theme instead of a flat concatenation of everyone's list.
+
+"export --format timeline" turns the log into chronological narrative
+prose instead of a bulleted list: consecutive same-tag entries are folded
+into one paragraph ("friction showed up more than once: first X, then Y"),
+and a "worked-well" paragraph that shares wording with an earlier
+"friction" one is phrased as a resolution. Entirely template-based and
+deterministic (no LLM call) — suitable for pasting into a Devpost-style
+"challenges we ran into" section.
+
+"export --format github-issues <owner/repo>" writes one Markdown file per
+theme cluster of actionable entries (everything except "worked-well") to
+--out (a directory, default "./github-issues"), formatted as a ready-to-file
+GitHub issue body. This is LOCAL FILE EXPORT ONLY: it never calls the
+GitHub API and needs no token — review the files, then run e.g.
+"gh issue create -R <owner/repo> --title \"...\" --body-file <file>" or paste
+the content into the GitHub UI yourself.
+
 Examples:
   friction-log init
   friction-log add "Alexa+ skill schema validation errors had no line numbers" --tag friction
@@ -107,11 +146,15 @@ Examples:
   friction-log export --out FRICTION_LOG.md --title "Team Rocket — Friction Log"
   friction-log export --format json --out entries.json
   friction-log stats --since 2026-09-02
+  friction-log top 3
   friction-log edit a1b2c3d4 --tag worked-well
   friction-log remove a1b2c3d4
   friction-log merge ../teammate/.friction-log.json --into .friction-log.json
   friction-log sync https://example.com/friction-log --push
   friction-log sync https://example.com/friction-log --pull
+  friction-log aggregate https://teammate-a.example.com/friction-log https://teammate-b.example.com/friction-log
+  friction-log export --format timeline --out TIMELINE.md
+  friction-log export --format github-issues my-org/my-repo --out github-issues
   friction-log template add flaky-endpoint "{endpoint} returned {code} with no explanation" --tag friction
   friction-log template use flaky-endpoint --set endpoint=/v1/token --set code=500
   friction-log template list
@@ -166,7 +209,10 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-const VALID_FORMATS: ExportFormat[] = ["json", "md", "txt"];
+const VALID_FORMATS: ExportFormat[] = ["json", "md", "txt", "timeline"];
+/** "github-issues" writes multiple files to a directory (not a single string), so it's validated alongside the single-content formats above but handled as its own branch in the "export" case below. */
+const GITHUB_ISSUES_FORMAT = "github-issues";
+const OWNER_REPO_RE = /^[^\s/]+\/[^\s/]+$/;
 
 /**
  * Renders the "✓ Logged [...] ..." confirmation shared by `add` and
@@ -250,9 +296,35 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
         const formatFlag = typeof flags.format === "string" ? flags.format : undefined;
         const since = typeof flags.since === "string" ? flags.since : undefined;
         const until = typeof flags.until === "string" ? flags.until : undefined;
-        if (formatFlag && !VALID_FORMATS.includes(formatFlag as ExportFormat)) {
-          fail(`Unknown export format "${formatFlag}". Expected one of: ${VALID_FORMATS.join(", ")}.`);
+        if (formatFlag && formatFlag !== GITHUB_ISSUES_FORMAT && !VALID_FORMATS.includes(formatFlag as ExportFormat)) {
+          fail(
+            `Unknown export format "${formatFlag}". Expected one of: ${VALID_FORMATS.join(", ")}, ${GITHUB_ISSUES_FORMAT}.`
+          );
         }
+
+        if (formatFlag === GITHUB_ISSUES_FORMAT) {
+          const repo = positional[0];
+          if (!repo || !OWNER_REPO_RE.test(repo)) {
+            fail(
+              'Missing or invalid <owner/repo>. Usage: friction-log export --format github-issues <owner/repo> [--out <dir>]'
+            );
+          }
+          const outDir = out ?? "github-issues";
+          const result = exportGithubIssuesToFiles(cwd, repo, outDir, { since, until });
+          if (result.count === 0) {
+            console.log(
+              'No friction/feature-request (or other non-"worked-well") entries to export — nothing written.'
+            );
+          } else {
+            console.log(`✓ Wrote ${result.count} GitHub issue file(s) to ${outDir}/ for ${repo}.`);
+            console.log(
+              "This is LOCAL FILE EXPORT ONLY — nothing was filed on GitHub. Review each file, then run e.g.:"
+            );
+            console.log(`  gh issue create -R ${repo} --title "..." --body-file ${outDir}/${result.files[0]}`);
+          }
+          break;
+        }
+
         const content = exportLog(cwd, {
           out,
           title,
@@ -301,6 +373,33 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
             console.log(`  ${line}`);
           }
         }
+        break;
+      }
+
+      case "top": {
+        const nArg = positional[0];
+        let limit = 5;
+        if (nArg !== undefined) {
+          const parsed = Number(nArg);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            fail(`Invalid N "${nArg}". Expected a positive integer. Usage: friction-log top [N]`);
+          }
+          limit = parsed;
+        }
+        const since = typeof flags.since === "string" ? flags.since : undefined;
+        const until = typeof flags.until === "string" ? flags.until : undefined;
+        const results = topEntries(cwd, { limit, since, until });
+        if (results.length === 0) {
+          console.log("No entries logged yet in range.");
+          break;
+        }
+        console.log(`Top ${results.length} entr${results.length === 1 ? "y" : "ies"} by severity score:`);
+        results.forEach((r, i) => {
+          console.log(`${i + 1}. [score ${r.total}] [${r.entry.tag}] ${r.entry.note}`);
+          for (const reason of r.reasons) {
+            console.log(`     - ${reason}`);
+          }
+        });
         break;
       }
 
@@ -370,6 +469,26 @@ export async function run(argv: string[], cwd: string = process.cwd()): Promise<
           console.log(
             `✓ Pulled from ${url}: +${result.added} new, ${result.duplicates} duplicate(s) skipped, ${result.total} total locally.`
           );
+        }
+        break;
+      }
+
+      case "aggregate": {
+        const urls = positional;
+        if (urls.length === 0) {
+          fail("Missing remote URL(s). Usage: friction-log aggregate <url1> <url2> ...");
+        }
+        const out = typeof flags.out === "string" ? flags.out : undefined;
+        const title = typeof flags.title === "string" ? flags.title : undefined;
+        const report = await aggregate(urls);
+        const content = formatAggregateReport(report, { title });
+        if (out) {
+          writeFileSync(out, content, "utf8");
+          console.log(
+            `✓ Aggregated ${report.totalEntries} entries from ${urls.length} source(s) into ${report.clusters.length} theme(s), written to ${out}`
+          );
+        } else {
+          console.log(content);
         }
         break;
       }

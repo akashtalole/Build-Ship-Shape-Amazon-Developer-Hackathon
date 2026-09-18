@@ -148,6 +148,34 @@ Daily activity:
 
 **Date-range filtering** — see [Date-range filtering](#date-range-filtering---since--until) below.
 
+### `friction-log top [N] [--since <date>] [--until <date>]`
+
+Scores every entry with a real, explainable severity heuristic and prints the `N` highest-scoring entries first (default 5) — the command to run right before writing the submission's own friction-log section, instead of re-reading the whole log by hand to figure out which handful of entries actually matter.
+
+```bash
+$ friction-log top 3
+Top 3 entries by severity score:
+1. [score 8.6] [friction] The MCP schema validator crashed on a valid payload, lost an hour
+     - tagged "friction" (+5)
+     - wording "crashed" raises severity (+3)
+     - one of the earlier entries (+0.6 recency)
+2. [score 7] [friction] MCP schema validation errors had no line numbers
+     - tagged "friction" (+5)
+     - wording "errors" raises severity (+2)
+     - one of the earlier entries (+0.0 recency)
+3. [score 5] [feature-request] Should add dark mode
+     - tagged "feature-request" (+2)
+     - one of the more recent entries (+3.0 recency)
+```
+
+**How the score is built** (see `src/severity.ts` — every component is a plain, readable function, no ML, no external call): each entry's score is the sum of three independently-explainable pieces, each printed as its own `reasons` line so the ranking is never a black box:
+
+1. **Tag weight** — `friction` (+5) outweighs `feature-request` (+2) and the default `note` (+1); `worked-well` (+0) isn't a problem at all, so it never outranks anything that is.
+2. **Keyword weight** — the note's own wording: `blocker`/`showstopper`/`critical`-class language is worth the most, `crash`/`dead end`/`couldn't`/`impossible` next, `error`/`broke`/`stuck`/`hours` a bit less — while `minor`/`cosmetic`/`nit`/`slightly`-style hedging actively subtracts points, since a note that hedges its own severity usually means it. Same word-boundary keyword matching as the auto-tag heuristic in spirit, just with weighted rules instead of a single tag guess.
+3. **Recency weight** — a relative rank (0 to +3) among *only the entries being scored* (so `top --since ...` on a narrower window recomputes it), rewarding a problem that's still fresh — likely still unresolved — near a hackathon deadline.
+
+`--since`/`--until` narrow the pool `top` ranks over first, same as `list`/`export`/`stats`. `friction-log top` on an empty log (or an empty date range) prints a friendly message instead of an error.
+
 ### `friction-log edit <id> [--note <note>] [--tag <tag>]`
 
 Updates an existing entry in place, by the short id shown in `list`. Pass `--note`, `--tag`, or both; anything you omit is left unchanged.
@@ -209,6 +237,31 @@ $ friction-log sync https://team.example.com/friction-log --pull
 Because both directions dedup by entry `id`, running `sync` repeatedly (a cron job, a pre-submission ritual, a flaky connection retried) never doubles up entries — a second identical push or pull reports `+0 new` and leaves everything else unchanged. `sync` requires a log to already exist (`friction-log init` first), same as `list`/`export`/`stats`/`serve`/`watch`; an unreachable URL, a non-2xx response, or a response that doesn't match the JSON shape above all fail clearly instead of hanging or crashing with a raw stack trace.
 
 No real server ships with this CLI — the contract above is everything a teammate (or this project's own test suite, which spins up a throwaway `node:http` listener as a stand-in) needs to implement to be a valid sync target.
+
+### `friction-log aggregate <url1> <url2> ... [--out <file>] [--title <title>]`
+
+Team-wide triage, built directly on `sync`'s existing mechanism: pulls entries from every URL given (each one answering the exact same `GET` half of the sync HTTP contract above — anything already valid as a `sync` target is a valid `aggregate` source, no new server-side code needed), merges them with the same id-based dedup `merge`/`sync` use, and — this is the point — **groups the combined set by shared theme** instead of just concatenating everyone's raw list.
+
+```bash
+$ friction-log aggregate https://alice.example.com/friction-log https://bob.example.com/friction-log
+# Team Friction Log — Aggregated
+
+_Aggregated from 2 sources (...) — 5 entries after de-duplication (1 duplicate id(s) skipped), grouped into 4 themes._
+
+## Themes
+
+### 1. mcp, schema _(2 entries, mostly "friction")_
+
+- **[friction]** MCP schema validation kept failing with no line numbers _(...)_
+- **[friction]** Our MCP schema validator also crashed constantly, lost hours _(...)_
+
+### 2. mode, oauth, painlessly, ring, sandbox _(1 entry, mostly "worked-well")_
+...
+```
+
+That first theme is the whole reason `aggregate` exists: Alice and Bob each independently hit the same underlying "MCP schema validation" problem, worded completely differently, on separate machines — and instead of two unrelated bullets buried on opposite ends of a merged list, they land under one heading together. See [Team aggregation & theme clustering](#team-aggregation--theme-clustering) below for how the clustering itself works.
+
+A source that can't be reached (an offline teammate, a typo'd URL) is listed under "Unreachable sources" in the report instead of failing the whole aggregation — useful mid-hackathon when not everyone's instance is guaranteed to be up at once. `--out <file>` writes the Markdown report to a file instead of printing it; `aggregate` needs no local `.friction-log.json` at all, since it's a pure cross-team reporting command, not something that touches the local log.
 
 ### `friction-log template add <name> "<text with {placeholders}>" [--tag <tag>]`
 
@@ -311,9 +364,9 @@ Since it's built on Node's `readline`, it works the same whether stdin is a real
 $ printf 'First rapid note\nSecond note #feature-request\n\n' | friction-log watch
 ```
 
-### `friction-log export [--out <file>] [--title <title>] [--format json|md|txt] [--since <date>] [--until <date>]`
+### `friction-log export [--out <file>] [--title <title>] [--format json|md|txt|timeline] [--since <date>] [--until <date>]`
 
-Renders the log as Markdown (default), plain text, or raw JSON, either to stdout or to a file. This is the command you run right before writing your hackathon submission's own `FRICTION_LOG.md` — or, with `--format json`, before feeding your friction log into some other script or CI check.
+Renders the log as Markdown (default), plain text, raw JSON, or a narrative timeline, either to stdout or to a file. This is the command you run right before writing your hackathon submission's own `FRICTION_LOG.md` — or, with `--format json`, before feeding your friction log into some other script or CI check. A fifth format, `github-issues`, has different arguments (an `<owner/repo>` and a directory instead of a file) and is documented separately just below.
 
 **Date-range filtering** — see [Date-range filtering](#date-range-filtering---since--until) below.
 
@@ -373,6 +426,73 @@ _Generated by friction-log-toolkit on 2026-09-02 12:28:15 UTC. 5 entries logged 
 
 - **[note]** Random thought: should track time-of-day too _(2026-09-02 12:28:15 UTC)_
 ```
+
+`--format timeline` turns the log into chronological **narrative prose** instead of a bulleted list — the format built for pasting straight into a Devpost write-up's "challenges we ran into" section, where a bulleted export reads oddly out of context:
+
+```bash
+$ friction-log export --format timeline
+# Friction Log — Timeline
+
+_A chronological narrative of 5 entries logged between ... and ..., generated by friction-log-toolkit — paste this into a write-up's "challenges we ran into" section._
+
+Early on, friction showed up more than once: first MCP schema validation errors had no line numbers, then the MCP schema validator crashed on a valid payload.
+
+Partway through, this was resolved: fixed the MCP schema validator issue by pinning an older version.
+
+Later on, the team noted a feature request: should add a dark mode toggle.
+
+Then, ring OAuth sandbox mode worked painlessly — a welcome bit of smooth sailing.
+```
+
+Consecutive entries sharing a tag are folded into one connected paragraph ("friction showed up more than once: first X, then Y") instead of one templated line per entry, and a `worked-well` paragraph that shares significant wording with an earlier `friction` paragraph (via the same theme-overlap check `aggregate`'s clustering uses — see below) is phrased as a resolution ("this was resolved: ...") rather than a generic "went smoothly" note. The whole thing is template-based and fully deterministic — the same log always produces the exact same prose, no LLM call involved, in the same spirit as `bee-studyloop`'s `TemplateFlashcardGenerator`.
+
+### `friction-log export --format github-issues <owner/repo> [--out <dir>] [--since <date>] [--until <date>]`
+
+Formats every actionable entry (everything except `worked-well`, which isn't a problem to file) as a ready-to-file GitHub issue — one Markdown file per **theme cluster** (reusing the exact same `clusterByTheme` clustering `aggregate` uses, so several entries about the same root problem become one issue instead of a flood of near-duplicates) — written to `--out` (a directory, default `./github-issues`).
+
+```bash
+$ friction-log export --format github-issues acme/my-repo --out github-issues
+✓ Wrote 2 GitHub issue file(s) to github-issues/ for acme/my-repo.
+This is LOCAL FILE EXPORT ONLY — nothing was filed on GitHub. Review each file, then run e.g.:
+  gh issue create -R acme/my-repo --title "..." --body-file github-issues/001-mcp-schema.md
+```
+
+Each file looks like:
+
+```markdown
+# [friction-log] MCP Schema
+
+> Suggested target repository: **acme/my-repo**. This file was generated locally by friction-log-toolkit — it was **not** filed on GitHub automatically. Review it, then run:
+>
+> `gh issue create -R acme/my-repo --title "[friction-log] MCP Schema" --body-file <this-file>`
+>
+> ...or paste this content into the GitHub UI yourself.
+
+## What happened
+
+1. **[friction]** MCP schema validation errors had no line numbers _(...)_
+2. **[friction]** MCP schema validation errors also hit the staging deploy _(...)_
+
+## Suggested labels
+
+`friction-log`, `friction`
+```
+
+> **This never touches the network and never needs a GitHub token.** `export --format github-issues` is a pure local-file formatter — nothing in this code path calls the GitHub API, `gh`, or any credential. It writes Markdown files you review and file yourself (via `gh issue create --body-file`, or by pasting into the GitHub UI); nothing is ever created on GitHub automatically by running this command.
+
+A log with no actionable entries (everything tagged `worked-well`) writes nothing and says so rather than creating an empty directory. An invalid or missing `<owner/repo>` argument fails clearly.
+
+### Team aggregation & theme clustering
+
+Both `aggregate` (above) and `export --format github-issues` (above) share the same clustering engine, `src/cluster.ts`'s `clusterByTheme` — worth documenting once, here, since it's the core "genuinely group related entries" idea both features build on:
+
+- Every note is reduced to a **word profile**: ALL-CAPS acronyms (`MCP`, `OAuth`, `AWS`, ...) found in the original text, plus other significant lowercase words (length ≥ 4, minus a small stopword list).
+- Two entries are considered "about the same theme" if they share **at least one acronym**, or **at least two ordinary significant words** — a single shared common word alone is too weak a signal, but a shared acronym is distinctive enough on its own.
+- Clustering is greedy: each cluster starts from one entry and absorbs every other entry that overlaps with the cluster's *running* shared-word intersection, narrowing that intersection on every addition — so the cluster's final theme label is always words genuinely common to *every* member, not just whoever happened to seed it.
+- A cluster with nothing distinctive to share (a lone, short, or generic note) falls back to `suggestTag`'s existing auto-tag keyword heuristic for its label — the same keyword matching `add`/`watch` already use to guess `friction`/`worked-well`/`feature-request`, reused here rather than reimplemented.
+
+This is deliberately **not** an ML classifier or an embedding-based similarity search — no dependency, no network call, fully deterministic — but it's exactly the mechanism that lets five teammates who each independently hit the same "MCP schema validation" style error land under one heading instead of five scattered, differently-worded bullets.
+
 
 ### Date-range filtering (`--since`/`--until`)
 
@@ -483,10 +603,20 @@ friction-log-toolkit/
     autotag.ts              the auto-tag keyword heuristic (suggestTag), shared by add and watch
     templates.ts             reusable {placeholder} note templates, own .friction-log-templates.json file
     chart.ts                 the "stats" ASCII bar chart renderer, no dependency
-    sync.ts                   push/pull against a remote over the sync HTTP contract, reuses mergeEntries
-    commands.ts             init/add/list/search/export/stats/edit/remove/merge/useTemplate logic (+ mergeEntries,
-                             shared by merge and sync) + --since/--until filtering, decoupled from argv parsing
-    exporter.ts              Markdown/plain-text/JSON report generation from a LogFile
+    sync.ts                   push/pull against a remote over the sync HTTP contract, reuses mergeEntries;
+                               also exports fetchRemoteEntries (the GET half), reused by aggregate.ts
+    severity.ts                the "top" severity/impact scoring heuristic (scoreEntries): tag weight +
+                                keyword wording + relative recency, each explained in a `reasons` list
+    cluster.ts                  theme clustering (clusterByTheme): groups entries by shared significant
+                                 words/acronyms, falling back to suggestTag for an unlabeled cluster's
+                                 theme — the engine behind "aggregate" and "export --format github-issues"
+    aggregate.ts                  "aggregate": pulls + merges multiple remotes' entries (via sync's
+                                   fetchRemoteEntries + commands' mergeEntries) and clusters them by theme
+    commands.ts             init/add/list/search/export/stats/top/edit/remove/merge/useTemplate/
+                             exportGithubIssuesToFiles logic (+ mergeEntries, shared by merge and sync)
+                             + --since/--until filtering, decoupled from argv parsing
+    exporter.ts              Markdown/plain-text/JSON/timeline report generation from a LogFile, the
+                              GitHub-issues file formatter, and the aggregate report formatter
     server.ts                 the "serve" HTTP server: dependency-free node:http, re-reads the log file per request
     watch.ts                   the "watch" REPL: pure handleWatchLine/resolveWatchTag (testable directly) + the
                                 readline-driven loop (with the auto-tag confirmation step) around them
@@ -505,7 +635,7 @@ The `commands.ts` functions take a working directory explicitly and are fully de
 npm test
 ```
 
-This runs `npm run build` followed by `test/smoke.test.ts` (via `tsx`, using Node's built-in `assert/strict`). The test is a genuine end-to-end test: it invokes the **compiled** CLI (`node dist/cli.js ...`) as a real child process against a fresh temporary directory (`node:fs.mkdtempSync` + `node:os.tmpdir()`), created and cleaned up per scenario — no mocking of the filesystem or of `commands.ts`. As of this round, that's **137 passing checks**.
+This runs `npm run build` followed by `test/smoke.test.ts` (via `tsx`, using Node's built-in `assert/strict`). The test is a genuine end-to-end test: it invokes the **compiled** CLI (`node dist/cli.js ...`) as a real child process against a fresh temporary directory (`node:fs.mkdtempSync` + `node:os.tmpdir()`), created and cleaned up per scenario — no mocking of the filesystem or of `commands.ts`. As of this round, that's **182 passing checks**.
 
 It covers:
 
@@ -527,13 +657,18 @@ It covers:
 - **`stats` ASCII bar chart** — six entries backdated (directly in the log file, real boundaries) across three days with counts 1/3/2, confirming the chart renders one line per day with a raw block-character count matching each day's total exactly, and that bar lengths are proportional (the 3-entry day's bar is longest) — plus that an empty log prints no "Daily activity" section at all.
 - **Entry templates** — `template add`/`list`/`use` end to end: a template with a `{placeholder}` fills in correctly and logs with the template's own tag; `--tag` on `use` overrides that tag; a missing `--set` for a required placeholder and an unknown template name both fail clearly; re-adding an existing template name replaces it instead of duplicating; a template with no tag at all falls through to `add`'s normal default chain.
 - **`sync` push/pull** — a genuine round-trip against a real `node:http` server standing in for "the remote" (spun up in-process on an ephemeral port, reusing the exact same `mergeEntries` the real CLI's `merge` uses for its own dedup): pushing from one directory, pulling into a fresh second directory, confirming both directions report accurate added/duplicate/total counts, that re-running either is fully idempotent (`+0 new` the second time), and that entries genuinely round-trip both ways through the remote (B's new entry reaches A via a second pull) — plus that `sync` with neither or both of `--push`/`--pull`, and a genuinely unreachable URL, all fail clearly instead of hanging.
+- **Severity scoring / `top`** — `scoreEntries` unit-tested directly: a blocker/crashed-worded friction entry outranks a plain worked-well entry, "minor"/"slightly" hedging measurably lowers a note's keyword score while "crashed"/"blocked" raises it, a more recent entry scores a higher recency component than an older one with identical wording, and every result carries human-readable `reasons`; plus a full `friction-log top`/`top N` subprocess run confirming the printed ranking order, the reasons lines, the default-N-of-5 behavior, and that a non-numeric or non-positive `N` fails clearly.
+- **Theme clustering (`cluster.ts`)** — `clusterByTheme` unit-tested directly: entries sharing an ALL-CAPS acronym cluster even with otherwise unrelated wording, entries sharing only *one* ordinary word do **not** cluster (two are required), entries sharing two or more ordinary words do, a cluster's `dominantTag` reflects its members' most common tag, and an entry with nothing distinctive to extract falls back to the existing `suggestTag` auto-tag heuristic for its theme label.
+- **`aggregate`** — two real `node:http` servers standing in for two teammates' remotes (one returning entries via plain `GET`, no `sync`-style `POST` needed) confirm: their independently-worded "MCP schema validation" entries land in one grouped theme; an entry sharing the same id across both sources is de-duplicated exactly once and reported as such; an unrelated entry stays in its own theme; one unreachable source alongside one reachable source still succeeds, listing the failure under "Unreachable sources" rather than aborting the whole run; `--out` writes the report to a file; and no URLs at all fails clearly. Run via the same non-blocking `runCliAsync` helper `sync`'s tests use, for the same event-loop reason documented in this round's friction notes below.
+- **`export --format github-issues`** — end to end: two friction entries sharing a theme are written to a single issue file (not two), a `worked-well` entry is excluded from the file count entirely, the generated file names the target repo, includes the `gh issue create -R ... --body-file ...` suggestion and an explicit "LOCAL FILE EXPORT ONLY" / "nothing was filed on GitHub" notice, lists every clustered entry, and suggests labels — plus that a missing or malformed `<owner/repo>` fails clearly, and a log with only `worked-well` entries writes nothing (no directory created) and says so.
+- **`export --format timeline`** — end to end: two consecutive friction entries fold into one "friction showed up more than once: first X, then Y" paragraph, a later `worked-well` entry sharing wording with that friction paragraph is phrased as a resolution, an unrelated `worked-well` entry is phrased as plain smooth sailing instead, a `feature-request` entry gets its own template, an acronym at the start of a note (`MCP`) is never mangled into `mCP`, phase language appears and doesn't repeat back-to-back, a single-entry log renders one bare capitalized sentence with no phase prefix, and an empty log says there's nothing to narrate instead of erroring.
 
 ## Judging-criteria alignment
 
-- **Tech Implementation** — A real, typed, strict-mode TypeScript CLI with zero runtime dependencies beyond Node itself (the local web dashboard and `sync`'s remote contract are Node's built-in `http`/`fetch`, not Express or axios; the REPL is Node's built-in `readline`), a clean layered architecture (`store`/`config`/`git`/`autotag`/`templates`/`chart` → `commands`/`server`/`watch`/`sync` → `cli`), and a genuine subprocess-level end-to-end test suite (**137 checks**) covering the golden path, edge cases, and every feature added across all four rounds — including a real git repo spun up in a temp directory for git-aware tagging, a real HTTP server hit with real `fetch()` calls on an ephemeral port for `serve`, a *second* real HTTP server standing in for a sync remote (reusing the exact same dedup logic `merge` uses, so both are provably safe to run repeatedly), and both a direct unit test of the exact functions `watch` uses and a full piped-stdin subprocess run for `watch` (including its interactive auto-tag confirmation step). `npx tsc --noEmit` passes with zero errors.
-- **Design** — The whole point of the tool is near-zero friction to use: one short command to log a thought the moment it happens, with a sensible default tag — now guessed for you from the note's own wording when you don't have one in mind — so you never have to stop and think about taxonomy mid-flow. `watch` pushes that further — no flags at all once it's running, just typing and Enter, with an inline `#tag` convention for when a tag matters, and a confirmable (not silently-applied) suggestion the rest of the time. Errors are actionable, not stack traces. The exported Markdown is a drop-in match for the `FRICTION_LOG.md` structure judges are already reading elsewhere in this repo, `serve` gives a shareable, always-current dashboard view with zero setup, and templates turn a friction point you keep re-describing (a flaky endpoint, a recurring doc gap) into one command instead of retyping the shape of it every time.
-- **Potential Impact** — Every team in this hackathon (and Amazon's own developer-experience team, reading the resulting friction logs as structured feedback) benefits from more accurate, more complete friction logs, captured as things actually happen instead of reconstructed from memory at 11pm before the deadline. `sync` extends that from a single machine to an actual team — everyone's `watch` sessions converging into one shared friction log without anyone hand-merging JSON files. It's equally usable on any track — Fire TV, Alexa+, Bee, Ring — since it has no dependency on any Amazon SDK at all.
-- **Quality of Idea** — This submission satisfies the Open Source mini-challenge's required tech (**"a new public repository"**) directly and completely, on its own, regardless of what primary track a team pairs it with. It's also self-referential in a way that's memorable: the tool that helps you write your friction log has its own friction log (see `FRICTION_LOG.md`), written using the exact section structure the tool itself produces.
+- **Tech Implementation** — A real, typed, strict-mode TypeScript CLI with zero runtime dependencies beyond Node itself (the local web dashboard and `sync`/`aggregate`'s remote contract are Node's built-in `http`/`fetch`, not Express or axios; the REPL is Node's built-in `readline`), a clean layered architecture (`store`/`config`/`git`/`autotag`/`templates`/`chart`/`severity`/`cluster` → `commands`/`server`/`watch`/`sync`/`aggregate` → `cli`), and a genuine subprocess-level end-to-end test suite (**182 checks**) covering the golden path, edge cases, and every feature added across all five rounds — including a real git repo spun up in a temp directory for git-aware tagging, a real HTTP server hit with real `fetch()` calls on an ephemeral port for `serve`, further real HTTP servers standing in for sync/aggregate remotes (reusing the exact same dedup logic `merge` uses, so all three are provably safe to run repeatedly), a direct unit test of the exact functions `watch`/`severity`/`cluster` use, and a full piped-stdin subprocess run for `watch` (including its interactive auto-tag confirmation step). `npx tsc --noEmit` passes with zero errors.
+- **Design** — The whole point of the tool is near-zero friction to use: one short command to log a thought the moment it happens, with a sensible default tag — now guessed for you from the note's own wording when you don't have one in mind — so you never have to stop and think about taxonomy mid-flow. `watch` pushes that further — no flags at all once it's running, just typing and Enter, with an inline `#tag` convention for when a tag matters, and a confirmable (not silently-applied) suggestion the rest of the time. Errors are actionable, not stack traces. The exported Markdown is a drop-in match for the `FRICTION_LOG.md` structure judges are already reading elsewhere in this repo, `serve` gives a shareable, always-current dashboard view with zero setup, templates turn a friction point you keep re-describing into one command instead of retyping its shape every time, and `top`/`export --format timeline` turn deadline-day panic ("what actually goes in the submission?") into one command each, with the ranking's reasoning shown, not hidden.
+- **Potential Impact** — Every team in this hackathon (and Amazon's own developer-experience team, reading the resulting friction logs as structured feedback) benefits from more accurate, more complete friction logs, captured as things actually happen instead of reconstructed from memory at 11pm before the deadline. `sync` extends that from a single machine to an actual team, and `aggregate` takes it further still — turning everyone's individually-captured friction into one team-wide, theme-grouped report instead of a pile of JSON files someone has to read by hand; `export --format github-issues` turns that same report directly into filable tracker issues for whichever platform team owns the problem, without ever touching a token or an API. It's equally usable on any track — Fire TV, Alexa+, Bee, Ring — since it has no dependency on any Amazon SDK at all.
+- **Quality of Idea** — This submission satisfies the Open Source mini-challenge's required tech (**"a new public repository"**) directly and completely, on its own, regardless of what primary track a team pairs it with. It's also self-referential in a way that's memorable: the tool that helps you write your friction log has its own friction log (see `FRICTION_LOG.md`), written using the exact section structure the tool itself produces. This round in particular leans into ideas a friction-log tool hasn't obviously had before — an explainable severity ranking instead of a flat list, cross-teammate theme clustering built on the same primitives as `sync`, and a deterministic prose generator that reads like a person wrote it, all without reaching for an LLM or any external dependency.
 
 ## Scope boundaries / next steps for real open-source adoption
 
@@ -549,5 +684,8 @@ This is a hackathon-scoped submission. Genuine next steps toward real adoption, 
 - `sync` has no authentication story at all — the contract is plain unauthenticated JSON over HTTP, fine for a hackathon team's own trusted endpoint but not something to point at anything public; a real next step would be an `Authorization` header (a token from an env var or `.friction-logrc.json`) the client sends and the remote contract documents checking.
 - The auto-tag heuristic's keyword lists are hardcoded in `autotag.ts`; letting a team extend or override them (e.g. via `.friction-logrc.json`) instead of editing source would make it useful for vocabulary specific to a given SDK or platform.
 - Templates are per-directory only, same as the log itself — sharing a team's template set the way `sync` shares entries (or just checking `.friction-log-templates.json` into the repo, since it's already git-friendly plain JSON) is a natural next step, just not automated yet.
+- The severity heuristic's tag weights and keyword lists are hardcoded in `severity.ts`, same situation as `autotag.ts`'s keyword lists above — letting a team tune what counts as "severe" for their own domain via `.friction-logrc.json` would be a natural, small follow-up.
+- `aggregate` inherits `sync`'s lack of an authentication story (see above) — the same "an `Authorization` header the client sends and the remote documents checking" next step applies to it too, and to a bigger degree, since it's designed to talk to several teammates' endpoints at once.
+- `export --format github-issues` clusters entries the same way `aggregate` does but only ever looks at the *local* log; running it against an `aggregate` report instead (one issue file per cross-team theme, not just per-person) is the natural next combination once both features have shipped for a round.
 
 **Backward compatibility note**: `id`, `gitBranch`, and `gitCommit` are additive, optional fields on `LogEntry` — an existing `.friction-log.json` written by v1 (no `id`s at all) still loads and works with every command. The first time such a file is read, missing ids are backfilled and the file is rewritten once to persist them (so `edit`/`remove`/`merge` have something stable to reference); no other field is touched, and nothing is required to be present that wasn't already.

@@ -1,4 +1,5 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   LogAlreadyExistsError,
   generateEntryId,
@@ -8,12 +9,20 @@ import {
   writeLog,
   writeLogFile,
 } from "./store.js";
-import { exportJson, exportMarkdown, exportText, type ExportFormat } from "./exporter.js";
+import {
+  exportGithubIssues as buildGithubIssueFiles,
+  exportJson,
+  exportMarkdown,
+  exportText,
+  exportTimeline,
+  type ExportFormat,
+} from "./exporter.js";
 import { readConfig } from "./config.js";
 import { getGitInfo } from "./git.js";
 import { suggestTag } from "./autotag.js";
 import { fillTemplate, getTemplate } from "./templates.js";
 import type { DailyCount } from "./chart.js";
+import { scoreEntries, type SeverityBreakdown } from "./severity.js";
 import { DEFAULT_TAG, type LogEntry, type LogFile, type Tag } from "./types.js";
 
 /**
@@ -199,8 +208,11 @@ export function exportLog(dir: string, options: ExportOptions = {}): string {
     case "md":
       content = exportMarkdown(filteredLog, { title });
       break;
+    case "timeline":
+      content = exportTimeline(filteredLog, { title });
+      break;
     default:
-      throw new Error(`Unknown export format "${format}". Expected one of: json, md, txt.`);
+      throw new Error(`Unknown export format "${format}". Expected one of: json, md, txt, timeline.`);
   }
 
   if (out) {
@@ -379,4 +391,58 @@ export function useTemplate(
   const template = getTemplate(dir, name);
   const filledNote = fillTemplate(template.text, values);
   return add(dir, filledNote, { tag: tagOverride ?? template.tag });
+}
+
+export interface TopOptions extends DateRangeOptions {
+  /** How many top-scoring entries to return. Defaults to 5. */
+  limit?: number;
+}
+
+/**
+ * The highest-severity entries, highest first — see `severity.ts` for the
+ * full scoring breakdown (tag weight + wording + recency, each individually
+ * explained in `reasons`). This is the command to run right at submission
+ * time to answer "what actually goes in the friction log section," instead
+ * of re-reading every entry by hand.
+ */
+export function topEntries(dir: string, options: TopOptions = {}): SeverityBreakdown[] {
+  const log = readLog(dir);
+  const entries = filterByDateRange(log.entries, options);
+  const scored = scoreEntries(entries);
+  const limit = options.limit ?? 5;
+  return scored.slice(0, Math.max(0, limit));
+}
+
+export interface GithubIssuesExportResult {
+  outDir: string;
+  files: string[];
+  count: number;
+}
+
+/**
+ * `friction-log export --format github-issues <owner/repo>` — builds the
+ * issue files via `exporter.ts`'s `exportGithubIssues` (clustered by theme,
+ * "worked-well" entries excluded since they aren't problems to file) and
+ * writes each one under `outDir` (created if needed). Local-file export
+ * only: no network call, no GitHub token involved anywhere in this path.
+ */
+export function exportGithubIssuesToFiles(
+  dir: string,
+  repo: string,
+  outDir: string,
+  options: DateRangeOptions = {}
+): GithubIssuesExportResult {
+  const log = readLog(dir);
+  const filteredLog: LogFile = { ...log, entries: filterByDateRange(log.entries, options) };
+  const files = buildGithubIssueFiles(filteredLog, repo);
+
+  if (files.length > 0) {
+    mkdirSync(outDir, { recursive: true });
+    for (const file of files) {
+      const content = `# ${file.title}\n\n${file.body}\n`;
+      writeFileSync(join(outDir, file.filename), content, "utf8");
+    }
+  }
+
+  return { outDir, files: files.map((f) => f.filename), count: files.length };
 }
