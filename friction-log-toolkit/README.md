@@ -87,6 +87,13 @@ Outside a git repo (or if `git` isn't installed, or the repo has no commits yet)
 
 **Config-file default tag**: see [`friction-log defaultTag`](#config-file-friction-logrcjson) below — if `--tag` is omitted *and* a `.friction-logrc.json` sets `"defaultTag"`, that's used instead of the hardcoded `"note"` fallback.
 
+**Auto-tag suggestion**: if `--tag` is omitted *and* no `defaultTag` is configured, `add` tries a simple keyword heuristic against the note text before falling back to `"note"` — see [Auto-tag suggestion](#auto-tag-suggestion) below. When it fires, the confirmation line says so explicitly, so the tag it picked is never a silent surprise:
+
+```bash
+$ friction-log add "The Alexa+ emulator broke during setup"
+✓ Logged [friction] The Alexa+ emulator broke during setup (auto-tagged "friction" based on the note text — override any time with --tag)
+```
+
 ### `friction-log list [--tag <tag>] [--since <date>] [--until <date>]`
 
 Prints entries to stdout in chronological order (oldest first — the order you captured them while building), optionally filtered to one tag. Each line includes the entry's short id, needed for `edit`/`remove`.
@@ -118,7 +125,7 @@ No entries matching "nothing matches this".
 
 ### `friction-log stats [--since <date>] [--until <date>]`
 
-A quick summary: total entries, a breakdown per tag, the date range covered, and which single day had the most entries logged. Just a fast mid-hackathon check-in on how much you've captured so far.
+A quick summary: total entries, a breakdown per tag, the date range covered, which single day had the most entries logged, and a small ASCII bar chart of entries per day. Just a fast mid-hackathon check-in on how much you've captured so far.
 
 ```bash
 $ friction-log stats
@@ -132,7 +139,12 @@ By tag:
   note: 1
 Date range: 2026-09-01 14:02 UTC -> 2026-09-02 12:28 UTC
 Busiest day: 2026-09-02 (5 entries)
+Daily activity:
+  2026-09-01 |██ 2
+  2026-09-02 |█████ 5
 ```
+
+**The bar chart** (`Daily activity`) prints one line per calendar day that has at least one entry (a log spanning a huge date range with long empty gaps doesn't print a wall of zero-count days), in chronological order. Below 40 entries in a single day, a bar is exactly `count` block characters (`█`) long, so the bar itself is an exact, at-a-glance count — not just decoration next to the trailing number. Only once a day's count exceeds 40 does every bar get scaled down together (the busiest day becomes exactly 40 characters, every other day shrinks by the same factor), so one very busy day can't blow out terminal width while relative proportions between days stay meaningful. No dependency — just repeated `█` characters, same zero-dependency philosophy as everything else in this CLI.
 
 **Date-range filtering** — see [Date-range filtering](#date-range-filtering---since--until) below.
 
@@ -171,6 +183,71 @@ $ friction-log merge ../teammate-laptop/.friction-log.json --into .friction-log.
 ```
 
 Both paths can be relative or absolute; `<otherFile>` is only read, `<targetFile>` is the one that gets updated. `<targetFile>` must already exist (run `init` there first if it doesn't).
+
+### `friction-log sync <url> [--push|--pull]`
+
+Exchanges entries with a remote over HTTP, using the exact same id-based dedup logic as `merge` (`mergeEntries`, shared by both — one implementation, not two copies to keep in sync). Exactly one of `--push` or `--pull` must be given.
+
+```bash
+$ friction-log sync https://team.example.com/friction-log --push
+✓ Pushed to https://team.example.com/friction-log: +3 new, 5 duplicate(s) skipped, 8 total on remote.
+
+$ friction-log sync https://team.example.com/friction-log --pull
+✓ Pulled from https://team.example.com/friction-log: +2 new, 6 duplicate(s) skipped, 8 total locally.
+```
+
+**The contract** (deliberately tiny — plain JSON over HTTP, nothing to install on the remote beyond something that speaks this shape):
+
+| Method | Request body | Response body |
+|---|---|---|
+| `GET <url>` | — | `200` with `{ "entries": LogEntry[] }` — the remote's full current entry list |
+| `POST <url>` | `{ "entries": LogEntry[] }` — the pusher's full local entry list | `200` with `{ "added": number, "duplicates": number, "total": number }` — what happened on the *remote's* side after merging the pushed entries in |
+
+- `--pull` does a `GET`, merges the remote's entries into the local log via `mergeEntries`, and reports the **local** added/duplicates/total.
+- `--push` does a `POST` of the full local log and reports back whatever added/duplicates/total the remote says happened on its side.
+
+Because both directions dedup by entry `id`, running `sync` repeatedly (a cron job, a pre-submission ritual, a flaky connection retried) never doubles up entries — a second identical push or pull reports `+0 new` and leaves everything else unchanged. `sync` requires a log to already exist (`friction-log init` first), same as `list`/`export`/`stats`/`serve`/`watch`; an unreachable URL, a non-2xx response, or a response that doesn't match the JSON shape above all fail clearly instead of hanging or crashing with a raw stack trace.
+
+No real server ships with this CLI — the contract above is everything a teammate (or this project's own test suite, which spins up a throwaway `node:http` listener as a stand-in) needs to implement to be a valid sync target.
+
+### `friction-log template add <name> "<text with {placeholders}>" [--tag <tag>]`
+
+Saves a reusable note template under `<name>`, with any number of `{placeholder}` tokens (a placeholder name is letters/digits/underscore). Re-running `template add` with a name that already exists **replaces** it rather than creating a duplicate. `--tag` is optional — a template can carry its own tag, applied by `template use` whenever that command's own `--tag` is omitted.
+
+```bash
+$ friction-log template add flaky-endpoint "{endpoint} returned {code} with no explanation" --tag friction
+✓ Saved template "flaky-endpoint" (tag: friction): {endpoint} returned {code} with no explanation
+```
+
+### `friction-log template use <name> [--set key=value ...] [--tag <tag>]`
+
+Fills in a saved template's placeholders and logs the result exactly like a normal `add` — same id generation, same git-aware tagging, same auto-tag fallback if neither the template nor `--tag` supplies a tag. Pass one `--set key=value` per placeholder; a placeholder with no matching `--set` fails clearly (listing every missing key at once) rather than silently saving a literal `{key}` in the note.
+
+```bash
+$ friction-log template use flaky-endpoint --set endpoint=/v1/token --set code=500
+✓ Logged [friction] /v1/token returned 500 with no explanation
+
+$ friction-log template use flaky-endpoint --set endpoint=/v1/refresh --set code=502 --tag worked-well
+✓ Logged [worked-well] /v1/refresh returned 502 with no explanation
+```
+
+**Tag resolution order**: an explicit `--tag` on `use` always wins; otherwise the template's own saved tag is used; otherwise it falls through to `add`'s normal chain (a configured `defaultTag`, then the auto-tag heuristic, then `"note"`) — a template with no tag of its own behaves exactly like a plain untagged `add` once its placeholders are filled in.
+
+### `friction-log template list`
+
+Lists every saved template with its tag (if any) and raw `{placeholder}` text.
+
+```bash
+$ friction-log template list
+flaky-endpoint [friction]: {endpoint} returned {code} with no explanation
+```
+
+```bash
+$ friction-log template list
+No templates saved yet.
+```
+
+Templates are stored per-directory in their own `.friction-log-templates.json` file — separate from `.friction-log.json` for the same reason `.friction-logrc.json` is separate: a template is a reusable shape for *future* entries, not itself a logged entry, and shouldn't be touched by `init --force` clearing the log.
 
 ### `friction-log serve [--port <port>]`
 
@@ -213,7 +290,18 @@ Blank line, "exit", or "quit" to stop.
 Stopped. Run "friction-log list" to see everything you logged.
 ```
 
-**Inline tag syntax**: end a line with a trailing `#tagname` (a `#` immediately followed by letters/digits/`-`/`_`, at the very end of the line) to tag that entry without ever touching a `--tag` flag. It's stripped from the saved note text. With no trailing `#tag`, the line is logged with the normal `add` default (a configured `defaultTag`, else `"note"`) — exactly as if you'd run `add` with no `--tag` at all.
+**Inline tag syntax**: end a line with a trailing `#tagname` (a `#` immediately followed by letters/digits/`-`/`_`, at the very end of the line) to tag that entry without ever touching a `--tag` flag. It's stripped from the saved note text. With no trailing `#tag`, `add`'s normal default chain applies (a configured `defaultTag`, then the auto-tag heuristic, then `"note"`).
+
+**Auto-tag confirmation**: unlike a non-interactive `add` (which applies the heuristic's suggestion automatically), `watch` stops and asks first whenever a line has no inline `#tag` and the heuristic finds a keyword match — press **Enter** to accept the suggestion, or type a different tag and press Enter to use that instead:
+
+```bash
+> The build broke halfway through the demo
+Suggested tag: friction (Enter to accept, or type a different tag)
+>
+✓ Logged [friction] The build broke halfway through the demo
+```
+
+No keyword match at all (or an inline `#tag`, which always short-circuits the suggestion) skips the confirmation step entirely and logs immediately, exactly as before this feature existed. See [Auto-tag suggestion](#auto-tag-suggestion) below for the exact keyword lists.
 
 A **blank line**, or typing **`exit`**/**`quit`** (either case), ends the loop cleanly — nothing is logged for that final line. `watch` requires a log to already exist first (`friction-log init`).
 
@@ -318,6 +406,27 @@ $ friction-log list --since "not-a-real-date"
 Error: Could not parse --since "not-a-real-date" as a date.
 ```
 
+### Auto-tag suggestion
+
+When `add` (or a line in `watch`) has no explicit `--tag` **and** no configured `defaultTag`, a small keyword heuristic (`src/autotag.ts`, no NLP, no dependency) suggests a tag by checking the note's text (case-insensitive) against three fixed keyword lists, in this order — the first list with a match wins:
+
+| Suggested tag | Keywords checked |
+|---|---|
+| `friction` | bug, broke, broken, breaks, error, errors, errored, crash, crashed, crashes, fail, failed, failing, confusing, confused, stuck |
+| `worked-well` | worked, works, nice, clean, smooth, smoothly, great, easy, painless |
+| `feature-request` | should, would be nice, wish, wished, could use, want |
+
+A single-word keyword matches on a `\b` word boundary against the note, lowercased (`"fail"` matches `"the build failed"` via `"failed"` containing `"fail"` followed by more word characters — word-boundary matching finds the keyword as a substring of a longer word too, it's not whole-word-only); a multi-word phrase (`"would be nice"`, `"could use"`) matches as a plain substring. This is intentionally simple — a keyword list, not a tokenizer or classifier. No match at all falls through to whatever the normal default would have been anyway (a configured `defaultTag`, else `"note"`).
+
+**`add` applies the suggestion automatically** and says so in its confirmation line, so it's never a silent surprise:
+
+```bash
+$ friction-log add "The build broke halfway through the demo"
+✓ Logged [friction] The build broke halfway through the demo (auto-tagged "friction" based on the note text — override any time with --tag)
+```
+
+**`watch` asks for confirmation instead** — see [the `watch` section](#friction-log-watch) above. An explicit `--tag` (on `add`) or an inline `#tag` (in `watch`) always short-circuits the heuristic entirely; it's only ever consulted when nothing else already decided the tag.
+
 ### Errors
 
 Running `add`, `list`, or `export` before `init` gives a clear, actionable message instead of a stack trace:
@@ -371,10 +480,16 @@ friction-log-toolkit/
     store.ts             read/write .friction-log.json (or any log-shaped file, for merge), id backfill for older files
     config.ts             reads the optional .friction-logrc.json
     git.ts                 best-effort current branch + short commit hash, no-ops outside a git repo
-    commands.ts             init/add/list/search/export/stats/edit/remove/merge logic + --since/--until filtering, decoupled from argv parsing
+    autotag.ts              the auto-tag keyword heuristic (suggestTag), shared by add and watch
+    templates.ts             reusable {placeholder} note templates, own .friction-log-templates.json file
+    chart.ts                 the "stats" ASCII bar chart renderer, no dependency
+    sync.ts                   push/pull against a remote over the sync HTTP contract, reuses mergeEntries
+    commands.ts             init/add/list/search/export/stats/edit/remove/merge/useTemplate logic (+ mergeEntries,
+                             shared by merge and sync) + --since/--until filtering, decoupled from argv parsing
     exporter.ts              Markdown/plain-text/JSON report generation from a LogFile
     server.ts                 the "serve" HTTP server: dependency-free node:http, re-reads the log file per request
-    watch.ts                   the "watch" REPL: pure handleWatchLine (testable directly) + the readline-driven loop around it
+    watch.ts                   the "watch" REPL: pure handleWatchLine/resolveWatchTag (testable directly) + the
+                                readline-driven loop (with the auto-tag confirmation step) around them
     cli.ts                       argv parsing + dispatch (the bin entry point, has the shebang)
   test/
     smoke.test.ts             real end-to-end test, subprocess + temp dirs, no mocks
@@ -390,7 +505,7 @@ The `commands.ts` functions take a working directory explicitly and are fully de
 npm test
 ```
 
-This runs `npm run build` followed by `test/smoke.test.ts` (via `tsx`, using Node's built-in `assert/strict`). The test is a genuine end-to-end test: it invokes the **compiled** CLI (`node dist/cli.js ...`) as a real child process against a fresh temporary directory (`node:fs.mkdtempSync` + `node:os.tmpdir()`), created and cleaned up per scenario — no mocking of the filesystem or of `commands.ts`. As of this round, that's **85 passing checks**.
+This runs `npm run build` followed by `test/smoke.test.ts` (via `tsx`, using Node's built-in `assert/strict`). The test is a genuine end-to-end test: it invokes the **compiled** CLI (`node dist/cli.js ...`) as a real child process against a fresh temporary directory (`node:fs.mkdtempSync` + `node:os.tmpdir()`), created and cleaned up per scenario — no mocking of the filesystem or of `commands.ts`. As of this round, that's **137 passing checks**.
 
 It covers:
 
@@ -408,12 +523,16 @@ It covers:
 - **`--since`/`--until`** on `list`/`export`/`stats` — entries are backdated/future-dated directly in the log file to give the filter real boundaries to respect (rather than a mocked clock), confirming in-range entries are kept, out-of-range entries on both sides are excluded, filtering happens before grouping in `export`, and an unparseable date fails clearly instead of silently matching everything.
 - **`watch`** — both the pure `handleWatchLine` function directly (plain lines default to `"note"`, a trailing `#tag` is parsed off and applied, a blank line and `"exit"`/`"quit"` end the loop without logging) *and* the real `friction-log watch` subprocess end-to-end, piping input at its stdin and checking both the console output and the persisted entries.
 - **`serve`** — spawned as a real child process on an ephemeral port (`--port 0`, port read back from its printed URL), then hit with real `fetch()` calls: the response is 200 with HTML containing known entries' text, the `?tag=` filter narrows what's rendered, and a `friction-log add` run *while the server is still up* shows up on the next request with no restart — proving there's no caching.
+- **Auto-tag suggestion** — `suggestTag` unit-tested directly for representative friction/worked-well/feature-request note text and text matching nothing; a non-interactive `add` with no `--tag` on the same kinds of text confirms the tag is actually applied, persisted, *and* announced in the CLI's output (never silently), that an explicit `--tag` always overrides the heuristic, and that plain text with no keyword match still carries no auto-tag notice; `watch` is tested piping input where a suggested tag is accepted with a blank confirmation line, overridden with a typed tag, and skipped entirely for text with no suggestion — plus direct unit tests of `handleWatchLine`'s `needs-tag` result and `resolveWatchTag`.
+- **`stats` ASCII bar chart** — six entries backdated (directly in the log file, real boundaries) across three days with counts 1/3/2, confirming the chart renders one line per day with a raw block-character count matching each day's total exactly, and that bar lengths are proportional (the 3-entry day's bar is longest) — plus that an empty log prints no "Daily activity" section at all.
+- **Entry templates** — `template add`/`list`/`use` end to end: a template with a `{placeholder}` fills in correctly and logs with the template's own tag; `--tag` on `use` overrides that tag; a missing `--set` for a required placeholder and an unknown template name both fail clearly; re-adding an existing template name replaces it instead of duplicating; a template with no tag at all falls through to `add`'s normal default chain.
+- **`sync` push/pull** — a genuine round-trip against a real `node:http` server standing in for "the remote" (spun up in-process on an ephemeral port, reusing the exact same `mergeEntries` the real CLI's `merge` uses for its own dedup): pushing from one directory, pulling into a fresh second directory, confirming both directions report accurate added/duplicate/total counts, that re-running either is fully idempotent (`+0 new` the second time), and that entries genuinely round-trip both ways through the remote (B's new entry reaches A via a second pull) — plus that `sync` with neither or both of `--push`/`--pull`, and a genuinely unreachable URL, all fail clearly instead of hanging.
 
 ## Judging-criteria alignment
 
-- **Tech Implementation** — A real, typed, strict-mode TypeScript CLI with zero runtime dependencies beyond Node itself (the local web dashboard is Node's built-in `http`, not Express; the REPL is Node's built-in `readline`), a clean layered architecture (`store`/`config`/`git` → `commands`/`server`/`watch` → `cli`), and a genuine subprocess-level end-to-end test suite (**85 checks**) covering the golden path, edge cases, and every feature added across both rounds — including a real git repo spun up in a temp directory for git-aware tagging, a real HTTP server hit with real `fetch()` calls on an ephemeral port for `serve`, and both a direct unit test of the exact function `watch` uses and a full piped-stdin subprocess run for `watch`. `npx tsc --noEmit` passes with zero errors.
-- **Design** — The whole point of the tool is near-zero friction to use: one short command to log a thought the moment it happens, with a sensible default tag so you never have to stop and think about taxonomy mid-flow. `watch` pushes that further — no flags at all once it's running, just typing and Enter, with an inline `#tag` convention for when a tag matters. Errors are actionable, not stack traces. The exported Markdown is a drop-in match for the `FRICTION_LOG.md` structure judges are already reading elsewhere in this repo, and `serve` gives a shareable, always-current dashboard view with zero setup.
-- **Potential Impact** — Every team in this hackathon (and Amazon's own developer-experience team, reading the resulting friction logs as structured feedback) benefits from more accurate, more complete friction logs, captured as things actually happen instead of reconstructed from memory at 11pm before the deadline. It's equally usable on any track — Fire TV, Alexa+, Bee, Ring — since it has no dependency on any Amazon SDK at all.
+- **Tech Implementation** — A real, typed, strict-mode TypeScript CLI with zero runtime dependencies beyond Node itself (the local web dashboard and `sync`'s remote contract are Node's built-in `http`/`fetch`, not Express or axios; the REPL is Node's built-in `readline`), a clean layered architecture (`store`/`config`/`git`/`autotag`/`templates`/`chart` → `commands`/`server`/`watch`/`sync` → `cli`), and a genuine subprocess-level end-to-end test suite (**137 checks**) covering the golden path, edge cases, and every feature added across all four rounds — including a real git repo spun up in a temp directory for git-aware tagging, a real HTTP server hit with real `fetch()` calls on an ephemeral port for `serve`, a *second* real HTTP server standing in for a sync remote (reusing the exact same dedup logic `merge` uses, so both are provably safe to run repeatedly), and both a direct unit test of the exact functions `watch` uses and a full piped-stdin subprocess run for `watch` (including its interactive auto-tag confirmation step). `npx tsc --noEmit` passes with zero errors.
+- **Design** — The whole point of the tool is near-zero friction to use: one short command to log a thought the moment it happens, with a sensible default tag — now guessed for you from the note's own wording when you don't have one in mind — so you never have to stop and think about taxonomy mid-flow. `watch` pushes that further — no flags at all once it's running, just typing and Enter, with an inline `#tag` convention for when a tag matters, and a confirmable (not silently-applied) suggestion the rest of the time. Errors are actionable, not stack traces. The exported Markdown is a drop-in match for the `FRICTION_LOG.md` structure judges are already reading elsewhere in this repo, `serve` gives a shareable, always-current dashboard view with zero setup, and templates turn a friction point you keep re-describing (a flaky endpoint, a recurring doc gap) into one command instead of retyping the shape of it every time.
+- **Potential Impact** — Every team in this hackathon (and Amazon's own developer-experience team, reading the resulting friction logs as structured feedback) benefits from more accurate, more complete friction logs, captured as things actually happen instead of reconstructed from memory at 11pm before the deadline. `sync` extends that from a single machine to an actual team — everyone's `watch` sessions converging into one shared friction log without anyone hand-merging JSON files. It's equally usable on any track — Fire TV, Alexa+, Bee, Ring — since it has no dependency on any Amazon SDK at all.
 - **Quality of Idea** — This submission satisfies the Open Source mini-challenge's required tech (**"a new public repository"**) directly and completely, on its own, regardless of what primary track a team pairs it with. It's also self-referential in a way that's memorable: the tool that helps you write your friction log has its own friction log (see `FRICTION_LOG.md`), written using the exact section structure the tool itself produces.
 
 ## Scope boundaries / next steps for real open-source adoption
@@ -427,5 +546,8 @@ This is a hackathon-scoped submission. Genuine next steps toward real adoption, 
 - `stats --json` for feeding the summary into a script or CI check the same way `export --format json` does today.
 - `serve`'s dashboard is read-only today (viewing + filtering only) — a real next step would be letting it accept new entries or edits from the browser too, not just the CLI.
 - `search` is a plain substring match by design (see the README's note on why); a real fuzzy/ranked search would be a bigger, separate feature.
+- `sync` has no authentication story at all — the contract is plain unauthenticated JSON over HTTP, fine for a hackathon team's own trusted endpoint but not something to point at anything public; a real next step would be an `Authorization` header (a token from an env var or `.friction-logrc.json`) the client sends and the remote contract documents checking.
+- The auto-tag heuristic's keyword lists are hardcoded in `autotag.ts`; letting a team extend or override them (e.g. via `.friction-logrc.json`) instead of editing source would make it useful for vocabulary specific to a given SDK or platform.
+- Templates are per-directory only, same as the log itself — sharing a team's template set the way `sync` shares entries (or just checking `.friction-log-templates.json` into the repo, since it's already git-friendly plain JSON) is a natural next step, just not automated yet.
 
 **Backward compatibility note**: `id`, `gitBranch`, and `gitCommit` are additive, optional fields on `LogEntry` — an existing `.friction-log.json` written by v1 (no `id`s at all) still loads and works with every command. The first time such a file is read, missing ids are backfilled and the file is rewritten once to persist them (so `edit`/`remove`/`merge` have something stable to reference); no other field is touched, and nothing is required to be present that wasn't already.
