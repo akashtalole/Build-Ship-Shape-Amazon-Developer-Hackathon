@@ -11,14 +11,20 @@
  */
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
+import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ModelRouter,
   SIDECAR_COST_USD,
+  REVIEWER_COST_USD,
   FOUNDATION_COST_USD,
   DEFAULT_CONFIDENCE_THRESHOLD,
+  DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD,
 } from "../src/router.js";
 import { MockSidecarClassifier } from "../src/sidecarClassifier.js";
 import { MockBedrockProvider, FAILURE_TRIGGER } from "../src/foundationModel.js";
+import { MockReviewerProvider } from "../src/reviewerModel.js";
 import { createApp } from "../src/server.js";
 import { RateLimiter } from "../src/rateLimiter.js";
 
@@ -37,6 +43,28 @@ const BORDERLINE_TEXT = "Just a reminder to take out the trash tonight."; // 1 r
 // to log, deterministically.
 const SHADOW_DISAGREEMENT_TEXT =
   "Time to mow the lawn and run a dishwasher cycle before the weekly check — the new lawnmower package should arrive too.";
+
+// --- Three-tier cascade fixtures ---
+// 2 sidecar hits ("reminder", "grocery") -> raw confidence 0.75, minus the
+// 0.15 ambiguity penalty (a 1-hit "leaking" runner-up in the urgent category)
+// -> confidence exactly 0.60, landing in the default reviewer band
+// [0.60, 0.70). The reviewer model's own independent keyword hints also land
+// on "routine" here (2 routine hits vs. 1 urgent hit), so the reviewer tier
+// *confirms* the sidecar and resolves the request without needing the full
+// foundation model.
+const REVIEWER_AGREE_TEXT = "reminder: the grocery order today, though there is a leaking pipe outside too.";
+
+// Also 2 sidecar hits ("reminder", "schedule") with a 1-hit "fyi" runner-up
+// in the informational category -> same confidence 0.60, same reviewer band.
+// But the extra words "leak", "danger", and "911" are picked up by the
+// reviewer model's *own*, deliberately-different hint list (which matches
+// bare substrings the sidecar's own phrase-level keywords don't) strongly
+// enough to flip the reviewer's independent guess to "urgent" — a genuine
+// disagreement with the sidecar's "routine", so the cascade must escalate
+// once more to the full foundation model rather than resolving at the
+// reviewer tier.
+const REVIEWER_DISAGREE_TEXT =
+  "fyi, reminder to check the schedule -- there's a slow leak, a bit of danger near the fuse box, might need to dial 911 later.";
 
 function closeTo(actual: number, expected: number, epsilon = 1e-9): boolean {
   return Math.abs(actual - expected) < epsilon;
@@ -95,6 +123,13 @@ class CountingSidecar extends MockSidecarClassifier {
   }
 }
 class CountingFoundation extends MockBedrockProvider {
+  calls = 0;
+  async invoke(prompt: string) {
+    this.calls += 1;
+    return super.invoke(prompt);
+  }
+}
+class CountingReviewer extends MockReviewerProvider {
   calls = 0;
   async invoke(prompt: string) {
     this.calls += 1;
@@ -510,6 +545,278 @@ async function testRateLimiting() {
   }
 }
 
+async function testExplainability() {
+  const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+
+  // --- A confident classification's explanation cites the actual matched keyword(s) ---
+  const urgent = await router.route(URGENT_TEXT);
+  assert.ok(urgent.sidecar.matchedKeywords && urgent.sidecar.matchedKeywords.length > 0, "a confident classification should report which keyword(s) matched");
+  assert.ok(urgent.sidecar.matchedKeywords!.includes("fire"), `expected "fire" among matched keywords, got ${JSON.stringify(urgent.sidecar.matchedKeywords)}`);
+  assert.ok(urgent.explanation.length > 0, "explanation must be non-empty");
+  assert.ok(urgent.explanation.includes("fire"), `explanation should reference the actual matched signal, got: ${urgent.explanation}`);
+  console.log('✓ a confident sidecar classification\'s explanation and sidecar.matchedKeywords both cite the actual keyword(s) that drove it (e.g. "fire")');
+
+  // --- A single-keyword borderline match also cites its (sole) matched keyword ---
+  const borderline = await router.route(BORDERLINE_TEXT, 0.5); // clears a lowered threshold -> sidecar path
+  assert.deepEqual(borderline.sidecar.matchedKeywords, ["reminder"]);
+  assert.ok(borderline.explanation.includes("reminder"), `explanation should mention "reminder", got: ${borderline.explanation}`);
+  console.log("✓ a single-keyword match reports exactly that keyword in both matchedKeywords and the explanation text");
+
+  // --- Zero keyword signal is explained honestly as a default guess, not a phantom match ---
+  const ambiguous = await router.route(AMBIGUOUS_TEXT);
+  assert.deepEqual(ambiguous.sidecar.matchedKeywords, []);
+  assert.ok(/no keyword signal/i.test(ambiguous.explanation), `expected the no-signal case to say so plainly, got: ${ambiguous.explanation}`);
+  console.log("✓ a zero-keyword-signal input is honestly explained as a low-confidence default guess, not a fabricated match");
+}
+
+async function testThreeTierCascade() {
+  const sidecar = new CountingSidecar();
+  const foundation = new CountingFoundation();
+  const reviewer = new CountingReviewer();
+  const router = new ModelRouter(sidecar, foundation, { reviewer });
+
+  // --- A clearly-confident input still resolves at the sidecar tier, untouched by the cascade ---
+  const confident = await router.route(URGENT_TEXT);
+  assert.equal(confident.path, "sidecar");
+  assert.equal(reviewer.calls, 0, "a confident sidecar answer must never consult the reviewer tier");
+  assert.equal(foundation.calls, 0);
+  console.log("✓ a clearly-confident input resolves at the sidecar tier even with a reviewer configured (the cascade is never consulted)");
+
+  // --- A borderline-confidence input (0.60, in the reviewer band) resolves at the mid tier when the reviewer agrees ---
+  const reviewed = await router.route(REVIEWER_AGREE_TEXT);
+  assert.equal(reviewed.confidence, DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD, "fixture text should land exactly at the reviewer-band boundary");
+  assert.equal(reviewed.path, "reviewer");
+  assert.equal(reviewed.label, "routine");
+  assert.ok(reviewed.reviewer, "a reviewer-tier result should carry the reviewer's own FoundationResult record");
+  assert.equal(reviewed.foundation, undefined, "resolving at the reviewer tier must not also call the full foundation model");
+  assert.equal(reviewer.calls, 1);
+  assert.equal(foundation.calls, 0);
+  assert.ok(closeTo(reviewed.totalCostUsd, SIDECAR_COST_USD + REVIEWER_COST_USD));
+  console.log("✓ a borderline-confidence input resolves at the new mid (reviewer) tier when the reviewer model confirms the sidecar's label, without calling the full foundation model");
+
+  // --- A borderline input where the reviewer itself disagrees cascades on to the full foundation model ---
+  const cascaded = await router.route(REVIEWER_DISAGREE_TEXT);
+  assert.equal(cascaded.confidence, DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD);
+  assert.equal(cascaded.path, "foundation");
+  assert.ok(cascaded.reviewer, "the cascade should still report the reviewer's (unsure) attempt");
+  assert.ok(cascaded.foundation, "a reviewer disagreement should escalate to the full foundation model");
+  assert.equal(reviewer.calls, 2);
+  assert.equal(foundation.calls, 1);
+  assert.ok(closeTo(cascaded.totalCostUsd, SIDECAR_COST_USD + REVIEWER_COST_USD + FOUNDATION_COST_USD));
+  console.log("✓ when the reviewer model is *also* unsure (disagrees with the sidecar), the cascade escalates once more to the full foundation model, billing all three tiers");
+
+  // --- A clearly-low-confidence input still escalates straight to the top tier, skipping the reviewer entirely ---
+  const skipped = await router.route(AMBIGUOUS_TEXT);
+  assert.equal(skipped.path, "foundation");
+  assert.equal(skipped.reviewer, undefined, "confidence below the reviewer band should skip the reviewer tier entirely");
+  assert.equal(reviewer.calls, 2, "the reviewer must not have been consulted for a below-band input");
+  assert.equal(foundation.calls, 2);
+  console.log("✓ a clearly-low-confidence input (below the reviewer band) escalates straight to the full foundation model, skipping the cheaper reviewer tier");
+
+  // --- GET /metrics-equivalent reports how many requests resolved at each of the three tiers ---
+  const metrics = router.getMetrics();
+  assert.equal(metrics.sidecarPathRequests, 1);
+  assert.equal(metrics.reviewerPathRequests, 1);
+  assert.equal(metrics.foundationPathRequests, 2);
+  assert.ok(closeTo(metrics.reviewerPathRate, 0.25));
+  console.log(`✓ GET /metrics-equivalent tracks how many requests resolved at each of the three tiers (sidecar: ${metrics.sidecarPathRequests}, reviewer: ${metrics.reviewerPathRequests}, foundation: ${metrics.foundationPathRequests})`);
+
+  // --- Without a reviewer configured, the cascade collapses back to the original two-tier behavior ---
+  const twoTierRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  const twoTierResult = await twoTierRouter.route(REVIEWER_AGREE_TEXT); // same 0.60 confidence, but no reviewer configured
+  assert.equal(twoTierResult.path, "foundation", "with no reviewer configured, a borderline input should escalate straight to the foundation model as before");
+  console.log("✓ omitting the reviewer provider entirely collapses the cascade back to the original two-tier (sidecar/foundation) behavior");
+
+  // --- A reviewer call that itself fails fails open to the top tier rather than back to the sidecar ---
+  const failingReviewerRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), {
+    reviewer: new MockReviewerProvider({ alwaysFail: true }),
+  });
+  const failedOpen = await failingReviewerRouter.route(REVIEWER_AGREE_TEXT);
+  assert.equal(failedOpen.path, "foundation", "a failed reviewer call should fail open to the full foundation model, not back to the sidecar");
+  assert.equal(failedOpen.reviewer, undefined, "a failed reviewer call has no result to report");
+  console.log("✓ a reviewer-model call that fails outright fails open to the full foundation model rather than silently trusting the sidecar");
+}
+
+async function testCostBudget() {
+  const sidecar = new CountingSidecar();
+  const foundation = new CountingFoundation();
+  const router = new ModelRouter(sidecar, foundation);
+
+  // --- No budget configured: escalation proceeds normally ---
+  const beforeBudget = router.getBudgetStatus();
+  assert.equal(beforeBudget.enabled, false);
+  const unthrottled = await router.route(AMBIGUOUS_TEXT + " one");
+  assert.equal(unthrottled.path, "foundation");
+  assert.equal(unthrottled.budgetExceeded, undefined);
+  console.log("✓ with no budget configured, escalation proceeds normally and never sets budgetExceeded");
+
+  // --- Configure a budget that covers exactly one escalation's billed cost (the sidecar's own tiny
+  // cost is never budgeted — see budgetTracker.ts — only the foundation-model spend is tracked) ---
+  router.setBudget(FOUNDATION_COST_USD, 60_000);
+  const firstUnderBudget = await router.route(AMBIGUOUS_TEXT + " two");
+  assert.equal(firstUnderBudget.path, "foundation", "the call that first reaches the limit should still be allowed through");
+  assert.equal(foundation.calls, 2);
+
+  const statusAfterOne = router.getBudgetStatus();
+  assert.equal(statusAfterOne.enabled, true);
+  assert.ok(statusAfterOne.exceeded, "cumulative spend should have reached the configured limit after one billed escalation");
+  console.log("✓ GET /budget-equivalent reports current spend vs. limit, flipping to exceeded once the period's cap is reached");
+
+  // --- The next escalation-worthy request is auto-throttled: sidecar's best-effort answer, budgetExceeded: true ---
+  const throttled = await router.route(AMBIGUOUS_TEXT + " three");
+  assert.equal(throttled.path, "sidecar", "a budget-throttled response reports path 'sidecar' (a fast-path shape) per spec");
+  assert.equal(throttled.budgetExceeded, true, "a budget-throttled response must be flagged so callers can tell it apart from a normal fast-path hit");
+  assert.equal(foundation.calls, 2, "the foundation model must not be called once the budget is exhausted");
+  assert.equal(throttled.confidence, 0.3, "the throttled response is still the sidecar's genuine best-effort classification");
+  console.log("✓ once the tracked spend hits the configured limit, further escalations are auto-throttled to the sidecar's best-effort answer (budgetExceeded: true) instead of calling the foundation model");
+
+  // --- A second, equally-throttled request confirms the throttling persists for the rest of the period ---
+  const throttledAgain = await router.route(AMBIGUOUS_TEXT + " four");
+  assert.equal(throttledAgain.budgetExceeded, true);
+  assert.equal(foundation.calls, 2);
+  const metrics = router.getMetrics();
+  assert.equal(metrics.budgetThrottledRequests, 2);
+  console.log("✓ GET /metrics reports budgetThrottledRequests, separate from genuine sidecarPathRequests");
+
+  // --- Clearing the budget lifts the throttle ---
+  router.clearBudget();
+  const afterClear = await router.route(AMBIGUOUS_TEXT + " five");
+  assert.equal(afterClear.path, "foundation");
+  assert.equal(afterClear.budgetExceeded, undefined);
+  console.log("✓ clearing the budget immediately lifts the auto-throttle for subsequent escalations");
+}
+
+async function testCostBudgetOverHttp() {
+  const router = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+  const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+  const httpServer = app.listen(0);
+  const { port } = httpServer.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    // --- Invalid budget bodies are rejected ---
+    const badLimitRes = await fetch(`${base}/budget`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: -1, periodMs: 1000 }),
+    });
+    assert.equal(badLimitRes.status, 400);
+    console.log("✓ POST /budget rejects a non-positive 'limit' with 400");
+
+    // --- Set a tiny budget over HTTP ---
+    const setRes = await fetch(`${base}/budget`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: SIDECAR_COST_USD, periodMs: 60_000 }), // smaller than a single escalation's cost
+    });
+    assert.equal(setRes.status, 200);
+    const setBody = await setRes.json();
+    assert.equal(setBody.enabled, true);
+    assert.equal(setBody.limitUsd, SIDECAR_COST_USD);
+
+    const getRes = await fetch(`${base}/budget`);
+    const getBody = await getRes.json();
+    assert.equal(getBody.enabled, true);
+    assert.equal(getBody.spendUsd, 0);
+    console.log("✓ GET /budget reflects a budget just configured over HTTP, with $0 spend before any escalation");
+
+    // --- The first escalation still goes through, but is enough to exceed the tiny budget ---
+    await fetch(`${base}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Caller-Id": "budget-tester" },
+      body: JSON.stringify({ text: "Can you check on things sometime, no rush, http budget test one?" }),
+    });
+
+    // --- The next escalation-worthy request is throttled, visibly, over HTTP ---
+    const throttledRes = await fetch(`${base}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Caller-Id": "budget-tester" },
+      body: JSON.stringify({ text: "Can you check on things sometime, no rush, http budget test two?" }),
+    });
+    const throttledBody = await throttledRes.json();
+    assert.equal(throttledBody.path, "sidecar");
+    assert.equal(throttledBody.budgetExceeded, true);
+    console.log("✓ over real HTTP, exceeding a configured budget flips subsequent escalations to budgetExceeded: true fast-path responses instead of calling the foundation model");
+  } finally {
+    httpServer.close();
+  }
+}
+
+async function testPersistentMetrics() {
+  const tempDir = mkdtempSync(join(tmpdir(), "model-router-metrics-test-"));
+  const metricsPath = join(tempDir, "metrics-state.json");
+  try {
+    const clock = { time: 5_000_000 };
+
+    // --- Router "A": accumulate some real metrics, then persist explicitly (simulating graceful shutdown) ---
+    const routerA = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), {
+      now: () => clock.time,
+      metricsPersistPath: metricsPath,
+      persistEveryNRequests: 1_000_000, // effectively disable the periodic auto-save for this half of the test
+    });
+    await routerA.route(URGENT_TEXT); // sidecar path
+    await routerA.route(AMBIGUOUS_TEXT); // foundation path
+    await routerA.route(URGENT_TEXT); // cache hit
+    routerA.setBudget(1, 60_000);
+
+    const metricsBeforeSave = routerA.getMetrics();
+    routerA.persistMetricsNow();
+    assert.ok(existsSync(metricsPath), "persistMetricsNow() should write the metrics file to disk");
+
+    const onDisk = JSON.parse(readFileSync(metricsPath, "utf8"));
+    assert.equal(onDisk.version, 1);
+    assert.equal(onDisk.sidecarPathRequests, metricsBeforeSave.sidecarPathRequests);
+    assert.equal(onDisk.foundationPathRequests, metricsBeforeSave.foundationPathRequests);
+    assert.equal(onDisk.cacheHits, metricsBeforeSave.cacheHits);
+    assert.ok(onDisk.budget && onDisk.budget.limitUsd === 1, "the configured budget should be persisted too");
+    console.log("✓ persistMetricsNow() writes cumulative path counts, cache stats, and budget config/spend to disk on (simulated) graceful shutdown");
+
+    // --- Router "B": a freshly-constructed router pointed at the same file — simulates restarting the demo process ---
+    const routerB = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), {
+      now: () => clock.time,
+      metricsPersistPath: metricsPath,
+    });
+    const reloadedMetrics = routerB.getMetrics();
+    assert.equal(reloadedMetrics.sidecarPathRequests, metricsBeforeSave.sidecarPathRequests, "a fresh router pointed at the same file should reload prior sidecarPathRequests");
+    assert.equal(reloadedMetrics.foundationPathRequests, metricsBeforeSave.foundationPathRequests);
+    assert.equal(reloadedMetrics.cacheHits, metricsBeforeSave.cacheHits);
+    assert.ok(closeTo(reloadedMetrics.actualCostUsd, metricsBeforeSave.actualCostUsd), "reloaded actualCostUsd should match the pre-restart cumulative cost, not reset to 0");
+    const reloadedBudget = routerB.getBudgetStatus();
+    assert.equal(reloadedBudget.enabled, true);
+    assert.equal(reloadedBudget.limitUsd, 1);
+    console.log("✓ a freshly-constructed router pointed at the same metrics file reloads the prior cumulative totals on startup instead of resetting to zero (simulated restart)");
+
+    // --- New activity on router B continues accumulating on top of the reloaded baseline ---
+    await routerB.route(SHADOW_DISAGREEMENT_TEXT); // a fresh, distinct sidecar-path input
+    const afterMoreActivity = routerB.getMetrics();
+    assert.equal(afterMoreActivity.sidecarPathRequests, metricsBeforeSave.sidecarPathRequests + 1);
+    console.log("✓ metrics reloaded from disk continue accumulating correctly as the restarted process handles new requests");
+
+    // --- Periodic auto-save: persistEveryNRequests triggers a save without an explicit persistMetricsNow() call ---
+    const autoSavePath = join(tempDir, "auto-save.json");
+    const routerC = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), {
+      now: () => clock.time,
+      metricsPersistPath: autoSavePath,
+      persistEveryNRequests: 2,
+    });
+    assert.equal(existsSync(autoSavePath), false, "no file should exist before any requests");
+    await routerC.route(URGENT_TEXT);
+    assert.equal(existsSync(autoSavePath), false, "the auto-save shouldn't fire before the configured request count");
+    await routerC.route(URGENT_TEXT + "!!");
+    assert.ok(existsSync(autoSavePath), "the auto-save should fire automatically after persistEveryNRequests calls, with no explicit save");
+    console.log("✓ metrics are periodically auto-saved to disk every N requests, without requiring an explicit persistMetricsNow() call");
+
+    // --- A missing/corrupt file is treated as a fresh start, not a crash ---
+    const missingFileRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), {
+      metricsPersistPath: join(tempDir, "does-not-exist.json"),
+    });
+    assert.equal(missingFileRouter.getMetrics().totalRequests, 0);
+    console.log("✓ pointing at a metrics file that doesn't exist yet starts fresh (0 cumulative requests) instead of throwing");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   await testRouterUnit();
   await testResponseCache();
@@ -519,6 +826,11 @@ async function main() {
   await testHttpEndToEnd();
   await testHttpFallbackAndShadowOverHttp();
   await testRateLimiting();
+  await testExplainability();
+  await testThreeTierCascade();
+  await testCostBudget();
+  await testCostBudgetOverHttp();
+  await testPersistentMetrics();
   console.log("\nAll model-router smoke tests passed.");
 }
 

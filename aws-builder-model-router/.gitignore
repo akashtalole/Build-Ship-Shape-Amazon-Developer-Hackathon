@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.log
 .env
+
+# Demo-grade persisted metrics state (feature: persistent metrics) — runtime
+# output from actually running the server locally, not source.
+metrics-state.json

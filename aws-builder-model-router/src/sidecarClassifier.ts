@@ -142,10 +142,15 @@ export class MockSidecarClassifier implements SidecarClassifier {
   async classify(input: string): Promise<SidecarResult> {
     const text = input.toLowerCase();
 
-    const hitCounts = KEYWORD_SETS.map((set) => ({
-      label: set.label,
-      hits: set.keywords.filter((keyword) => text.includes(keyword)).length,
-    }));
+    // Track *which* keyword(s) matched, not just a count — this is the
+    // sidecar's explainability story (feature: classification explainability).
+    // A trained-model endpoint wouldn't have this exact signal (see
+    // SidecarResult's doc comment), but a hand-written rule set gets it for
+    // free, which is one honest advantage of choosing simplicity here.
+    const hitCounts = KEYWORD_SETS.map((set) => {
+      const matches = set.keywords.filter((keyword) => text.includes(keyword));
+      return { label: set.label, hits: matches.length, matches };
+    });
 
     let winner = hitCounts[0];
     for (const candidate of hitCounts) {
@@ -156,7 +161,7 @@ export class MockSidecarClassifier implements SidecarClassifier {
       // No keyword signal at all — the sidecar has nothing to go on, so it
       // reports its default label at low confidence, which is exactly the
       // signal the router needs to escalate to the foundation model.
-      return { label: "informational", confidence: 0.3 };
+      return { label: "informational", confidence: 0.3, matchedKeywords: [] };
     }
 
     let confidence = confidenceForHits(winner.hits);
@@ -168,6 +173,6 @@ export class MockSidecarClassifier implements SidecarClassifier {
       confidence = Math.max(0.2, confidence - 0.15);
     }
 
-    return { label: winner.label, confidence };
+    return { label: winner.label, confidence, matchedKeywords: winner.matches };
   }
 }

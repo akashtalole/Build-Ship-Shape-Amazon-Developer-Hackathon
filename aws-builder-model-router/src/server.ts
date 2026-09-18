@@ -143,6 +143,27 @@ export function createApp(router: ModelRouter, options: { rateLimiter?: RateLimi
     res.json(router.getMetrics());
   });
 
+  // Cost-budget enforcement (feature: cost-budget enforcement). See
+  // budgetTracker.ts for exactly what "limit"/"periodMs" mean (a fixed-window
+  // dollar cap on paid-tier — reviewer + foundation — spend).
+  app.post("/budget", (req, res) => {
+    const { limit, periodMs } = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
+      res.status(400).json({ error: "A positive numeric 'limit' (dollars per period) is required." });
+      return;
+    }
+    if (typeof periodMs !== "number" || !Number.isFinite(periodMs) || periodMs <= 0) {
+      res.status(400).json({ error: "A positive numeric 'periodMs' (period length in milliseconds) is required." });
+      return;
+    }
+    router.setBudget(limit, periodMs);
+    res.status(200).json(router.getBudgetStatus());
+  });
+
+  app.get("/budget", (_req, res) => {
+    res.json(router.getBudgetStatus());
+  });
+
   app.get("/healthz", (_req, res) => {
     res.json({ status: "ok" });
   });

@@ -12,18 +12,34 @@ export type UrgencyLabel = "urgent" | "routine" | "informational";
 /**
  * Which path a given request took through the router.
  *   - "sidecar"    the sidecar's own confident answer, no escalation needed
- *   - "foundation" escalated to the foundation model and it answered successfully
+ *                  (this is also reported for a budget-throttled response —
+ *                  see `budgetExceeded` on RouteResult to tell the two apart)
+ *   - "reviewer"   escalated to the cheaper/faster mid-tier "reviewer" model,
+ *                  which confirmed the sidecar's label and resolved it there
+ *   - "foundation" escalated to the full foundation model (either directly,
+ *                  because confidence was too low even for the reviewer tier,
+ *                  or after the reviewer was *also* unsure) and it answered
+ *                  successfully
  *   - "fallback"   escalation was needed but the foundation model was unavailable
  *                  (simulated failure/timeout, or the circuit breaker was open),
  *                  so the sidecar's best-effort answer was used instead — see
  *                  `fallbackUsed` on RouteResult for the human-readable reason.
  */
-export type RoutePath = "sidecar" | "foundation" | "fallback";
+export type RoutePath = "sidecar" | "reviewer" | "foundation" | "fallback";
 
-/** Result shape returned by a SageMaker-runtime-style classifier endpoint. */
+/**
+ * Result shape returned by a SageMaker-runtime-style classifier endpoint.
+ * `matchedKeywords` is optional and specific to `MockSidecarClassifier`'s
+ * keyword-heuristic implementation (its explainability story) — a real
+ * trained-model endpoint (see that class's doc comment for the swap-in code)
+ * would need a different explainability mechanism (e.g. attention weights or
+ * SHAP values) and may simply omit this field.
+ */
 export interface SidecarResult {
   label: string;
   confidence: number; // 0..1
+  /** Which keyword(s)/pattern(s) contributed to this classification, in the order they're listed in the matcher's keyword set. Empty when nothing matched. */
+  matchedKeywords?: string[];
 }
 
 /** Result shape returned by a Bedrock-runtime-style model invocation. */
@@ -50,6 +66,8 @@ export interface RouteResult {
   confidence: number;
   explanation: string;
   sidecar: SidecarResult & CostEstimate;
+  /** Present only when the mid-tier reviewer model was actually invoked (path "reviewer", or "foundation"/"fallback" reached via the reviewer being unsure). */
+  reviewer?: FoundationResult & CostEstimate;
   foundation?: FoundationResult & CostEstimate;
   totalCostUsd: number;
   totalLatencyMs: number;
@@ -61,6 +79,14 @@ export interface RouteResult {
    * best-effort answer was returned instead of failing the request.
    */
   fallbackUsed?: boolean;
+  /**
+   * True when escalation was needed but the configured cost budget for the
+   * current period was already exhausted, so the router auto-throttled and
+   * returned the sidecar's best-effort answer (`path: "sidecar"`) instead of
+   * calling any paid model tier. Lets a caller tell this apart from a normal
+   * fast-path hit, which never sets this flag.
+   */
+  budgetExceeded?: boolean;
 }
 
 /** State of the router's foundation-model circuit breaker. */
@@ -96,4 +122,13 @@ export interface MetricsSnapshot {
   currentThreshold: number; // the threshold most recently used by a /classify call
   suggestedThreshold: number | null; // null when there isn't enough signal to suggest a change
   thresholdSuggestionReason: string;
+
+  // --- Three-tier cascade: mid-tier reviewer (round 3) ---
+  /** Requests resolved at the mid tier (the cheaper/faster reviewer model confirmed the sidecar's label). */
+  reviewerPathRequests: number;
+  reviewerPathRate: number; // reviewerPathRequests / totalRequests, 0 when no requests yet
+
+  // --- Cost-budget enforcement (round 3) ---
+  /** Requests where escalation was needed but the configured cost budget was already exhausted, so the sidecar's best-effort answer was returned instead (see RouteResult.budgetExceeded). Not counted in sidecarPathRequests. */
+  budgetThrottledRequests: number;
 }
