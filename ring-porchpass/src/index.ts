@@ -2,12 +2,14 @@ import { createApp } from "./server.js";
 import { SimulatedRingClient } from "./ringClient.js";
 import { LoggingNotifier } from "./notify.js";
 import { DEFAULT_DEV_WEBHOOK_SECRET, getWebhookSecret } from "./webhookAuth.js";
+import { SimulatedGeoVerifier } from "./geo.js";
 
 const PORT = Number(process.env.PORT ?? 4444);
 
 const ringClient = new SimulatedRingClient();
 const notifier = new LoggingNotifier();
-const app = createApp(ringClient, notifier);
+const geoVerifier = new SimulatedGeoVerifier();
+const app = createApp(ringClient, notifier, geoVerifier);
 
 app.listen(PORT, () => {
   console.log(`PorchPass listening on http://localhost:${PORT}`);

@@ -19,8 +19,11 @@ import { getSettings, isWithinQuietHours } from "./settings.js";
 import { checkAndRecordAttempt } from "./rateLimiter.js";
 import { eventBus } from "./eventBus.js";
 import { FRONT_DOOR_DEVICE_ID, registerDevice } from "./devices.js";
-import { decryptField, encryptField, maskPhone } from "./crypto.js";
+import { decryptField, encryptField, maskPhone, phoneLookupKey } from "./crypto.js";
 import { formatDuration } from "./format.js";
+import { computeTrustScore } from "./trust.js";
+import { DEFAULT_GEOFENCE_RADIUS_METERS, type GeoVerifier } from "./geo.js";
+import { broadcastNeighborhoodAlert, recordFailedCheckIn, recordRevokedCheckInAttempt } from "./neighborhoodWatch.js";
 
 // How far back to look for a Ring event to correlate with a check-in — a
 // visitor tapping the link and the doorbell/motion event should land within
@@ -49,6 +52,8 @@ export interface IssuePassInput {
   allowQuietHours?: boolean; // let this specific pass check in during household quiet hours
   idempotencyKey?: string; // retrying issuance with the same key returns the original pass, unchanged
   deviceIds?: string[]; // which registered Ring device(s) this pass's check-in should correlate against; defaults to [FRONT_DOOR_DEVICE_ID]
+  autoApproveExtensionsAboveTrust?: number; // round 5: auto-approve a grace-period extension request once this visitor's trust score is >= this value
+  requireGeofence?: boolean; // round 5: this pass can't check in until a location ping confirms the visitor is near the property
 }
 
 export async function issuePass(input: IssuePassInput, notifier: Notifier): Promise<Pass> {
@@ -79,6 +84,10 @@ export async function issuePass(input: IssuePassInput, notifier: Notifier): Prom
     // crypto.ts and `decryptVisitorPhone` below for the only place it comes
     // back out.
     visitorPhoneEnc: encryptField(input.visitorPhone),
+    // A one-way HMAC of the same plaintext number — see the doc comment on
+    // `Pass.visitorPhoneLookup` and `crypto.ts#phoneLookupKey`. Computed once,
+    // here, from the only place `issuePass` ever sees the plaintext.
+    visitorPhoneLookup: phoneLookupKey(input.visitorPhone),
     issuedAt: now.toISOString(),
     validFrom: input.validFrom ?? now.toISOString(),
     validUntil: input.validUntil,
@@ -90,6 +99,8 @@ export async function issuePass(input: IssuePassInput, notifier: Notifier): Prom
     allowQuietHours: input.allowQuietHours,
     idempotencyKey: input.idempotencyKey,
     deviceIds: input.deviceIds,
+    autoApproveExtensionsAboveTrust: input.autoApproveExtensionsAboveTrust,
+    requireGeofence: input.requireGeofence,
   };
   savePass(pass);
   if (input.idempotencyKey) {
@@ -122,10 +133,10 @@ export function decryptVisitorPhone(pass: Pass): string {
  * without the API ever re-exposing the full plaintext number it took care to
  * encrypt at rest in the first place.
  */
-export type PassView = Omit<Pass, "visitorPhoneEnc"> & { visitorPhone: string };
+export type PassView = Omit<Pass, "visitorPhoneEnc" | "visitorPhoneLookup"> & { visitorPhone: string };
 
 export function serializePass(pass: Pass): PassView {
-  const { visitorPhoneEnc: _visitorPhoneEnc, ...rest } = pass;
+  const { visitorPhoneEnc: _visitorPhoneEnc, visitorPhoneLookup: _visitorPhoneLookup, ...rest } = pass;
   return { ...rest, visitorPhone: maskPhone(decryptVisitorPhone(pass)) };
 }
 
@@ -136,9 +147,19 @@ export function effectiveStatus(pass: Pass, now = new Date()): Pass["status"] {
   return pass.status;
 }
 
+export type CheckInReasonCode =
+  | "expired"
+  | "revoked"
+  | "used_up"
+  | "not_yet_valid"
+  | "recurrence"
+  | "geofence"
+  | "quiet_hours";
+
 export interface CheckInResult {
   ok: boolean;
   reason?: string;
+  reasonCode?: CheckInReasonCode; // machine-readable companion to `reason` — used by neighborhoodWatch.ts's risk detection so it isn't parsing prose
   pass?: Pass;
   visit?: Visit;
   rateLimited?: boolean;
@@ -148,25 +169,25 @@ export interface CheckInResult {
   graceEligible?: boolean;
 }
 
-export async function checkIn(token: string, ringClient: RingClient, notifier: Notifier): Promise<CheckInResult> {
-  // Rate-limit by the token being attempted, valid or not — brute-forcing a
-  // guessed token is exactly the attack this closes off, so an unknown token
-  // must count against the limit the same as a real one.
-  const rateLimit = checkAndRecordAttempt(token);
-  if (!rateLimit.allowed) {
-    const retryMinutes = Math.ceil((rateLimit.retryAfterMs ?? 0) / 60000);
-    return {
-      ok: false,
-      rateLimited: true,
-      reason: `Too many check-in attempts for this link. Please try again in about ${retryMinutes} minute${retryMinutes === 1 ? "" : "s"}.`,
-    };
-  }
+interface CheckInConfirmation {
+  confirmedVia: "link" | "voice";
+  confirmedByMember?: string; // household member id, when confirmedVia === "voice"
+}
 
-  const pass = getPassByToken(token);
-  if (!pass) {
-    return { ok: false, reason: "This access link isn't valid." };
-  }
-
+/**
+ * The actual access-control decision, shared by every way a check-in can be
+ * confirmed: the visitor tapping their link (`checkIn`, below) and a
+ * household member voice-confirming them instead (`voiceConfirmCheckIn`,
+ * round 5's Alexa+ integration seam). Identical policy either way — *how*
+ * a visitor's identity got confirmed doesn't change whether the pass itself
+ * is valid, recurring-window-scoped, geofenced, or subject to quiet hours.
+ */
+async function performCheckIn(
+  pass: Pass,
+  ringClient: RingClient,
+  notifier: Notifier,
+  confirmation: CheckInConfirmation
+): Promise<CheckInResult> {
   const now = new Date();
   const status = effectiveStatus(pass, now);
   // Set when an already-approved grace-period extension is what's letting
@@ -189,17 +210,17 @@ export async function checkIn(token: string, ringClient: RingClient, notifier: N
       // been requested (pending, approved-but-lapsed, or denied), a repeat
       // rejection shouldn't invite another request.
       const graceEligible = !pass.extension && isWithinGraceWindow(pass, now);
-      return { ok: false, reason: "This pass has expired.", pass, graceEligible };
+      return { ok: false, reason: "This pass has expired.", reasonCode: "expired", pass, graceEligible };
     }
   }
   if (status === "revoked") {
-    return { ok: false, reason: "This pass has been revoked.", pass };
+    return { ok: false, reason: "This pass has been revoked.", reasonCode: "revoked", pass };
   }
   if (status === "used_up") {
-    return { ok: false, reason: "This pass has already been used.", pass };
+    return { ok: false, reason: "This pass has already been used.", reasonCode: "used_up", pass };
   }
   if (!usingExtension && now.getTime() < new Date(pass.validFrom).getTime()) {
-    return { ok: false, reason: "This pass isn't active yet.", pass };
+    return { ok: false, reason: "This pass isn't active yet.", reasonCode: "not_yet_valid", pass };
   }
 
   // Recurring passes narrow validity further within [validFrom, validUntil]:
@@ -210,6 +231,21 @@ export async function checkIn(token: string, ringClient: RingClient, notifier: N
     return {
       ok: false,
       reason: "This pass's recurring schedule doesn't cover the current day/time.",
+      reasonCode: "recurrence",
+      pass,
+    };
+  }
+
+  // Geofenced activation (round 5): unlike recurrence, this is NOT skipped
+  // for a grace-period extension — an extension only forgives the pass being
+  // outside its own *time* window, it says nothing about the visitor's
+  // *location*, so a pass requiring proximity confirmation still requires it
+  // here. See geo.ts and `POST /passes/:id/location-ping`.
+  if (pass.requireGeofence && !pass.geofenceConfirmedAt) {
+    return {
+      ok: false,
+      reason: "This pass requires confirming you're near the property before checking in — send a location ping first.",
+      reasonCode: "geofence",
       pass,
     };
   }
@@ -222,6 +258,7 @@ export async function checkIn(token: string, ringClient: RingClient, notifier: N
     return {
       ok: false,
       reason: `Check-ins aren't accepted during quiet hours (${settings.quietHours.start}–${settings.quietHours.end} UTC).`,
+      reasonCode: "quiet_hours",
       pass,
     };
   }
@@ -247,19 +284,171 @@ export async function checkIn(token: string, ringClient: RingClient, notifier: N
     visitorName: pass.visitorName,
     checkedInAt: now.toISOString(),
     matchedEvent,
+    confirmedVia: confirmation.confirmedVia,
+    confirmedByMember: confirmation.confirmedByMember,
+    usedGraceExtension: usingExtension || undefined,
   };
   addVisit(visit);
 
   const clipNote = matchedEvent ? ` See the doorbell snapshot: ${matchedEvent.snapshotUrl}` : "";
+  const viaNote = confirmation.confirmedVia === "voice" ? ` (voice-confirmed by ${confirmation.confirmedByMember})` : "";
   await notifier.send(
     "homeowner",
     "push",
-    `${pass.visitorName} (${pass.note ?? "guest"}) just checked in.${clipNote}`
+    `${pass.visitorName} (${pass.note ?? "guest"}) just checked in${viaNote}.${clipNote}`
   );
 
   eventBus.publish({ type: "visit_checkin", at: now.toISOString(), pass, visit });
 
   return { ok: true, pass, visit };
+}
+
+/**
+ * Round 5 (neighborhood alert broadcast): after any check-in attempt that
+ * did NOT succeed, feed it into `neighborhoodWatch.ts`'s risk detectors and
+ * broadcast an alert the moment a real pattern is found. Runs for every
+ * failure path (`checkIn` and `voiceConfirmCheckIn` alike) — the risk a
+ * pattern like this signals has nothing to do with which door the attempt
+ * came through.
+ */
+function trackCheckInRisk(pass: Pass, result: CheckInResult): void {
+  if (result.ok) return;
+  if (result.reasonCode === "revoked") {
+    const revocationSignal = recordRevokedCheckInAttempt(pass.id);
+    if (revocationSignal) broadcastNeighborhoodAlert(revocationSignal, pass.visitorName);
+  }
+  const failureSignal = recordFailedCheckIn(pass.id);
+  if (failureSignal) broadcastNeighborhoodAlert(failureSignal, pass.visitorName);
+}
+
+export async function checkIn(token: string, ringClient: RingClient, notifier: Notifier): Promise<CheckInResult> {
+  // Rate-limit by the token being attempted, valid or not — brute-forcing a
+  // guessed token is exactly the attack this closes off, so an unknown token
+  // must count against the limit the same as a real one.
+  const rateLimit = checkAndRecordAttempt(token);
+  if (!rateLimit.allowed) {
+    const retryMinutes = Math.ceil((rateLimit.retryAfterMs ?? 0) / 60000);
+    return {
+      ok: false,
+      rateLimited: true,
+      reason: `Too many check-in attempts for this link. Please try again in about ${retryMinutes} minute${retryMinutes === 1 ? "" : "s"}.`,
+    };
+  }
+
+  const pass = getPassByToken(token);
+  if (!pass) {
+    return { ok: false, reason: "This access link isn't valid." };
+  }
+
+  const result = await performCheckIn(pass, ringClient, notifier, { confirmedVia: "link" });
+  trackCheckInRisk(pass, result);
+  return result;
+}
+
+/**
+ * Round 5's Alexa+ ecosystem tie-in: a household member confirming a
+ * visitor's identity out loud (e.g. "yes, let the dog walker in" in response
+ * to a doorbell announcement) instead of the visitor tapping their link. This
+ * is the seam a real Alexa+ skill/MCP client would call — see
+ * `POST /passes/:id/voice-confirm` in server.ts and the README section on
+ * it for the full framing (mirroring how `ringClient.ts` documents the Ring
+ * integration seam).
+ *
+ * Identified by pass ID rather than a check-in token: a voice command names
+ * a visitor/pass, not a token from the visitor's own SMS. `memberId` is
+ * whichever household member is speaking (see `household.ts`'s caller
+ * model) — the caller must already resolve to a known member; that check
+ * happens in server.ts before this is ever called.
+ */
+export async function voiceConfirmCheckIn(
+  passId: string,
+  memberId: string,
+  ringClient: RingClient,
+  notifier: Notifier
+): Promise<CheckInResult> {
+  const rateLimit = checkAndRecordAttempt(`voice:${passId}`);
+  if (!rateLimit.allowed) {
+    const retryMinutes = Math.ceil((rateLimit.retryAfterMs ?? 0) / 60000);
+    return {
+      ok: false,
+      rateLimited: true,
+      reason: `Too many voice-confirm attempts for this pass. Please try again in about ${retryMinutes} minute${retryMinutes === 1 ? "" : "s"}.`,
+    };
+  }
+
+  const pass = getPassById(passId);
+  if (!pass) {
+    return { ok: false, reason: "No pass with that ID." };
+  }
+
+  const result = await performCheckIn(pass, ringClient, notifier, { confirmedVia: "voice", confirmedByMember: memberId });
+  trackCheckInRisk(pass, result);
+  return result;
+}
+
+// --- Geofenced pass activation (round 5) ------------------------------------
+//
+// A pass issued with `requireGeofence: true` can't check in — by link OR by
+// voice confirmation, see `performCheckIn` above — until a location ping
+// lands within the household's configured home radius. The "real" location
+// source is deliberately behind the `GeoVerifier` seam (geo.ts), the same
+// pattern `RingClient` uses for Ring itself: no real geolocation hardware is
+// available in this sandboxed environment, so a raw lat/lng from a request
+// body stands in for what a companion mobile app's native geolocation API
+// would provide in production.
+
+export interface LocationPingResult {
+  ok: boolean;
+  reason?: string;
+  rateLimited?: boolean;
+  distanceMeters?: number;
+  withinRadius?: boolean;
+  pass?: Pass;
+}
+
+export function submitLocationPing(passId: string, lat: number, lng: number, geoVerifier: GeoVerifier): LocationPingResult {
+  // Same brute-force reasoning as check-in/checkout rate limiting: an
+  // attacker probing for the configured radius by trial and error is exactly
+  // what this budget protects against.
+  const rateLimit = checkAndRecordAttempt(`geofence:${passId}`);
+  if (!rateLimit.allowed) {
+    const retryMinutes = Math.ceil((rateLimit.retryAfterMs ?? 0) / 60000);
+    return {
+      ok: false,
+      rateLimited: true,
+      reason: `Too many location pings for this pass. Please try again in about ${retryMinutes} minute${retryMinutes === 1 ? "" : "s"}.`,
+    };
+  }
+
+  const pass = getPassById(passId);
+  if (!pass) {
+    return { ok: false, reason: "No pass with that ID." };
+  }
+  if (!pass.requireGeofence) {
+    return { ok: false, reason: "This pass doesn't require location confirmation.", pass };
+  }
+
+  const settings = getSettings();
+  if (!settings.homeLocation) {
+    return { ok: false, reason: "The household hasn't configured a home location yet — contact them directly.", pass };
+  }
+
+  const radiusMeters = settings.geofenceRadiusMeters ?? DEFAULT_GEOFENCE_RADIUS_METERS;
+  const { withinRadius, distanceMeters } = geoVerifier.verifyProximity(lat, lng, settings.homeLocation, radiusMeters);
+
+  if (withinRadius) {
+    pass.geofenceConfirmedAt = new Date().toISOString();
+    savePass(pass);
+    return { ok: true, withinRadius, distanceMeters, pass };
+  }
+
+  return {
+    ok: false,
+    withinRadius,
+    distanceMeters,
+    pass,
+    reason: `You appear to be about ${Math.round(distanceMeters)}m from the property — check-in unlocks once you're within ${radiusMeters}m.`,
+  };
 }
 
 export function revokePass(id: string): Pass | undefined {
@@ -297,10 +486,20 @@ export interface ExtensionRequestResult {
   ok: boolean;
   reason?: string;
   pass?: Pass;
+  // Round 5: set when this request was decided instantly against
+  // `pass.autoApproveExtensionsAboveTrust` instead of waiting on the
+  // homeowner — see the trust-score check below.
+  autoApproved?: boolean;
 }
 
-/** Called from `POST /checkin/:token/request-extension` — a visitor asking for a few more minutes on a pass that just expired. */
-export async function requestExtension(token: string, notifier: Notifier): Promise<ExtensionRequestResult> {
+/**
+ * Called from `POST /checkin/:token/request-extension` — a visitor asking
+ * for a few more minutes on a pass that just expired. `checkinBaseUrl`
+ * (round 5) is only used if the request is auto-approved on the spot — see
+ * below — so the visitor's SMS can include a working check-in link exactly
+ * like a homeowner's manual approval already does via `decideExtension`.
+ */
+export async function requestExtension(token: string, notifier: Notifier, checkinBaseUrl?: string): Promise<ExtensionRequestResult> {
   const pass = getPassByToken(token);
   if (!pass) {
     return { ok: false, reason: "This access link isn't valid." };
@@ -333,6 +532,22 @@ export async function requestExtension(token: string, notifier: Notifier): Promi
   const extension: PassExtension = { status: "pending", requestedAt: now.toISOString() };
   pass.extension = extension;
   savePass(pass);
+
+  // Round 5 (visitor trust scoring): a homeowner can pre-authorize a
+  // recurring visitor's future grace-period requests via
+  // `autoApproveExtensionsAboveTrust`, so they're not asked to approve every
+  // single one by hand. If set, and this visitor's current trust score (real
+  // history: completed visits, revocations, no-shows, late arrivals — see
+  // trust.ts) already clears that bar, decide it immediately via the exact
+  // same `decideExtension` path a manual approval takes — no second,
+  // duplicate approval code path to keep in sync.
+  if (pass.autoApproveExtensionsAboveTrust !== undefined) {
+    const trust = computeTrustScore(decryptVisitorPhone(pass), now);
+    if (trust.score >= pass.autoApproveExtensionsAboveTrust) {
+      const decision = await decideExtension(pass.id, true, notifier, checkinBaseUrl);
+      return { ok: true, pass: decision.pass, autoApproved: true };
+    }
+  }
 
   await notifier.send(
     "homeowner",

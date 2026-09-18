@@ -30,20 +30,24 @@ integration point isolated to a single file (`src/ringClient.ts`) — see [Swapp
 ```
 src/
   types.ts            Pass, Visit, RingEvent, Notification, RecurrenceRule, Device, PassExtension, EncryptedField data model
-  store.ts            In-memory pass/visit storage + idempotency-key cache
+  store.ts            In-memory pass/visit storage + idempotency-key cache + visitor-identity phone-lookup index (round 5)
   devices.ts          Ring device registry: implicit + explicit device registration (multi-device support)
   ringClient.ts        RingClient interface + SimulatedRingClient (the Ring integration seam)
   notify.ts            Notifier interface + LoggingNotifier (the SMS/push integration seam)
-  passService.ts       Core access-control logic: issue, check in, check out, expire, revoke, grace-period extensions
+  passService.ts       Core access-control logic: issue, check in (link or voice), check out, expire, revoke,
+                        grace-period extensions (with trust-gated auto-approval), geofence confirmation
   recurrence.ts        Recurring-pass rule evaluation (daysOfWeek + time-of-day window)
-  settings.ts          Household settings: quiet hours
+  settings.ts          Household settings: quiet hours, home location + geofence radius (round 5)
   household.ts         Household member directory + owner/member role checks (round 4)
-  crypto.ts             AES-256-GCM field encryption for visitor PII at rest (round 4)
+  crypto.ts             AES-256-GCM field encryption for visitor PII at rest (round 4) + one-way phone lookup key (round 5)
   analytics.ts          Traffic/analytics report built from real visit history (round 4)
+  trust.ts              Visitor trust scoring: explainable 0-100 score from real pass/visit history (round 5)
+  geo.ts                GeoVerifier interface + SimulatedGeoVerifier (the geolocation integration seam, round 5)
+  neighborhoodWatch.ts  Risk-pattern detection + signed neighborhood-watch alert broadcast (round 5)
   format.ts             Shared duration/day/hour formatting helpers (round 4)
   webhookAuth.ts        HMAC-SHA256 signing/verification for the *inbound* Ring webhook ingress
-  outboundWebhooks.ts   HMAC-signed *outbound* webhook delivery (retry+backoff) to a homeowner's own callback URL
-  rateLimiter.ts        In-memory sliding-window rate limiter for check-in/checkout attempts
+  outboundWebhooks.ts   HMAC-signed *outbound* webhook delivery (retry+backoff) — reused by neighborhoodWatch.ts too
+  rateLimiter.ts        In-memory sliding-window rate limiter for check-in/checkout/voice-confirm/location-ping attempts
   eventBus.ts          Pub/sub used to push live events to SSE dashboard clients and outbound webhooks
   server.ts            Express app: homeowner API, visitor check-in/checkout flow, Ring event ingress, SSE stream
   index.ts             Entry point
@@ -53,7 +57,9 @@ test/
                    issuance → recurring passes → webhook signature verification → live SSE stream →
                    quiet hours → check-in rate limiting → multi-device correlation → outbound webhook
                    delivery → bulk/template issuance → grace-period extension approval/denial → visit
-                   duration tracking → traffic analytics → household member roles → encrypted-at-rest PII
+                   duration tracking → traffic analytics → household member roles → encrypted-at-rest PII →
+                   visitor trust scoring (+ trust-gated auto-approval) → Alexa+ voice-confirmed check-in →
+                   geofenced pass activation → neighborhood alert broadcast
 ```
 
 ## Running it
@@ -113,11 +119,12 @@ a (simulated) SMS with a check-in link; a simulated doorbell event plus a visito
 visit with a snapshot URL and a homeowner notification; a single-use pass rejects a second check-in; a `maxUses: 2`
 pass allows exactly two; a revoked pass and an expired pass both correctly deny access — then a second round covers
 every feature in [Advanced features](#advanced-features), a third round covers every feature in
-[Round 3 additions](#round-3-additions), and a fourth round covers every feature in
-[Round 4 additions](#round-4-additions) below — including spinning up a real local HTTP listener in the test process
-to receive and verify an outbound webhook delivery, and reaching directly into the in-memory store (`store.ts`) to
-confirm a visitor's phone number is never present in plaintext anywhere in the raw stored record, not just absent
-from the API's response shape. No external services required.
+[Round 3 additions](#round-3-additions), a fourth round covers every feature in
+[Round 4 additions](#round-4-additions), and a fifth round covers every feature in
+[Round 5 additions](#round-5-additions) below — including spinning up two more real local HTTP listeners to verify a
+neighborhood alert broadcast is independently signed per recipient, and computing a visitor's trust score across
+multiple issued passes to confirm the score is exactly the sum of its explainable factors. No external services
+required.
 
 ## Advanced features
 
@@ -482,7 +489,134 @@ curl -X POST localhost:4444/passes -H "Content-Type: application/json" -d '{
 # number — decrypted right there, at the point of actually sending it.
 ```
 
-## Swapping in the real Ring API
+## Round 5 additions
+
+Four genuinely new capabilities, not more infrastructure hardening: visitor trust scoring, an Alexa+ ecosystem
+tie-in, simulated geofenced pass activation, and neighborhood alert broadcast. Every prior round added a production
+concern (webhooks, roles, rate limiting, encryption) — this round adds functionality a homeowner would actually
+notice and want.
+
+### 1. Visitor trust scoring
+
+PorchPass already tracks a visitor's phone number per pass (encrypted at rest since round 4) — round 5 correlates
+it *across* every pass and visit a visitor has ever had, via a one-way HMAC-SHA256 "lookup key"
+(`crypto.ts#phoneLookupKey`) that is never the plaintext number and can't be reversed back into one, only compared.
+`GET /visitors/:phone/trust` turns that history into a deterministic, fully explainable 0-100 score: no ML, no
+hidden weights — the score is nothing more than the sum of a `factors` array, each entry naming exactly which real
+signal moved the score and by how much. The signals are all things already sitting in `store.ts`: completed visits
+(arrived *and* checked out cleanly, +8 each up to +40), revocations (the household actually revoked a pass, -25
+each up to -50), no-shows (a pass that expired without the visitor ever checking in at all, -15 each up to -45),
+and late arrivals (a visit that only succeeded via a homeowner-approved grace-period extension — i.e. outside the
+pass's own expected window, -10 each up to -30).
+
+```bash
+curl "localhost:4444/visitors/%2B15551234567/trust"   # %2B is a URL-encoded '+'
+# -> {
+#   "visitorPhone": "••••••••4567", "score": 58, "passesConsidered": 2,
+#   "completedVisits": 1, "revocations": 0, "noShows": 0, "lateArrivals": 0,
+#   "factors": [
+#     { "label": "Baseline score for any visitor, with or without history", "delta": 50 },
+#     { "label": "1 completed visit (arrived and checked out cleanly)", "delta": 8 }
+#   ]
+# }
+```
+
+Trust scoring also plugs directly into pass issuance and the existing grace-period extension flow, rather than
+sitting off to the side as a read-only report: a pass can carry `autoApproveExtensionsAboveTrust: <N>`, and the
+*next* time that visitor's pass expires and they request a few more minutes
+(`POST /checkin/:token/request-extension`), PorchPass checks their current trust score against `N` and — if it
+clears the bar — approves the request instantly via the exact same `decideExtension` code path a manual homeowner
+approval takes, instead of waiting on the homeowner to decide every single time. This is the "auto-approve future
+recurring visits above trust N" behavior a homeowner would actually want for a standing dog walker or cleaner,
+without ever having to trust a black box to make the call.
+
+```bash
+# A homeowner issuing a pass for a long-standing, trusted visitor:
+curl -X POST localhost:4444/passes -H "Content-Type: application/json" -d '{
+  "visitorName": "Alex the Dog Walker", "visitorPhone": "+15551234567",
+  "validUntil": "2026-12-01T00:00:00Z", "autoApproveExtensionsAboveTrust": 70
+}'
+# The next time Alex's pass expires and they request a few more minutes, if their
+# trust score is already >= 70, they're approved instantly — no round trip to the
+# homeowner's phone required. Below 70, it still waits on a manual decision exactly
+# like every prior round's extension flow.
+```
+
+### 2. Alexa+ ecosystem tie-in: voice-verified check-in confirmation
+
+This hackathon explicitly rewards ideas that combine tracks. `POST /passes/:id/voice-confirm` is the integration
+seam for a real Alexa+ skill (or an MCP client speaking for one): instead of the visitor tapping their link, a
+household member confirms the visitor's identity out loud in response to a doorbell announcement — "yes, let the
+dog walker in" — and the skill calls this endpoint on their behalf. In production this would be a small MCP tool
+an Alexa+-connected client calls, exactly mirroring how `ringClient.ts` is the documented seam for the real Ring
+API: this endpoint *is* the seam, not a stub waiting to be replaced.
+
+Crucially, voice confirmation doesn't bypass a single access-control rule — it's the exact same `performCheckIn`
+policy engine as the link flow (recurrence windows, quiet hours, geofencing, expiry, revocation, use-limits), just
+identified by pass ID instead of a check-in token and confirmed by a household member instead of the visitor. The
+resulting `Visit` record carries `confirmedVia: "voice"` and `confirmedByMember` so the audit trail
+(`GET /visits`) always shows *how* someone got in, not just that they did. Any known household member — not just
+the owner — can voice-confirm a visitor, the same way any adult in a real household could plausibly say "let them
+in."
+
+```bash
+# A household member says "yes, let the dog walker in" — the skill resolves that to a pass and calls:
+curl -X POST localhost:4444/passes/<passId>/voice-confirm -H "X-PorchPass-Member: jamie"
+# -> { "ok": true, "visit": { "confirmedVia": "voice", "confirmedByMember": "jamie", ... }, ... }
+```
+
+### 3. Geofenced pass activation (simulated)
+
+A check-in link is only as secure as knowing it can't be used from anywhere in the world the moment it's
+intercepted. A pass issued with `requireGeofence: true` adds a location constraint on top of everything else: it
+can't check in (by link *or* by voice) until a simulated location ping
+(`POST /passes/:id/location-ping { lat, lng }`) confirms the visitor is within the household's configured home
+radius (`POST /settings/location`). There's no real geolocation hardware available in this sandboxed environment,
+so — exactly the same pattern `ringClient.ts` uses for Ring itself — the "real" location source sits behind a small
+`GeoVerifier` interface (`geo.ts`); `SimulatedGeoVerifier` does the honest haversine-distance math on whatever
+coordinates it's given, with a doc comment spelling out what a production implementation actually needs instead (a
+companion mobile app's native geolocation API, which layers in real anti-spoofing a raw POST body can't provide).
+
+```bash
+curl -X POST localhost:4444/settings/location -H "Content-Type: application/json" \
+  -d '{"lat": 37.7749, "lng": -122.4194, "radiusMeters": 150}'
+
+curl -X POST localhost:4444/passes -H "Content-Type: application/json" -d '{
+  "visitorName": "Delivery Driver", "visitorPhone": "+15557778888",
+  "validUntil": "2026-12-01T00:00:00Z", "requireGeofence": true
+}'
+# -> check-in is rejected with reasonCode "geofence" until:
+curl -X POST localhost:4444/passes/<passId>/location-ping -H "Content-Type: application/json" \
+  -d '{"lat": 37.7749, "lng": -122.4194}'
+# -> { "ok": true, "withinRadius": true, "distanceMeters": 0.4, ... } — check-in now succeeds.
+```
+
+### 4. Neighborhood alert broadcast
+
+Ring itself leans heavily into community safety (Neighbors); this models the same idea for PorchPass's own risk
+signals. `neighborhoodWatch.ts` watches every check-in attempt for two real risk patterns: three or more
+failed/expired check-in attempts on the *same* pass within a 5-minute window, or any attempt at all on a pass the
+household has already revoked. The moment either pattern fires, PorchPass broadcasts a signed "neighborhood watch"
+alert to every *other* simulated household that's opted in (`POST /neighborhood/subscribers`) — not just the
+owning household's own SSE feed or outbound webhook. Delivery reuses the exact same HMAC-signing-with-retry
+mechanism as the existing outbound webhook (`outboundWebhooks.ts#deliverSignedPayload`), just fanned out to a list
+of recipients, each with their own PorchPass-generated secret, rather than a second delivery implementation.
+
+```bash
+# Two "neighbor" households opt in (owner-only to register):
+curl -X POST localhost:4444/neighborhood/subscribers -H "Content-Type: application/json" \
+  -d '{"url": "https://neighbor-a.example/porchpass-watch"}'
+curl -X POST localhost:4444/neighborhood/subscribers -H "Content-Type: application/json" \
+  -d '{"url": "https://neighbor-b.example/porchpass-watch"}'
+# -> { "id": "...", "url": "...", "secret": "<save this — the neighbor verifies with it>", "addedAt": "..." }
+
+# Someone tries a revoked pass, or hammers a pass 3+ times in 5 minutes — both neighbors
+# receive a signed POST like:
+# { "event": "neighborhood_watch_alert",
+#   "alert": { "type": "checkin_after_revocation", "passId": "...", "visitorName": "...", "detail": "..." } }
+
+curl localhost:4444/neighborhood/alerts   # the broadcast log, for observability
+```
 
 Everything in `src/passService.ts` and `src/server.ts` is Ring-agnostic — it only depends on the `RingClient`
 interface (`getRecentEvents`, `emitEvent`) in `src/ringClient.ts`. To go from simulator to production:
@@ -509,13 +643,19 @@ was the point of isolating Ring behind an interface from the start.
   non-blocking delivery) and generalizes the whole system from one hardcoded device to a real multi-device
   correlation model. Round 4 adds authorization scoping (owner vs. member roles) and encryption-at-rest for
   visitor PII — the two production concerns a real access-control service can't ship without, alongside turning
-  raw visit history into an actual analytics report instead of just a log.
+  raw visit history into an actual analytics report instead of just a log. Round 5 shifts from hardening to genuine
+  new functionality: a real (if intentionally simple) scoring model built entirely from existing store data, a
+  second simulated-hardware seam (`GeoVerifier`, mirroring `RingClient`'s exact pattern) for geofencing, an
+  Alexa+ integration point that reuses the whole existing check-in policy engine rather than a parallel one, and a
+  broadcast feature that fans the existing outbound-webhook signing/retry mechanism out to N recipients instead of
+  one.
 - **Design:** A genuine "two-tap" flow — the homeowner issues a pass in one call, the visitor confirms with one tap
-  and no app, account, or login. Passes fail closed (expired/revoked/used-up all deny access) rather than open, and
-  now compose multiple independent policy layers cleanly (base validity → recurrence window → quiet hours →
-  grace-period extension) rather than tangling them into one conditional. The extension flow specifically turns a
-  hard failure mode ("you were 90 seconds late, tough luck") into a graceful, homeowner-approved recovery path
-  instead of just a bigger grace window applied blindly to everyone.
+  and no app, account, or login (or, since round 5, a household member confirms by voice instead). Passes fail
+  closed (expired/revoked/used-up all deny access) rather than open, and now compose multiple independent policy
+  layers cleanly (base validity → recurrence window → geofence → quiet hours → grace-period extension) rather than
+  tangling them into one conditional. The extension flow specifically turns a hard failure mode ("you were 90
+  seconds late, tough luck") into a graceful, homeowner-approved — or, once trust is established, instantly
+  auto-approved — recovery path instead of just a bigger grace window applied blindly to everyone.
 - **Potential Impact:** Solves a real, everyday problem (dog walkers, deliveries, contractors, short-term rentals)
   that today gets solved insecurely (a shared permanent code) or not at all (no delegated access at all).
   Recurring passes remove the friction of re-issuing a pass every week for a standing visitor; bulk/template
@@ -523,7 +663,12 @@ was the point of isolating Ring behind an interface from the start.
   usable for a household managing several standing visitors rather than just one. The traffic/analytics report
   turns a household's own visit history into the kind of operational insight the "StoreWatch" idea in
   `hackathon-ideas/ring.md` proposes for small businesses — real value for a household with several standing
-  visitors, not just a security log nobody reads.
+  visitors, not just a security log nobody reads. Round 5's trust scoring removes the last real friction of a
+  recurring pass (being asked to approve the same trusted visitor's edge cases over and over), voice confirmation
+  meets a homeowner where Ring's own ecosystem is headed (Alexa+), geofencing closes the one gap a link-based
+  system can't otherwise close (a leaked link being usable from anywhere), and the neighborhood broadcast turns an
+  individual household's risk signal into the kind of community safety net Ring already invests in at the product
+  level (Neighbors) — genuinely new value, not more plumbing.
 - **Quality of Idea:** Goes beyond a notification app by adding a genuine access-delegation layer — time-boxing,
   use-limits, revocation, and an audit trail — on top of Ring's event stream, one of the five explicitly
   prioritized Ring categories ("access control"). Multi-device support and outbound webhooks both point at the
@@ -532,7 +677,10 @@ was the point of isolating Ring behind an interface from the start.
   earlier rounds rather than bolting on something unrelated. A real household also usually has more than one
   adult with access-control authority (round 4's owner/member roles) and cares that a visitor's phone number isn't
   sitting in plaintext in whatever store PorchPass runs on (round 4's encryption-at-rest) — both are the kind of
-  detail a demo can skip and a real deployment can't.
+  detail a demo can skip and a real deployment can't. Round 5 is the round that stops treating every visitor
+  identically: a visitor's own history now informs how much friction they face next time, exactly the kind of
+  judgment a human homeowner already applies informally and PorchPass can now make explicit and explainable
+  instead of leaving it to memory.
 
 ## Friction log
 

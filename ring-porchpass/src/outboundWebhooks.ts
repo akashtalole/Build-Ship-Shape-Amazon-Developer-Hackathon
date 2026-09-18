@@ -67,17 +67,32 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export interface SignedDeliveryOutcome {
+  ok: boolean;
+  attempts: number;
+  lastError?: string;
+}
+
 /**
- * Delivers one event with up to `MAX_ATTEMPTS` tries and exponential
- * backoff between them. Never throws — a delivery that exhausts every
- * attempt is recorded in `status` (observable via `GET /settings/webhook`)
- * rather than surfaced as an error anywhere, since nothing awaits this
- * function (see the `eventBus.subscribe` callback below).
+ * The reusable core of "sign a JSON payload with a per-receiver secret, POST
+ * it, retry with exponential backoff on failure": used below for the
+ * homeowner's own registered webhook, and reused as-is by
+ * `neighborhoodWatch.ts`'s community-alert broadcast (round 5) — a
+ * neighborhood alert is delivered exactly the same way an outbound event
+ * is, just to a different list of receivers with their own secrets. Never
+ * throws; the caller decides what to do with the outcome (or, for a
+ * fire-and-forget caller, nothing at all).
  */
-async function deliverWithRetry(url: string, payload: string, signature: string, eventType: PorchPassEvent["type"]): Promise<void> {
+export async function deliverSignedPayload(
+  url: string,
+  secret: string,
+  payload: string,
+  eventType: string
+): Promise<SignedDeliveryOutcome> {
+  let lastError: string | undefined;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    status = { ...status, lastEventType: eventType, lastAttemptAt: new Date().toISOString(), lastAttempts: attempt };
     try {
+      const signature = signPayload(secret, payload);
       const res = await fetch(url, {
         method: "POST",
         headers: {
@@ -88,28 +103,43 @@ async function deliverWithRetry(url: string, payload: string, signature: string,
         body: payload,
       });
       if (!res.ok) throw new Error(`Webhook endpoint responded with HTTP ${res.status}`);
-      status = { ...status, lastSuccessAt: new Date().toISOString(), lastError: undefined, consecutiveFailures: 0 };
-      return;
+      return { ok: true, attempts: attempt };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      status = { ...status, lastError: message, consecutiveFailures: status.consecutiveFailures + 1 };
+      lastError = err instanceof Error ? err.message : String(err);
       if (attempt < MAX_ATTEMPTS) {
         await sleep(BASE_RETRY_DELAY_MS * 2 ** (attempt - 1));
       }
     }
   }
+  return { ok: false, attempts: MAX_ATTEMPTS, lastError };
+}
+
+/**
+ * Delivers one event to the homeowner's own registered webhook, recording
+ * the outcome into `status` (observable via `GET /settings/webhook`) —
+ * thin wrapper around `deliverSignedPayload` that adds this feature's own
+ * observability bookkeeping on top of the shared delivery mechanism.
+ */
+async function deliverToRegisteredWebhook(url: string, secret: string, payload: string, eventType: PorchPassEvent["type"]): Promise<void> {
+  status = { ...status, lastEventType: eventType, lastAttemptAt: new Date().toISOString() };
+  const outcome = await deliverSignedPayload(url, secret, payload, eventType);
+  status = { ...status, lastAttempts: outcome.attempts };
+  if (outcome.ok) {
+    status = { ...status, lastSuccessAt: new Date().toISOString(), lastError: undefined, consecutiveFailures: 0 };
+  } else {
+    status = { ...status, lastError: outcome.lastError, consecutiveFailures: status.consecutiveFailures + 1 };
+  }
 }
 
 // Fire-and-forget by construction: this subscribes to the same bus
 // `passService.ts` publishes to *synchronously* on every state-changing
-// action, and never awaits `deliverWithRetry` — so the request that
-// triggered the event (issuing a pass, checking a visitor in, ...) returns
-// to its caller without ever waiting on a slow or failing homeowner
+// action, and never awaits `deliverToRegisteredWebhook` — so the request
+// that triggered the event (issuing a pass, checking a visitor in, ...)
+// returns to its caller without ever waiting on a slow or failing homeowner
 // endpoint, no matter how many retries that delivery ends up taking.
 eventBus.subscribe((event) => {
   if (!registration || !DELIVERABLE_EVENT_TYPES.has(event.type)) return;
   const { url, secret } = registration;
   const payload = JSON.stringify(event);
-  const signature = signPayload(secret, payload);
-  void deliverWithRetry(url, payload, signature, event.type);
+  void deliverToRegisteredWebhook(url, secret, payload, event.type);
 });

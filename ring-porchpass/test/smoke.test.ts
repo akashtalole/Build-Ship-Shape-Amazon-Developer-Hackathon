@@ -8,9 +8,12 @@
  * recurring passes, webhook signature verification, the real-time SSE
  * event stream, quiet-hours enforcement, and check-in rate limiting — a
  * third round covering multi-device support, outbound webhook notifications,
- * bulk/template pass issuance, and the grace-period extension flow — and a
+ * bulk/template pass issuance, and the grace-period extension flow — a
  * fourth round covering visit duration tracking, the traffic/analytics
- * report, household member roles, and encrypted-at-rest visitor PII.
+ * report, household member roles, and encrypted-at-rest visitor PII — and a
+ * fifth round covering visitor trust scoring (and trust-gated auto-approval
+ * of grace-period extensions), Alexa+ voice-confirmed check-in, geofenced
+ * pass activation, and neighborhood alert broadcast.
  * Run with `npm test`.
  */
 import assert from "node:assert/strict";
@@ -868,6 +871,429 @@ async function main() {
   const piiNotification = notifier.history().find((n) => n.to === "visitor" && n.recipient === piiPhone);
   assert.ok(piiNotification, "the notifier still 'sends' the visitor's SMS to the real, decrypted phone number");
   console.log("✓ the visitor-facing notification is still sent to the real decrypted phone number, despite encrypted-at-rest storage");
+
+  // =========================================================================
+  // Round 5: visitor trust scoring, Alexa+ voice-confirmed check-in,
+  // geofenced pass activation, neighborhood alert broadcast
+  // =========================================================================
+
+  // --- 1. Visitor trust scoring ---
+  const trustPhone = "+15557771111";
+  const trustUrl = `${base}/visitors/${encodeURIComponent(trustPhone)}/trust`;
+
+  const trustBaseline = await (await fetch(trustUrl)).json();
+  assert.equal(trustBaseline.score, 50, "a visitor with no history at all starts at the neutral baseline score");
+  assert.equal(trustBaseline.passesConsidered, 0);
+  assert.equal(trustBaseline.factors.length, 1, "with no history, the only factor is the baseline itself");
+  assert.match(trustBaseline.factors[0].label, /baseline/i);
+  console.log("✓ GET /visitors/:phone/trust returns a neutral baseline score for a visitor with no history");
+
+  // A completed visit (arrival + checkout) should raise the score.
+  const trustPassA = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Trust Test Visitor", visitorPhone: trustPhone, validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+    })
+  ).json();
+  await fetch(`${base}/checkin/${trustPassA.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+  await fetch(`${base}/checkin/${trustPassA.checkinToken}/checkout`, { method: "POST", headers: { Accept: "application/json" } });
+  const trustAfterCompleted = await (await fetch(trustUrl)).json();
+  assert.equal(trustAfterCompleted.completedVisits, 1);
+  assert.equal(trustAfterCompleted.score, 58, "one completed visit adds +8 to the baseline of 50");
+  assert.ok(trustAfterCompleted.factors.some((f: { label: string }) => /completed visit/.test(f.label)));
+  console.log("✓ a completed visit (arrival + checkout) raises this visitor's trust score, with a matching explainable factor");
+
+  // A revoked pass for the same visitor identity should lower it.
+  const trustPassB = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Trust Test Visitor", visitorPhone: trustPhone, validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+    })
+  ).json();
+  await fetch(`${base}/passes/${trustPassB.id}`, { method: "DELETE" });
+  const trustAfterRevocation = await (await fetch(trustUrl)).json();
+  assert.equal(trustAfterRevocation.revocations, 1);
+  assert.equal(trustAfterRevocation.score, 33, "a revoked pass on this visitor's history subtracts 25");
+  console.log("✓ a revoked pass on the same visitor identity lowers their trust score");
+
+  // A no-show (expired, never used) pass for the same visitor lowers it further.
+  await fetch(`${base}/passes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      visitorName: "Trust Test Visitor",
+      visitorPhone: trustPhone,
+      validFrom: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      validUntil: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    }),
+  });
+  const trustAfterNoShow = await (await fetch(trustUrl)).json();
+  assert.equal(trustAfterNoShow.noShows, 1);
+  assert.equal(trustAfterNoShow.score, 18, "a pass that expired without ever being used (no-show) subtracts 15 more");
+  console.log("✓ a pass that expired unused (a no-show) further lowers this visitor's trust score");
+
+  // A visit that only succeeded via a grace-period extension (late arrival) lowers it further still.
+  const trustLatePass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        visitorName: "Trust Test Visitor",
+        visitorPhone: trustPhone,
+        validFrom: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        validUntil: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      }),
+    })
+  ).json();
+  await fetch(`${base}/checkin/${trustLatePass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+  await fetch(`${base}/checkin/${trustLatePass.checkinToken}/request-extension`, { method: "POST", headers: { Accept: "application/json" } });
+  await fetch(`${base}/passes/${trustLatePass.id}/extension/approve`, { method: "POST" });
+  await fetch(`${base}/checkin/${trustLatePass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+
+  const trustFinal = await (await fetch(trustUrl)).json();
+  assert.equal(trustFinal.lateArrivals, 1);
+  assert.equal(trustFinal.passesConsidered, 4);
+  assert.equal(trustFinal.score, 8, "baseline 50 + one completed visit (+8) - one revocation (-25) - one no-show (-15) - one late arrival (-10) = 8");
+  assert.equal(
+    trustFinal.factors.reduce((sum: number, f: { delta: number }) => sum + f.delta, 0),
+    trustFinal.score,
+    "the score is nothing more than the sum of the explainable factors — no hidden weighting"
+  );
+  assert.ok(trustFinal.visitorPhone.endsWith("1111") && trustFinal.visitorPhone !== trustPhone, "the trust report masks the phone number, same as everywhere else");
+  console.log("✓ a visit that only succeeded via a grace-period extension lowers trust further, and the final score is fully explained by its factors");
+
+  // --- Trust-gated auto-approval of grace-period extensions ---
+  const autoApprovePhone = "+15557772222";
+  for (let i = 0; i < 3; i++) {
+    const p = await (
+      await fetch(`${base}/passes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visitorName: "Future Regular", visitorPhone: autoApprovePhone, validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+      })
+    ).json();
+    await fetch(`${base}/checkin/${p.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+    await fetch(`${base}/checkin/${p.checkinToken}/checkout`, { method: "POST", headers: { Accept: "application/json" } });
+  }
+  const autoApproveTrust = await (await fetch(`${base}/visitors/${encodeURIComponent(autoApprovePhone)}/trust`)).json();
+  assert.equal(autoApproveTrust.score, 74, "3 completed visits bring this visitor to a score of 74 (50 + 3*8)");
+
+  const autoApprovePass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        visitorName: "Future Regular",
+        visitorPhone: autoApprovePhone,
+        validFrom: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        validUntil: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+        autoApproveExtensionsAboveTrust: 70,
+      }),
+    })
+  ).json();
+  const autoApproveCheckin = await (
+    await fetch(`${base}/checkin/${autoApprovePass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(autoApproveCheckin.graceEligible, true);
+
+  const autoApproveExtRes = await (
+    await fetch(`${base}/checkin/${autoApprovePass.checkinToken}/request-extension`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(autoApproveExtRes.ok, true);
+  assert.equal(autoApproveExtRes.autoApproved, true, "a request from a visitor whose trust score already clears the pass's threshold is auto-approved");
+  assert.equal(autoApproveExtRes.pass.extension.status, "approved");
+  console.log("✓ POST /checkin/:token/request-extension auto-approves instantly when the visitor's trust score clears autoApproveExtensionsAboveTrust");
+
+  const autoApproveFinalCheckin = await (
+    await fetch(`${base}/checkin/${autoApprovePass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(autoApproveFinalCheckin.ok, true, "the auto-approved extension unlocks a check-in exactly like a manual approval would");
+  console.log("✓ an auto-approved extension actually unlocks the next check-in");
+
+  // A visitor who does NOT clear the threshold still waits on a manual decision.
+  const unearnedTrustPhone = "+15557773333";
+  const unearnedPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        visitorName: "Unproven Visitor",
+        visitorPhone: unearnedTrustPhone,
+        validFrom: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        validUntil: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+        autoApproveExtensionsAboveTrust: 90,
+      }),
+    })
+  ).json();
+  await fetch(`${base}/checkin/${unearnedPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+  const unearnedExtRes = await (
+    await fetch(`${base}/checkin/${unearnedPass.checkinToken}/request-extension`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(unearnedExtRes.ok, true);
+  assert.ok(!unearnedExtRes.autoApproved, "a visitor whose trust score doesn't clear the threshold is not auto-approved");
+  assert.equal(unearnedExtRes.pass.extension.status, "pending", "their request waits on the homeowner exactly like before this feature existed");
+  console.log("✓ a visitor below the configured trust threshold still waits on a manual homeowner decision, not an automatic approval");
+
+  // --- 2. Alexa+ ecosystem tie-in: voice-verified check-in confirmation ---
+  const voicePass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Voice Confirmed Visitor", visitorPhone: "+15557774444", validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+    })
+  ).json();
+  const voiceConfirmRes = await fetch(`${base}/passes/${voicePass.id}/voice-confirm`, { method: "POST" });
+  assert.equal(voiceConfirmRes.status, 200);
+  const voiceConfirmResult = await voiceConfirmRes.json();
+  assert.equal(voiceConfirmResult.ok, true, "a household member voice-confirming a visitor checks them in, same as tapping the link");
+  assert.equal(voiceConfirmResult.visit.confirmedVia, "voice");
+  assert.equal(voiceConfirmResult.visit.confirmedByMember, "owner", "no member header defaults to the owner, same as every other household.ts-gated route");
+  assert.equal(voiceConfirmResult.pass.status, "used_up", "voice-confirming consumes the pass's use-count exactly like a link check-in does");
+  console.log("✓ POST /passes/:id/voice-confirm checks a visitor in via household voice confirmation instead of the visitor's own link tap");
+
+  const voiceConfirmAgainRes = await (await fetch(`${base}/passes/${voicePass.id}/voice-confirm`, { method: "POST" })).json();
+  assert.equal(voiceConfirmAgainRes.ok, false, "voice-confirming a used-up pass a second time is rejected, same access-control rules as the link flow");
+  console.log("✓ voice-confirm check-in obeys the exact same validity rules as a link check-in (used_up, expired, revoked, quiet hours, ...)");
+
+  const voiceConfirmUnknownMemberRes = await fetch(`${base}/passes/${voicePass.id}/voice-confirm`, {
+    method: "POST",
+    headers: { "X-PorchPass-Member": "totally-unknown-voice-caller" },
+  });
+  assert.equal(voiceConfirmUnknownMemberRes.status, 401, "an unrecognized household member id is rejected, same as every other household.ts-gated route");
+  console.log("✓ POST /passes/:id/voice-confirm rejects an unrecognized household member id with 401");
+
+  const voicePassForMember = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Voice Confirmed By Member", visitorPhone: "+15557774445", validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+    })
+  ).json();
+  const memberVoiceConfirmRes = await (
+    await fetch(`${base}/passes/${voicePassForMember.id}/voice-confirm`, { method: "POST", headers: { "X-PorchPass-Member": "helper1" } })
+  ).json();
+  assert.equal(memberVoiceConfirmRes.ok, true, "a non-owner household member can also voice-confirm a visitor — this isn't owner-restricted");
+  assert.equal(memberVoiceConfirmRes.visit.confirmedByMember, "helper1");
+  console.log("✓ any known household member (not just the owner) can voice-confirm a visitor");
+
+  const voiceConfirmMissingPassRes = await fetch(`${base}/passes/not-a-real-pass-id/voice-confirm`, { method: "POST" });
+  assert.equal(voiceConfirmMissingPassRes.status, 404, "voice-confirming a pass ID that doesn't exist is a clean 404");
+  console.log("✓ POST /passes/:id/voice-confirm returns 404 for an unknown pass ID");
+
+  // --- 3. Geofenced pass activation (simulated) ---
+  const homeLocation = { lat: 37.7749, lng: -122.4194 };
+  const farAwayLocation = { lat: 38.5816, lng: -121.4944 }; // Sacramento — comfortably outside any reasonable home radius
+
+  const geofenceSettingsMemberRes = await fetch(`${base}/settings/location`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-PorchPass-Member": "helper1" },
+    body: JSON.stringify({ ...homeLocation, radiusMeters: 100 }),
+  });
+  assert.equal(geofenceSettingsMemberRes.status, 403, "configuring the household's home location is owner-only");
+
+  const geofenceSettingsRes = await fetch(`${base}/settings/location`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...homeLocation, radiusMeters: 100 }),
+  });
+  assert.equal(geofenceSettingsRes.status, 200);
+  const geofenceSettings = await geofenceSettingsRes.json();
+  assert.deepEqual(geofenceSettings.homeLocation, homeLocation);
+  assert.equal(geofenceSettings.geofenceRadiusMeters, 100);
+  console.log("✓ POST /settings/location (as the owner) configures the household's home location and geofence radius");
+
+  const geofencedPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        visitorName: "Geofenced Visitor",
+        visitorPhone: "+15557775555",
+        validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        requireGeofence: true,
+      }),
+    })
+  ).json();
+  assert.equal(geofencedPass.requireGeofence, true);
+
+  const geofenceBlockedCheckin = await (
+    await fetch(`${base}/checkin/${geofencedPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(geofenceBlockedCheckin.ok, false, "a geofenced pass can't check in before any location has been confirmed");
+  assert.equal(geofenceBlockedCheckin.reasonCode, "geofence");
+  assert.match(geofenceBlockedCheckin.reason, /near the property/);
+  console.log("✓ a pass with requireGeofence:true rejects check-in until a location ping confirms proximity");
+
+  const farPingRes = await fetch(`${base}/passes/${geofencedPass.id}/location-ping`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(farAwayLocation),
+  });
+  assert.equal(farPingRes.status, 409);
+  const farPingResult = await farPingRes.json();
+  assert.equal(farPingResult.ok, false);
+  assert.equal(farPingResult.withinRadius, false);
+  assert.ok(farPingResult.distanceMeters > 1000, "a ping from far away reports a real, large computed distance");
+  console.log("✓ POST /passes/:id/location-ping rejects a ping from outside the configured radius, reporting the real distance");
+
+  const stillBlockedCheckin = await (
+    await fetch(`${base}/checkin/${geofencedPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(stillBlockedCheckin.ok, false, "check-in is still blocked after a ping that landed outside the radius");
+
+  const nearPingRes = await fetch(`${base}/passes/${geofencedPass.id}/location-ping`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(homeLocation),
+  });
+  assert.equal(nearPingRes.status, 200);
+  const nearPingResult = await nearPingRes.json();
+  assert.equal(nearPingResult.ok, true);
+  assert.equal(nearPingResult.withinRadius, true);
+  assert.ok(nearPingResult.distanceMeters < 1, "a ping at the exact home coordinates computes a near-zero distance");
+  console.log("✓ POST /passes/:id/location-ping accepts a ping within the configured radius, confirming the pass's geofence");
+
+  const geofenceUnlockedCheckin = await (
+    await fetch(`${base}/checkin/${geofencedPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(geofenceUnlockedCheckin.ok, true, "check-in succeeds once the geofence has been confirmed");
+  console.log("✓ a geofenced pass checks in normally once a location ping has confirmed proximity");
+
+  const nonGeofencedPingRes = await fetch(`${base}/passes/${trustPassA.id}/location-ping`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(homeLocation),
+  });
+  assert.equal(nonGeofencedPingRes.status, 409);
+  const nonGeofencedPingResult = await nonGeofencedPingRes.json();
+  assert.match(nonGeofencedPingResult.reason, /doesn't require location confirmation/);
+  console.log("✓ POST /passes/:id/location-ping rejects a ping against a pass that doesn't require geofencing");
+
+  // --- 4. Neighborhood alert broadcast ---
+  const neighborDeliveries: Array<{ neighbor: string; headers: http.IncomingHttpHeaders; body: string }> = [];
+  function makeNeighborServer(name: string): http.Server {
+    return http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        neighborDeliveries.push({ neighbor: name, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+  }
+  const neighborA = makeNeighborServer("A");
+  const neighborB = makeNeighborServer("B");
+  await new Promise<void>((resolve) => neighborA.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => neighborB.listen(0, "127.0.0.1", resolve));
+  const neighborAUrl = `http://127.0.0.1:${(neighborA.address() as AddressInfo).port}/watch`;
+  const neighborBUrl = `http://127.0.0.1:${(neighborB.address() as AddressInfo).port}/watch`;
+
+  const memberSubscriberRes = await fetch(`${base}/neighborhood/subscribers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-PorchPass-Member": "helper1" },
+    body: JSON.stringify({ url: neighborAUrl }),
+  });
+  assert.equal(memberSubscriberRes.status, 403, "registering a neighborhood subscriber is owner-only");
+
+  const subA = await (
+    await fetch(`${base}/neighborhood/subscribers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: neighborAUrl }),
+    })
+  ).json();
+  const subB = await (
+    await fetch(`${base}/neighborhood/subscribers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: neighborBUrl }),
+    })
+  ).json();
+  assert.ok(subA.secret && subB.secret && subA.secret !== subB.secret, "each neighborhood subscriber gets its own signing secret");
+
+  const subscriberList = await (await fetch(`${base}/neighborhood/subscribers`)).json();
+  assert.ok(subscriberList.some((s: { id: string }) => s.id === subA.id) && subscriberList.some((s: { id: string }) => s.id === subB.id));
+  console.log("✓ POST /neighborhood/subscribers (owner-only) registers other simulated households, each with their own signing secret");
+
+  // Risk pattern 1: a check-in attempt on an already-revoked pass.
+  const riskRevokedPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Risk Test — Revoked", visitorPhone: "+15557776666", validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+    })
+  ).json();
+  await fetch(`${base}/passes/${riskRevokedPass.id}`, { method: "DELETE" });
+  await fetch(`${base}/checkin/${riskRevokedPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+
+  const revocationDeliveries = await waitFor(
+    () => {
+      const matches = neighborDeliveries.filter((d) => {
+        const parsed = JSON.parse(d.body);
+        return parsed.alert?.type === "checkin_after_revocation" && parsed.alert?.passId === riskRevokedPass.id;
+      });
+      return matches.length === 2 ? matches : undefined;
+    },
+    3000,
+    "both neighborhood subscribers to receive a checkin_after_revocation alert"
+  );
+  for (const delivery of revocationDeliveries) {
+    const subscriber = delivery.neighbor === "A" ? subA : subB;
+    const expectedSig = signPayload(subscriber.secret, delivery.body);
+    assert.equal(delivery.headers["x-porchpass-signature"], expectedSig, `neighbor ${delivery.neighbor}'s delivery is signed with its own secret`);
+  }
+  console.log("✓ a check-in attempt on an already-revoked pass broadcasts a signed neighborhood-watch alert to every subscribed household");
+
+  // Risk pattern 2: several failed check-in attempts on the same pass in a short window.
+  const today2 = new Date().getUTCDay();
+  const notToday2 = (today2 + 1) % 7;
+  const riskRepeatedFailurePass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        visitorName: "Risk Test — Repeated Failures",
+        visitorPhone: "+15557777777",
+        validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        maxUses: 999,
+        recurrence: { daysOfWeek: [notToday2], startTime: "00:00", endTime: "23:59" }, // never matches today — every attempt fails the same deterministic way
+      }),
+    })
+  ).json();
+  for (let i = 0; i < 3; i++) {
+    await fetch(`${base}/checkin/${riskRepeatedFailurePass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+  }
+
+  const repeatedFailureDeliveries = await waitFor(
+    () => {
+      const matches = neighborDeliveries.filter((d) => {
+        const parsed = JSON.parse(d.body);
+        return parsed.alert?.type === "repeated_failed_checkins" && parsed.alert?.passId === riskRepeatedFailurePass.id;
+      });
+      return matches.length === 2 ? matches : undefined;
+    },
+    3000,
+    "both neighborhood subscribers to receive a repeated_failed_checkins alert"
+  );
+  assert.ok(repeatedFailureDeliveries.every((d) => /3 failed or expired check-in attempts/.test(JSON.parse(d.body).alert.detail)));
+  console.log("✓ 3 failed check-in attempts on the same pass within the risk window broadcasts a signed neighborhood-watch alert, exactly once");
+
+  const alertsLog = await (await fetch(`${base}/neighborhood/alerts`)).json();
+  assert.ok(alertsLog.some((a: { passId: string; type: string }) => a.passId === riskRevokedPass.id && a.type === "checkin_after_revocation"));
+  assert.ok(alertsLog.some((a: { passId: string; type: string }) => a.passId === riskRepeatedFailurePass.id && a.type === "repeated_failed_checkins"));
+  console.log("✓ GET /neighborhood/alerts exposes the broadcast alert log for observability");
+
+  const removeSubMemberRes = await fetch(`${base}/neighborhood/subscribers/${subA.id}`, { method: "DELETE", headers: { "X-PorchPass-Member": "helper1" } });
+  assert.equal(removeSubMemberRes.status, 403, "removing a neighborhood subscriber is also owner-only");
+  const removeSubRes = await fetch(`${base}/neighborhood/subscribers/${subA.id}`, { method: "DELETE" });
+  assert.equal(removeSubRes.status, 204);
+  console.log("✓ DELETE /neighborhood/subscribers/:id (owner-only) removes a subscribed household");
+
+  neighborA.close();
+  neighborB.close();
 
   httpServer.close();
   console.log("\nAll PorchPass smoke tests passed.");

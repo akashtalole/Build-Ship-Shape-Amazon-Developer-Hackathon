@@ -9,6 +9,8 @@ import {
   requestExtension,
   revokePass,
   serializePass,
+  submitLocationPing,
+  voiceConfirmCheckIn,
 } from "./passService.js";
 import type { IssuePassInput, PassView } from "./passService.js";
 import type { Pass, RecurrenceRule } from "./types.js";
@@ -21,8 +23,16 @@ import { listDevices, registerDevice } from "./devices.js";
 import { getOutboundWebhook, getOutboundWebhookStatus, registerOutboundWebhook } from "./outboundWebhooks.js";
 import { getPassIdByIdempotencyKey } from "./store.js";
 import { buildTrafficReport } from "./analytics.js";
-import { addOrUpdateMember, listMembers, removeMember, requireRole } from "./household.js";
+import { addOrUpdateMember, listMembers, removeMember, requireRole, resolveCaller } from "./household.js";
 import type { CallerError } from "./household.js";
+import { computeTrustScore } from "./trust.js";
+import { SimulatedGeoVerifier, type GeoVerifier } from "./geo.js";
+import {
+  addNeighborhoodSubscriber,
+  listNeighborhoodAlerts,
+  listNeighborhoodSubscribers,
+  removeNeighborhoodSubscriber,
+} from "./neighborhoodWatch.js";
 
 // Augment Express's Request with the raw body bytes captured by the
 // `express.json({ verify })` hook below — HMAC signature verification needs
@@ -52,6 +62,19 @@ function deviceIdsShapeError(deviceIds: unknown): string | undefined {
   if (deviceIds === undefined) return undefined;
   const validShape = Array.isArray(deviceIds) && deviceIds.length > 0 && deviceIds.every((d) => typeof d === "string" && d.length > 0);
   return validShape ? undefined : "deviceIds must be a non-empty array of non-empty device ID strings.";
+}
+
+/** Round 5: same shape check `POST /passes` and `POST /passes/bulk` both need for an optional `autoApproveExtensionsAboveTrust` field. */
+function trustThresholdShapeError(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  const validShape = typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+  return validShape ? undefined : "autoApproveExtensionsAboveTrust must be a number between 0 and 100.";
+}
+
+/** Round 5: same shape check `POST /passes` and `POST /passes/bulk` both need for an optional `requireGeofence` field. */
+function requireGeofenceShapeError(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === "boolean" ? undefined : "requireGeofence must be a boolean.";
 }
 
 function escapeHtml(value: string): string {
@@ -85,7 +108,7 @@ function withSerializedPass<T extends { pass?: Pass }>(result: T): Omit<T, "pass
  * module-level app) so tests can wire in a fresh SimulatedRingClient and
  * LoggingNotifier per run instead of sharing state across test cases.
  */
-export function createApp(ringClient: RingClient, notifier: Notifier): Express {
+export function createApp(ringClient: RingClient, notifier: Notifier, geoVerifier: GeoVerifier = new SimulatedGeoVerifier()): Express {
   const app = express();
   app.use(
     express.json({
@@ -99,8 +122,20 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
   // --- Homeowner-facing API: issue, list, revoke passes ---
 
   app.post("/passes", async (req, res) => {
-    const { visitorName, visitorPhone, validUntil, validFrom, maxUses, note, recurrence, allowQuietHours, idempotencyKey, deviceIds } =
-      req.body ?? {};
+    const {
+      visitorName,
+      visitorPhone,
+      validUntil,
+      validFrom,
+      maxUses,
+      note,
+      recurrence,
+      allowQuietHours,
+      idempotencyKey,
+      deviceIds,
+      autoApproveExtensionsAboveTrust,
+      requireGeofence,
+    } = req.body ?? {};
     if (!visitorName || !visitorPhone || !validUntil) {
       res.status(400).json({ error: "visitorName, visitorPhone, and validUntil are required." });
       return;
@@ -115,9 +150,33 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
       res.status(400).json({ error: deviceIdsError });
       return;
     }
+    const trustThresholdError = trustThresholdShapeError(autoApproveExtensionsAboveTrust);
+    if (trustThresholdError) {
+      res.status(400).json({ error: trustThresholdError });
+      return;
+    }
+    const requireGeofenceError = requireGeofenceShapeError(requireGeofence);
+    if (requireGeofenceError) {
+      res.status(400).json({ error: requireGeofenceError });
+      return;
+    }
     const baseUrl = `${req.protocol}://${req.get("host")}`;
     const pass = await issuePass(
-      { visitorName, visitorPhone, validFrom, validUntil, maxUses, note, recurrence, allowQuietHours, idempotencyKey, deviceIds, baseUrl },
+      {
+        visitorName,
+        visitorPhone,
+        validFrom,
+        validUntil,
+        maxUses,
+        note,
+        recurrence,
+        allowQuietHours,
+        idempotencyKey,
+        deviceIds,
+        autoApproveExtensionsAboveTrust,
+        requireGeofence,
+        baseUrl,
+      },
       notifier
     );
     // Same 201 whether this created a new pass or replayed an existing one
@@ -156,7 +215,19 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
       // variation supplying just the visitorName (a different visitor per
       // weekday) or just an explicit validFrom/validUntil window.
       const merged = { ...(template ?? {}), ...variation };
-      const { visitorName, visitorPhone, validUntil, validFrom, maxUses, note, recurrence, allowQuietHours, deviceIds } = merged;
+      const {
+        visitorName,
+        visitorPhone,
+        validUntil,
+        validFrom,
+        maxUses,
+        note,
+        recurrence,
+        allowQuietHours,
+        deviceIds,
+        autoApproveExtensionsAboveTrust,
+        requireGeofence,
+      } = merged;
       const idempotencyKey: string | undefined = merged.idempotencyKey ?? (idempotencyKeyPrefix ? `${idempotencyKeyPrefix}${i}` : undefined);
 
       if (!visitorName || !visitorPhone || !validUntil) {
@@ -177,13 +248,37 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
         results.push({ index: i, status: "error", error: deviceIdsError });
         continue;
       }
+      const trustThresholdError = trustThresholdShapeError(autoApproveExtensionsAboveTrust);
+      if (trustThresholdError) {
+        results.push({ index: i, status: "error", error: trustThresholdError });
+        continue;
+      }
+      const requireGeofenceError = requireGeofenceShapeError(requireGeofence);
+      if (requireGeofenceError) {
+        results.push({ index: i, status: "error", error: requireGeofenceError });
+        continue;
+      }
 
       // Determine created-vs-replayed *before* calling issuePass, since
       // issuePass itself returns the same shape (a Pass) either way.
       const isReplay = !!(idempotencyKey && getPassIdByIdempotencyKey(idempotencyKey));
       try {
         const pass = await issuePass(
-          { visitorName, visitorPhone, validFrom, validUntil, maxUses, note, recurrence, allowQuietHours, deviceIds, idempotencyKey, baseUrl } as IssuePassInput,
+          {
+            visitorName,
+            visitorPhone,
+            validFrom,
+            validUntil,
+            maxUses,
+            note,
+            recurrence,
+            allowQuietHours,
+            deviceIds,
+            autoApproveExtensionsAboveTrust,
+            requireGeofence,
+            idempotencyKey,
+            baseUrl,
+          } as IssuePassInput,
           notifier
         );
         results.push({ index: i, status: isReplay ? "replayed" : "created", pass: serializePass(pass) });
@@ -426,7 +521,8 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
   // --- Grace-period extension: the visitor's side of the request. ---
 
   app.post("/checkin/:token/request-extension", async (req, res) => {
-    const result = await requestExtension(req.params.token, notifier);
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const result = await requestExtension(req.params.token, notifier, baseUrl);
     const status = result.ok ? 201 : 409;
     const wantsJson = req.accepts(["html", "json"]) === "json";
     if (wantsJson) {
@@ -438,6 +534,144 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
   <h1>${result.ok ? "Request sent" : "Couldn't request an extension"}</h1>
   <p>${escapeHtml(result.ok ? "The household has been notified and will approve or deny your request shortly." : result.reason ?? "Please contact the household directly.")}</p>
 </body></html>`);
+  });
+
+  // --- Round 5: Alexa+ ecosystem tie-in — voice-verified check-in
+  // confirmation. This is the integration seam a real Alexa+ skill (or any
+  // MCP client speaking for one) would call: a household member says
+  // something like "yes, let the dog walker in" in response to a doorbell
+  // announcement, the skill resolves that utterance to a pass, and calls
+  // this endpoint instead of the visitor ever tapping a link. See the README
+  // section on this feature for the full framing — mirrors exactly how
+  // `ringClient.ts` documents the Ring integration seam. Any known household
+  // member (not owner-only — anyone in the house can plausibly say "let them
+  // in") may confirm; an unrecognized member id is rejected the same way
+  // every other household.ts-gated endpoint rejects one. ---
+
+  app.post("/passes/:id/voice-confirm", async (req, res) => {
+    const resolution = resolveCaller(callerIdFromRequest(req));
+    if (resolution.error) {
+      sendCallerError(res, resolution.error);
+      return;
+    }
+    const result = await voiceConfirmCheckIn(req.params.id, resolution.member!.id, ringClient, notifier);
+    const status = result.rateLimited ? 429 : result.ok ? 200 : result.pass ? 409 : 404;
+    res.status(status).json(withSerializedPass(result));
+  });
+
+  // --- Round 5: geofenced pass activation (simulated). A pass issued with
+  // `requireGeofence: true` can't check in (by link or by voice) until a
+  // location ping confirms the visitor is near the property — see geo.ts
+  // for the simulated-hardware seam and passService.submitLocationPing for
+  // the comparison logic. No household-member auth needed here, same
+  // reasoning as the check-in flow itself: this is the visitor's own device
+  // reporting its location, not a household action. ---
+
+  app.post("/passes/:id/location-ping", (req, res) => {
+    const { lat, lng } = req.body ?? {};
+    if (typeof lat !== "number" || typeof lng !== "number") {
+      res.status(400).json({ error: "lat and lng (numbers) are required." });
+      return;
+    }
+    const result = submitLocationPing(req.params.id, lat, lng, geoVerifier);
+    const status = result.rateLimited ? 429 : result.pass ? (result.ok ? 200 : 409) : 404;
+    res.status(status).json(withSerializedPass(result));
+  });
+
+  // Configuring the household's home location/radius is owner-only, same
+  // reasoning as /settings and /settings/webhook.
+  app.post("/settings/location", (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
+    const { lat, lng, radiusMeters } = req.body ?? {};
+    if (typeof lat !== "number" || typeof lng !== "number") {
+      res.status(400).json({ error: "lat and lng (numbers) are required." });
+      return;
+    }
+    if (radiusMeters !== undefined && (typeof radiusMeters !== "number" || radiusMeters <= 0)) {
+      res.status(400).json({ error: "radiusMeters must be a positive number if provided." });
+      return;
+    }
+    const updated = updateSettings({
+      homeLocation: { lat, lng },
+      geofenceRadiusMeters: radiusMeters ?? getSettings().geofenceRadiusMeters,
+    });
+    res.json(updated);
+  });
+
+  // --- Round 5: visitor trust scoring. Tracks a visitor identity by phone
+  // number across every pass/visit they've ever had (see trust.ts and
+  // crypto.ts's one-way `phoneLookupKey`) and returns a fully explainable
+  // 0-100 score plus the exact factors that produced it. Read-only, so this
+  // stays open to any caller — same as GET /passes and GET /visits. ---
+
+  app.get("/visitors/:phone/trust", (req, res) => {
+    const phone = req.params.phone;
+    if (!phone) {
+      res.status(400).json({ error: "phone is required." });
+      return;
+    }
+    res.json(computeTrustScore(phone));
+  });
+
+  // --- Round 5: neighborhood alert broadcast. PorchPass detects a real risk
+  // pattern (several failed/expired check-in attempts on the same pass in a
+  // short window, or any attempt at all on an already-revoked pass — see
+  // neighborhoodWatch.ts) and broadcasts a signed "neighborhood watch" alert
+  // to every OTHER simulated household that's opted in — reusing the exact
+  // same signing/retry delivery mechanism as the homeowner's own outbound
+  // webhook (outboundWebhooks.ts#deliverSignedPayload). Managing which
+  // neighbors are subscribed is owner-only; the alert log is open, same
+  // reasoning as GET /settings/webhook's delivery status. ---
+
+  app.post("/neighborhood/subscribers", (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
+    const { url } = req.body ?? {};
+    if (typeof url !== "string" || url.length === 0) {
+      res.status(400).json({ error: "url is required." });
+      return;
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      res.status(400).json({ error: "url must be a valid absolute URL." });
+      return;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      res.status(400).json({ error: "url must use http:// or https://." });
+      return;
+    }
+    res.status(201).json(addNeighborhoodSubscriber(url));
+  });
+
+  app.get("/neighborhood/subscribers", (_req, res) => {
+    res.json(listNeighborhoodSubscribers());
+  });
+
+  app.delete("/neighborhood/subscribers/:id", (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
+    const removed = removeNeighborhoodSubscriber(req.params.id);
+    if (!removed) {
+      res.status(404).json({ error: "No such neighborhood subscriber." });
+      return;
+    }
+    res.status(204).end();
+  });
+
+  app.get("/neighborhood/alerts", (_req, res) => {
+    res.json(listNeighborhoodAlerts());
   });
 
   // --- Traffic/analytics report: plain-language insights aggregated from

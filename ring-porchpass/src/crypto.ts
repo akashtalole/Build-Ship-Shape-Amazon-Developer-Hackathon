@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync } from "node:crypto";
 import type { EncryptedField } from "./types.js";
 
 /**
@@ -68,4 +68,19 @@ export function decryptField(field: EncryptedField): string {
 export function maskPhone(phone: string): string {
   if (phone.length <= 4) return "•".repeat(phone.length);
   return `${"•".repeat(phone.length - 4)}${phone.slice(-4)}`;
+}
+
+/**
+ * A deterministic, one-way HMAC-SHA256 of a visitor's phone number — round
+ * 5's `Pass.visitorPhoneLookup`. Unlike `encryptField` (which must be
+ * reversible so the visitor's SMS can actually be sent), this is
+ * specifically *not* reversible: its only job is "do two passes belong to
+ * the same visitor?", which an HMAC answers without ever needing to recover
+ * the original number from it. Same key material as field encryption
+ * (`getEncryptionKey()`) — reusing it is a fine simplification for this
+ * demo's single-purpose key; a production KMS integration would mint a
+ * separate purpose-scoped key for this the same way it would for encryption.
+ */
+export function phoneLookupKey(phone: string): string {
+  return createHmac("sha256", getEncryptionKey()).update(phone).digest("hex");
 }
