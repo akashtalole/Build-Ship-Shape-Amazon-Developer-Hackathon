@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { addExpense, expensesThisWeek, getBudgetStatus, setBudget } from "../store.js";
+import { addExpense, expensesThisWeek, getBudgetStatus, setBudget, type Expense } from "../store.js";
 import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 import { logEvent } from "../logging.js";
 import { fireHouseholdAlert } from "../webhookDelivery.js";
@@ -12,6 +12,47 @@ const budgetStatusShape = {
   remaining: z.number(),
   overBudget: z.boolean(),
 };
+
+/**
+ * Shared post-write behavior for any newly logged expense — notifying the
+ * budget-status resource, and (when this expense pushes its category over
+ * budget) logging and firing the budget_exceeded webhook alert — exported so
+ * `capture_note`'s expense branch (tools/capture.ts) gets exactly the same
+ * over-budget handling `add_expense` does, instead of a second, drifting copy
+ * of this logic.
+ */
+export async function applyExpenseFollowUps(
+  server: McpServer,
+  notify: NotifyFn,
+  householdId: string,
+  expense: Expense
+): Promise<string> {
+  await notify(RESOURCE_URIS.budgetStatus);
+  const status = getBudgetStatus(householdId).find((b) => b.category === expense.category);
+  const warning = status?.overBudget
+    ? ` Heads up: ${status.category} is now ${(status.spentThisWeek - status.budget).toFixed(2)} over its weekly budget of ${status.budget}.`
+    : "";
+
+  if (status?.overBudget) {
+    await logEvent(server, "warning", "Budget exceeded", {
+      category: status.category,
+      spentThisWeek: status.spentThisWeek,
+      budget: status.budget,
+      overBy: status.spentThisWeek - status.budget,
+    });
+    fireHouseholdAlert(server, householdId, {
+      type: "budget_exceeded",
+      message: `${status.category} is ${(status.spentThisWeek - status.budget).toFixed(2)} over its weekly budget of ${status.budget}.`,
+      data: {
+        category: status.category,
+        spentThisWeek: status.spentThisWeek,
+        budget: status.budget,
+        overBy: status.spentThisWeek - status.budget,
+      },
+    });
+  }
+  return warning;
+}
 
 export function registerExpenseTools(server: McpServer, notify: NotifyFn, householdId: string): void {
   server.registerTool(
@@ -32,33 +73,7 @@ export function registerExpenseTools(server: McpServer, notify: NotifyFn, househ
     },
     async ({ description, amount, category }) => {
       const expense = addExpense(householdId, description, amount, category);
-      await notify(RESOURCE_URIS.budgetStatus);
-
-      const status = getBudgetStatus(householdId).find((b) => b.category === expense.category);
-      const warning =
-        status?.overBudget
-          ? ` Heads up: ${status.category} is now ${(status.spentThisWeek - status.budget).toFixed(2)} over its weekly budget of ${status.budget}.`
-          : "";
-
-      if (status?.overBudget) {
-        await logEvent(server, "warning", "Budget exceeded", {
-          category: status.category,
-          spentThisWeek: status.spentThisWeek,
-          budget: status.budget,
-          overBy: status.spentThisWeek - status.budget,
-        });
-        fireHouseholdAlert(server, householdId, {
-          type: "budget_exceeded",
-          message: `${status.category} is ${(status.spentThisWeek - status.budget).toFixed(2)} over its weekly budget of ${status.budget}.`,
-          data: {
-            category: status.category,
-            spentThisWeek: status.spentThisWeek,
-            budget: status.budget,
-            overBy: status.spentThisWeek - status.budget,
-          },
-        });
-      }
-
+      const warning = await applyExpenseFollowUps(server, notify, householdId, expense);
       return {
         content: [
           { type: "text", text: `Logged ${expense.amount} for "${expense.description}" under ${expense.category}.${warning}` },

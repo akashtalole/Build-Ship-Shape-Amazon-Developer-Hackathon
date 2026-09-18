@@ -131,3 +131,54 @@ Notes captured while building the Alexa+ HomeOps submission, for the hackathon's
     a slower/flakier CI environment could in principle need longer. A cleaner fix would be a small poll-until-received
     helper instead of a flat sleep; deferred here in favor of matching the existing test file's established
     `setTimeout`-then-assert idiom (already used for resource-update notifications and logging messages above it).
+
+## Round 6: smart meal planner, chore-to-allowance ledger, freeform capture, proactive anomaly flags
+
+15. **A named `interface` returned as `structuredContent` fails `tsc`, and the error message doesn't say why in an
+    obvious way.** `buildMealPlan()` and `recordAllowancePayout()` both return a declared `interface` (`MealPlan`,
+    `AllowancePayoutResult`), and passing that value straight through as a tool's `structuredContent` (or as
+    `logEvent`'s `data` argument) failed with "Index signature for type 'string' is missing in type 'X'" — a
+    genuinely confusing error for what's actually a simple cause: the SDK's `CallToolResult` type requires
+    `structuredContent` to be `{ [x: string]: unknown; ... }`, and TypeScript only lets a *fresh object literal*
+    satisfy an index-signature requirement it can't otherwise structurally prove — a value already typed as a named
+    `interface` doesn't get that same leniency, even with an identical shape. Every other tool in this codebase
+    happened to sidestep this by building its `structuredContent` inline as a literal (`{ tasksToday,
+    suggestedAssignee, ... }`), never by naming a return type as an interface first — this round is what surfaced
+    the actual rule. The fix in both places was `{ ...result }` at the call site: cheap, but not an obvious thing
+    to reach for from the error text alone.
+16. **The meal planner's "use up what's running low" framing only actually demonstrates itself against food-shaped
+    item names.** The seeded demo household's shopping list (paper towels, dish soap, dog food) is realistic for a
+    *shopping/reorder* list but doesn't match any of `MEAL_CATALOG`'s ingredient keywords — so `suggest_meal_plan`
+    would still work, but would silently fall back to its ingredient-agnostic default meal every time, with nothing
+    in a demo run actually showing the cross-referencing doing anything. Rather than special-case the seed data or
+    invent a second, parallel "pantry" concept, the fix was to lean on `capture_note`'s shopping branch (round 6's
+    other new feature) to add food items ("chicken breasts", "rice") to the *same* low-stock list `reportLowStock`
+    already writes to — which is also a more honest demo of the intended flow (mention something's low in passing,
+    then ask for a meal plan) than hand-seeding fixture data would have been.
+17. **`capture_note`'s shopping branch needed a store function that didn't exist yet.** Every prior round's shopping
+    tools only ever *read* `shoppingItems` or reordered an existing one (`findItemByName`, `recordReorder`) — there
+    was no "add a brand-new item to the list" path at all, because no tool had ever needed to create one from
+    scratch. `reportLowStock()` (creates-or-marks-low by name) had to be added to `store.ts` specifically to give
+    `capture_note`'s shopping route somewhere real to land, rather than papering over the gap with a fake success
+    message. A small, genuine hole in the existing tool surface that only became visible once something other than
+    a human typing an item name into a form needed to create one.
+18. **Deciding what "trending over budget" means without a real calendar week.** `expensesThisWeek` (round 1) is a
+    rolling 7-day lookback, not a Monday-start calendar week — so an obvious first design ("compare today's spend
+    against how far through the calendar week we are") doesn't correspond to any window the rest of the codebase
+    actually uses, and would make `detectSpendingTrends`' behavior depend on which real-world weekday a demo (or
+    the test) happens to run on — exactly the kind of flakiness this repo's tests otherwise go out of their way to
+    avoid (see the recurring-task test's `recurringWeekday = new Date().getDay()` anchoring, above). The fix was to
+    define "pace" entirely from data already on the `Expense` records themselves — spend-so-far divided by the
+    number of days since that category's *first* expense in the current rolling window, projected back out to a
+    full week — which is both a more honest signal (one big purchase on day one really is a stronger "you're on
+    track to blow this budget" signal than the same total spent evenly) and fully deterministic in tests regardless
+    of what day they happen to run on.
+19. **A schema-violating test input fails several calls downstream of where the real mistake was, with a confusing
+    error.** An early draft of the allowance-ledger test called `list_upcoming_tasks` with `withinDays: 60`, past
+    the tool's declared `max(30)`. The MCP client doesn't reject that locally — it round-trips to the server, which
+    validates and returns a `tools/call` result with no `structuredContent` — so the failure surfaced three lines
+    later as `TypeError: Cannot read properties of undefined (reading 'tasks')`, nowhere near the actual
+    out-of-range argument that caused it. Nothing to fix server-side (rejecting out-of-range input is exactly
+    correct behavior) — the fix was in the test — but the friction is real: any test that destructures a tool
+    result's `structuredContent` without first checking `isError` will fail this way, one call removed from the
+    actual bug, for *any* tool with a bounded `inputSchema`.

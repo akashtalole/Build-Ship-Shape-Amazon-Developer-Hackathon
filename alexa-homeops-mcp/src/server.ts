@@ -5,6 +5,9 @@ import { registerExpenseTools } from "./tools/expenses.js";
 import { registerInsightTools } from "./tools/insights.js";
 import { registerAccessTools } from "./tools/access.js";
 import { registerWebhookTools } from "./tools/webhooks.js";
+import { registerAllowanceTools } from "./tools/allowance.js";
+import { registerMealPlanTools } from "./tools/mealPlan.js";
+import { registerCaptureTools } from "./tools/capture.js";
 import { registerResources } from "./resources.js";
 import { registerPrompts } from "./prompts.js";
 import { restrictToReadOnlyTools } from "./rbac.js";
@@ -53,6 +56,9 @@ export function createHomeOpsServer(
   registerInsightTools(server, householdId);
   registerAccessTools(server, householdId);
   registerWebhookTools(server, householdId);
+  registerAllowanceTools(server, householdId);
+  registerMealPlanTools(server, householdId);
+  registerCaptureTools(server, notify, householdId);
 
   return server;
 }

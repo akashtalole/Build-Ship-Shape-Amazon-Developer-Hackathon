@@ -1,6 +1,18 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getBudgetStatus, itemsRunningLow, listUpcomingTasks, openTaskCounts, suggestAssignee } from "../store.js";
+import { computeHouseholdAnomalies, type HouseholdAnomaly } from "../anomalies.js";
+
+const anomalyShape = {
+  type: z.enum(["task_pileup", "spending_trend", "stale_low_stock"]),
+  severity: z.enum(["notice", "warning"]),
+  message: z.string(),
+  data: z.record(z.unknown()),
+};
+
+function formatAnomalies(anomalies: HouseholdAnomaly[]): string[] {
+  return anomalies.map((a) => `  - [${a.severity}] ${a.message}`);
+}
 
 /**
  * Asks the connected client's model (via MCP sampling) to turn a prompt +
@@ -126,13 +138,38 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
   );
 
   server.registerTool(
+    "get_proactive_alerts",
+    {
+      description:
+        "Proactively surface things worth attention that nobody explicitly asked about: a task pileup on one " +
+        "household member relative to others, a spending category trending toward going over its weekly budget " +
+        "(not just already over it), or a low-stock item that's been sitting stale for a while without being " +
+        "reordered. Use this for 'is anything I should know about' rather than a specific direct question, or " +
+        "run it periodically to catch problems before they compound.",
+      inputSchema: {},
+      outputSchema: { anomalies: z.array(z.object(anomalyShape)), count: z.number() },
+      annotations: { title: "Get proactive alerts", readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      const anomalies = computeHouseholdAnomalies(householdId);
+      const text =
+        anomalies.length === 0
+          ? "Nothing stands out right now — no task pileup, budget categories are on a reasonable pace, and nothing's been low for long."
+          : `${anomalies.length} thing(s) worth a look:\n${formatAnomalies(anomalies).join("\n")}`;
+      return { content: [{ type: "text", text }], structuredContent: { anomalies, count: anomalies.length } };
+    }
+  );
+
+  server.registerTool(
     "export_household_digest",
     {
       description:
-        "Export one combined household digest report — upcoming tasks, budget status, and low-stock items — " +
-        "as a single text report a household member can read at a glance, or save/share/print. Reuses the " +
+        "Export one combined household digest report — upcoming tasks, budget status, low-stock items, and " +
+        "proactive anomaly flags (task pileup, a spending category trending over budget, stale low-stock items) " +
+        "— as a single text report a household member can read at a glance, or save/share/print. Reuses the " +
         "same sampling-backed narrative as generate_weekly_narrative for the summary paragraph (falling back " +
-        "to a templated one if the client doesn't support MCP sampling), rather than duplicating that logic.",
+        "to a templated one if the client doesn't support MCP sampling), and the same anomaly detection as " +
+        "get_proactive_alerts, rather than duplicating either.",
       inputSchema: {
         withinDays: z
           .number()
@@ -160,6 +197,7 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
         lowStockItems: z.array(
           z.object({ id: z.string(), name: z.string(), quantityOnHand: z.number(), reorderThreshold: z.number() })
         ),
+        anomalies: z.array(z.object(anomalyShape)),
       },
       annotations: { title: "Export household digest", readOnlyHint: true, openWorldHint: true },
     },
@@ -169,6 +207,7 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
       const budgets = getBudgetStatus(householdId);
       const lowStock = itemsRunningLow(householdId);
       const overBudget = budgets.filter((b) => b.overBudget);
+      const anomalies = computeHouseholdAnomalies(householdId);
 
       const narrated = await sampleNarrative(
         server,
@@ -211,11 +250,14 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
         lowStock.length
           ? lowStock.map((i) => `  - ${i.name} (${i.quantityOnHand} on hand, reorder threshold ${i.reorderThreshold})`).join("\n")
           : "  Everything is well stocked.",
+        "",
+        "WORTH ATTENTION",
+        anomalies.length ? formatAnomalies(anomalies).join("\n") : "  Nothing flagged.",
       ];
 
       return {
         content: [{ type: "text", text: reportLines.join("\n") }],
-        structuredContent: { generatedAt, narrative, tasks, budgets, lowStockItems: lowStock },
+        structuredContent: { generatedAt, narrative, tasks, budgets, lowStockItems: lowStock, anomalies },
       };
     }
   );

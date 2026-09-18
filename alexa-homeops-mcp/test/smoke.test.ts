@@ -5,8 +5,10 @@
  * elicitation, sampling, bearer-token multi-tenancy, structured logging,
  * file-backed persistence across a simulated restart, bulk task import,
  * role-based access control, outbound alert webhooks (HMAC-signed, against
- * a real local HTTP listener), recurring tasks, and the household digest
- * export. Run with `npm test`.
+ * a real local HTTP listener), recurring tasks, the household digest
+ * export, a smart meal planner cross-referencing shopping/budget/tasks, a
+ * chore-to-allowance ledger, a sampling-backed freeform capture/dispatcher
+ * tool, and proactive anomaly-flag detection. Run with `npm test`.
  */
 import assert from "node:assert/strict";
 import { createHmac, randomUUID } from "node:crypto";
@@ -127,11 +129,37 @@ async function startWebhookListener(): Promise<{
   };
 }
 
-/** Connects an MCP client (with elicitation/sampling stubs wired in), optionally under a bearer token. */
-async function connectClient(baseUrl: URL, token?: string) {
+// Fixed "5 days from now" used by both the mocked sampling response for the
+// capture_note task-classification scenario below and the test's own
+// assertion against it — computed once, at module load, from the real
+// clock, so the test isn't sensitive to which day it happens to run on.
+const CAPTURE_TASK_DUE_DATE = (() => {
+  const d = new Date();
+  d.setDate(d.getDate() + 5);
+  return d.toISOString().slice(0, 10);
+})();
+
+/** ISO date N days from whenever the test actually runs, so fixture dates never depend on which day that is. */
+function daysFromNowStr(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Connects an MCP client (with elicitation/sampling stubs wired in),
+ * optionally under a bearer token. Pass `{ sampling: false }` to omit both
+ * the capability declaration and the CreateMessage handler entirely — the
+ * SDK responds "Method not found" to any sampling request the server makes,
+ * exercising the same fallback path a client with no sampling support at all
+ * would trigger (see capture_note's and generate_weekly_narrative's
+ * try/catch around server.server.createMessage).
+ */
+async function connectClient(baseUrl: URL, token?: string, opts: { sampling?: boolean } = {}) {
+  const supportsSampling = opts.sampling !== false;
   const client = new Client(
     { name: "homeops-smoke-test", version: "0.1.0" },
-    { capabilities: { elicitation: { form: {} }, sampling: {} } }
+    { capabilities: { elicitation: { form: {} }, ...(supportsSampling ? { sampling: {} } : {}) } }
   );
 
   // Auto-accept any confirmation the server elicits.
@@ -139,14 +167,59 @@ async function connectClient(baseUrl: URL, token?: string) {
     return { action: "accept", content: { confirmReorder: true } };
   });
 
-  // Mock the client-side "LLM" the server samples from.
-  client.setRequestHandler(CreateMessageRequestSchema, async () => {
-    return {
-      role: "assistant",
-      content: { type: "text", text: "Mock digest: everything looks under control this week." },
-      model: "mock-model",
-    };
-  });
+  if (supportsSampling) {
+    // Mock the client-side "LLM" the server samples from. capture_note's
+    // classification prompt is distinguished from generate_weekly_narrative
+    // et al.'s digest-narration prompt by its distinctive instruction text,
+    // and within that, by keywords from the specific note under test — a
+    // small scripted "model" standing in for a real one, same idea as the
+    // digest mock every other sampling-backed tool already relies on.
+    client.setRequestHandler(CreateMessageRequestSchema, async (request) => {
+      const promptText =
+        request.params.messages[0]?.content.type === "text" ? request.params.messages[0].content.text : "";
+
+      if (promptText.includes("Classify this one household note")) {
+        if (promptText.includes("almost out of chicken")) {
+          return { role: "assistant", content: { type: "text", text: '{"type":"shopping","item":"chicken breasts"}' }, model: "mock-model" };
+        }
+        if (promptText.includes("more rice")) {
+          return { role: "assistant", content: { type: "text", text: '{"type":"shopping","item":"rice"}' }, model: "mock-model" };
+        }
+        if (promptText.includes("pick up dry cleaning")) {
+          return {
+            role: "assistant",
+            content: {
+              type: "text",
+              // Wrapped in a code fence on purpose — exercises capture_note's
+              // fence-stripping JSON extraction, not just a bare JSON string.
+              text: `\`\`\`json\n{"type":"task","title":"Pick up dry cleaning","dueDate":"${CAPTURE_TASK_DUE_DATE}"}\n\`\`\``,
+            },
+            model: "mock-model",
+          };
+        }
+        if (promptText.includes("Spent 45 dollars")) {
+          return {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: '{"type":"expense","description":"Hardware store supplies","amount":45,"category":"maintenance"}',
+            },
+            model: "mock-model",
+          };
+        }
+        // Deliberately not valid classification JSON — exercises
+        // capture_note's fallback-to-task path even though sampling itself
+        // "worked" (the client answered), because the answer can't be parsed.
+        return { role: "assistant", content: { type: "text", text: "Sorry, I can't classify that." }, model: "mock-model" };
+      }
+
+      return {
+        role: "assistant",
+        content: { type: "text", text: "Mock digest: everything looks under control this week." },
+        model: "mock-model",
+      };
+    });
+  }
 
   const resourceUpdates: string[] = [];
   client.setNotificationHandler(ResourceUpdatedNotificationSchema, async (n) => {
@@ -179,21 +252,27 @@ async function main() {
     "add_expense",
     "add_recurring_task",
     "add_task",
+    "capture_note",
     "export_household_digest",
     "generate_weekly_narrative",
     "get_alert_webhook_status",
+    "get_allowance_balance",
     "get_budget_status",
+    "get_proactive_alerts",
     "get_weekly_summary",
     "import_tasks",
     "issue_household_token",
     "list_low_stock_items",
     "list_upcoming_tasks",
     "mark_task_done",
+    "record_allowance_payout",
     "register_alert_webhook",
     "reorder_item",
     "run_morning_briefing",
     "set_budget",
+    "set_task_reward",
     "suggest_assignee",
+    "suggest_meal_plan",
     "sync_household_calendar",
   ]);
   const listTasksTool = tools.tools.find((t) => t.name === "list_upcoming_tasks")!;
@@ -401,9 +480,11 @@ async function main() {
   assert.match(digestText, /TASKS DUE/);
   assert.match(digestText, /BUDGET STATUS/);
   assert.match(digestText, /LOW STOCK/);
+  assert.match(digestText, /WORTH ATTENTION/);
   const digestData = digest.structuredContent as any;
   assert.equal(digestData.narrative, "Mock digest: everything looks under control this week.");
   assert.ok(Array.isArray(digestData.tasks) && digestData.tasks.length > 0);
+  assert.ok(Array.isArray(digestData.anomalies));
   assert.ok(
     digestData.budgets.some((b: any) => b.category === "pets" && b.overBudget === true),
     "expected the digest's budget section to reflect the actual over-budget pets category"
@@ -490,6 +571,173 @@ async function main() {
   );
   assert.ok(progressUpdates.length > 0);
   console.log(`✓ sync_household_calendar streamed ${progressUpdates.length} progress notification(s)`);
+
+  // --- Chore-to-allowance ledger ---
+  await client.callTool({
+    name: "add_task",
+    arguments: { title: "Wash the car", dueDate: daysFromNowStr(20), assignee: "Jordan" },
+  });
+  const beforeReward = await client.callTool({ name: "list_upcoming_tasks", arguments: { withinDays: 30 } });
+  const washCarTask = ((beforeReward.structuredContent as any).tasks as any[]).find(
+    (t: any) => t.title === "Wash the car" && !t.done
+  );
+  assert.ok(washCarTask, "expected to find the newly added 'Wash the car' task");
+
+  const rewardSet = await client.callTool({ name: "set_task_reward", arguments: { taskId: washCarTask.id, amount: 2.5 } });
+  assert.match((rewardSet.content as any)[0].text, /worth 2\.50 to Jordan/);
+
+  const completedReward = await client.callTool({ name: "mark_task_done", arguments: { taskId: washCarTask.id } });
+  const completedRewardText = (completedReward.content as any)[0].text as string;
+  assert.match(completedRewardText, /Marked "Wash the car" as done\./);
+  assert.match(completedRewardText, /Jordan earned 2\.50 \(allowance balance: 2\.50\)/);
+
+  const balanceAfterChore = await client.callTool({ name: "get_allowance_balance", arguments: { member: "Jordan" } });
+  assert.equal(((balanceAfterChore.structuredContent as any).balances[0] as any).balance, 2.5);
+
+  const payout = await client.callTool({ name: "record_allowance_payout", arguments: { member: "Jordan" } });
+  const payoutData = payout.structuredContent as any;
+  assert.equal(payoutData.paidOut, 2.5);
+  assert.equal(payoutData.remainingBalance, 0);
+
+  const balanceAfterPayout = await client.callTool({ name: "get_allowance_balance", arguments: { member: "Jordan" } });
+  assert.equal(((balanceAfterPayout.structuredContent as any).balances[0] as any).balance, 0);
+  console.log("✓ set_task_reward + mark_task_done credits an allowance balance, and record_allowance_payout settles it");
+
+  // --- Freeform capture / dispatcher tool (capture_note) ---
+  const captureShopping1 = await client.callTool({
+    name: "capture_note",
+    arguments: { text: "We're almost out of chicken breasts" },
+  });
+  const captureShopping1Data = captureShopping1.structuredContent as any;
+  assert.equal(captureShopping1Data.routedTo, "shopping");
+  assert.equal(captureShopping1Data.usedSampling, true);
+  assert.match(captureShopping1Data.itemName.toLowerCase(), /chicken/);
+
+  await client.callTool({ name: "capture_note", arguments: { text: "We need more rice" } });
+
+  const lowStockAfterCapture = await client.callTool({ name: "list_low_stock_items", arguments: {} });
+  const lowStockNamesAfterCapture = ((lowStockAfterCapture.structuredContent as any).items as any[]).map((i: any) =>
+    i.name.toLowerCase()
+  );
+  assert.ok(lowStockNamesAfterCapture.some((n: string) => n.includes("chicken")));
+  assert.ok(lowStockNamesAfterCapture.includes("rice"));
+  console.log("✓ capture_note routes a freeform 'running low' sentence onto the shopping/low-stock list via MCP sampling");
+
+  const captureTask = await client.callTool({
+    name: "capture_note",
+    arguments: { text: "I need to pick up dry cleaning by Friday" },
+  });
+  const captureTaskData = captureTask.structuredContent as any;
+  assert.equal(captureTaskData.routedTo, "task");
+  assert.equal(captureTaskData.usedSampling, true);
+  assert.equal(captureTaskData.title, "Pick up dry cleaning");
+  assert.equal(captureTaskData.dueDate, CAPTURE_TASK_DUE_DATE);
+  console.log("✓ capture_note routes a freeform task sentence (with a due date) via MCP sampling");
+
+  const captureExpense = await client.callTool({
+    name: "capture_note",
+    arguments: { text: "Spent 45 dollars on hardware store supplies" },
+  });
+  const captureExpenseData = captureExpense.structuredContent as any;
+  assert.equal(captureExpenseData.routedTo, "expense");
+  assert.equal(captureExpenseData.usedSampling, true);
+  assert.equal(captureExpenseData.amount, 45);
+  assert.equal(captureExpenseData.category, "maintenance");
+  console.log("✓ capture_note routes a freeform expense sentence via MCP sampling");
+
+  const captureGibberish = await client.callTool({
+    name: "capture_note",
+    arguments: { text: "asdkjhasdkjh not classifiable gibberish" },
+  });
+  const captureGibberishData = captureGibberish.structuredContent as any;
+  assert.equal(captureGibberishData.routedTo, "task");
+  assert.equal(captureGibberishData.usedSampling, false);
+  assert.equal(captureGibberishData.title, "asdkjhasdkjh not classifiable gibberish");
+  console.log("✓ capture_note falls back to a task when the model's reply can't be parsed as classification JSON");
+
+  const { client: noSamplingClient } = await connectClient(baseUrl, `no-sampling-${randomUUID()}`, { sampling: false });
+  const captureNoSampling = await noSamplingClient.callTool({
+    name: "capture_note",
+    arguments: { text: "Take out recycling tomorrow" },
+  });
+  const captureNoSamplingData = captureNoSampling.structuredContent as any;
+  assert.equal(captureNoSamplingData.routedTo, "task");
+  assert.equal(captureNoSamplingData.usedSampling, false);
+  assert.equal(captureNoSamplingData.title, "Take out recycling tomorrow");
+  await noSamplingClient.close();
+  console.log("✓ capture_note falls back to a task outright when the connected client doesn't support MCP sampling at all");
+
+  // --- Smart meal planner ---
+  await client.callTool({ name: "set_budget", arguments: { category: "groceries", amount: 100 } });
+  const mealPlan = await client.callTool({ name: "suggest_meal_plan", arguments: { days: 3 } });
+  const mealPlanData = mealPlan.structuredContent as any;
+  assert.equal(mealPlanData.days.length, 3);
+  // Groceries budget was set to 100 above; the only groceries expense logged
+  // anywhere in this run was the $25 "Grocery run" from the webhook test
+  // earlier, so remaining should be exactly 75 — not a coincidence, a check
+  // that suggest_meal_plan reads the *real* remaining budget, not a guess.
+  assert.equal(mealPlanData.groceryBudgetRemaining, 75);
+  assert.ok(mealPlanData.totalEstCost <= mealPlanData.groceryBudgetRemaining);
+  assert.equal(mealPlanData.withinBudget, true);
+  assert.ok((mealPlanData.lowStockConsidered as string[]).some((n) => n.includes("chicken")));
+  assert.ok((mealPlanData.lowStockConsidered as string[]).includes("rice"));
+  assert.ok(
+    (mealPlanData.days as any[]).some((d: any) => d.usesLowStockItems.length > 0),
+    "expected at least one planned day to actually use a low-stock ingredient"
+  );
+  for (const d of mealPlanData.days as any[]) {
+    if (d.busyDay) assert.equal(d.quickMeal, true, `expected busy day ${d.date} to get a quick meal`);
+  }
+  console.log("✓ suggest_meal_plan cross-references low-stock items, remaining grocery budget, and busy days into a real plan");
+
+  // --- Proactive household digest with anomaly flags ---
+  // Force a task-load imbalance: pile several explicit-assignee tasks onto
+  // one member well past whatever fair rotation had already produced.
+  for (let i = 0; i < 4; i++) {
+    await client.callTool({
+      name: "add_task",
+      arguments: { title: `Extra chore ${i}`, dueDate: daysFromNowStr(25), assignee: "Sam" },
+    });
+  }
+  // A fresh category, spent well past a sustainable pace on day one of its
+  // rolling week, but not yet actually over budget.
+  await client.callTool({ name: "set_budget", arguments: { category: "entertainment", amount: 20 } });
+  await client.callTool({ name: "add_expense", arguments: { description: "Movie night", amount: 10, category: "entertainment" } });
+
+  const alerts = await client.callTool({ name: "get_proactive_alerts", arguments: {} });
+  const alertsData = alerts.structuredContent as any;
+  const alertTypes = (alertsData.anomalies as any[]).map((a: any) => a.type);
+  assert.ok(alertTypes.includes("task_pileup"));
+  assert.ok(alertTypes.includes("spending_trend"));
+  assert.ok(alertTypes.includes("stale_low_stock"));
+  assert.equal(alertsData.count, alertsData.anomalies.length);
+
+  const pileup = (alertsData.anomalies as any[]).find((a: any) => a.type === "task_pileup");
+  assert.equal(pileup.data.mostLoaded, "Sam");
+
+  // Both "groceries" (bumped to a $100 budget just above, with the same-day
+  // $25 spend from the earlier webhook test) and "entertainment" now trend
+  // over pace — assert on entertainment specifically rather than "the"
+  // spending_trend entry, since there may legitimately be more than one.
+  const trend = (alertsData.anomalies as any[]).find((a: any) => a.type === "spending_trend" && a.data.category === "entertainment");
+  assert.ok(trend, "expected an entertainment spending_trend anomaly");
+  assert.ok(trend.data.paceRatio >= 1.3, "expected the entertainment category to be flagged as trending over its weekly pace");
+
+  const stale = (alertsData.anomalies as any[]).filter((a: any) => a.type === "stale_low_stock");
+  assert.ok(
+    stale.some((a: any) => a.data.itemName.toLowerCase().includes("chicken")),
+    "expected the never-reordered captured chicken item to be flagged as stale low stock"
+  );
+  console.log("✓ get_proactive_alerts flags a task pileup, a spending-pace trend, and stale low-stock items nobody asked about");
+
+  const digestAfterAnomalies = await client.callTool({ name: "export_household_digest", arguments: { withinDays: 7 } });
+  const digestAfterAnomaliesData = digestAfterAnomalies.structuredContent as any;
+  assert.ok(
+    (digestAfterAnomaliesData.anomalies as any[]).length >= alertsData.count,
+    "expected export_household_digest to surface at least the same anomalies as get_proactive_alerts"
+  );
+  assert.doesNotMatch((digestAfterAnomalies.content as any)[0].text as string, /WORTH ATTENTION\n {2}Nothing flagged\./);
+  console.log("✓ export_household_digest's WORTH ATTENTION section reuses the same anomaly detection, not a duplicate copy");
 
   await client.close();
 
