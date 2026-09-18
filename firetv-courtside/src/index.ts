@@ -23,4 +23,12 @@ app.listen(PORT, () => {
   console.log(`Player stats:        GET  http://localhost:${PORT}/stats/player/:playerName`);
   console.log(`Catch-up recap:      GET  http://localhost:${PORT}/games/:id/recap  (?sinceMinutes=10 or ?since=...)`);
   console.log(`Player-level alert:  POST http://localhost:${PORT}/games/:id/subscriptions  { "callbackUrl": "https://...", "playerName": "Trae" }`);
+  console.log(`Set fantasy roster:  POST http://localhost:${PORT}/games/:id/fantasy/:viewerId  { "players": ["Trae", "Bridges"] }`);
+  console.log(`Fantasy highlights:  GET  http://localhost:${PORT}/games/:id/fantasy/:viewerId`);
+  console.log(`Pose a prediction:   POST http://localhost:${PORT}/games/:id/predictions  { "type": "next_possession_score" }`);
+  console.log(`Answer a prediction: POST http://localhost:${PORT}/games/:id/predictions/:predictionId/answer  { "viewerId": "v1", "answer": "yes" }`);
+  console.log(`Prediction accuracy: GET  http://localhost:${PORT}/viewers/:viewerId/predictions/accuracy`);
+  console.log(`Create a watch party:POST http://localhost:${PORT}/games/:id/parties  { "name": "Living Room", "viewerId": "v1" }`);
+  console.log(`Ask into a party:    POST http://localhost:${PORT}/games/:id/ask  { "question": "...", "viewerId": "v1", "partyId": "..." }`);
+  console.log(`Localized commentary:GET  http://localhost:${PORT}/games/:id/commentary?locale=en-casual  (or es-broadcast)`);
 });

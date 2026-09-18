@@ -1,17 +1,28 @@
 import express, { type Express } from "express";
 import type { CommentaryProvider } from "./commentaryProvider.js";
 import {
+  answerPrediction,
   askQuestion,
+  createParty,
   getCommentary,
+  getFantasyHighlights,
   getGameMetrics,
   getHighlights,
+  getPartyInfo,
+  getPartyQnAHistory,
   getPlayerStats,
+  getPredictionDetail,
   getPreferences,
   getRecap,
   getTeamStats,
+  getViewerPredictionAccuracy,
   getWatchlist,
   ingestEvent,
+  joinParty,
+  listGamePredictions,
+  posePrediction,
   requireGame,
+  setFantasyRoster,
   setPreferences,
   startGame,
   subscribeToGame,
@@ -74,11 +85,16 @@ export function createApp(provider: CommentaryProvider): Express {
   // re-fetching full history (e.g. after the app comes back from the
   // background). `?viewerId=<id>` personalizes the returned text per that
   // viewer's stored preferences.
-  app.get("/games/:id/commentary", (req, res) => {
+  // `?locale=<...>` (see `CommentaryLocale`) requests a distinct
+  // commentary pack for this read — falling back to the viewer's stored
+  // `locale` preference, then the `"en-broadcast"` default. See "Localized
+  // commentary packs" in the README.
+  app.get("/games/:id/commentary", async (req, res) => {
     try {
       const since = typeof req.query.since === "string" ? req.query.since : undefined;
       const viewerId = typeof req.query.viewerId === "string" ? req.query.viewerId : undefined;
-      res.json(getCommentary(req.params.id, since, viewerId));
+      const locale = typeof req.query.locale === "string" ? req.query.locale : undefined;
+      res.json(await getCommentary(req.params.id, since, viewerId, provider, locale));
     } catch (err) {
       handleError(res, err);
     }
@@ -155,7 +171,7 @@ export function createApp(provider: CommentaryProvider): Express {
   // protect the Q&A path from abuse/spam.
   app.post("/games/:id/ask", async (req, res) => {
     try {
-      const { question, viewerId } = req.body ?? {};
+      const { question, viewerId, partyId, locale } = req.body ?? {};
       const rateLimitKey = `${req.params.id}:${viewerId || req.ip}`;
       const rateLimit = checkRateLimit(rateLimitKey);
       if (!rateLimit.allowed) {
@@ -167,7 +183,7 @@ export function createApp(provider: CommentaryProvider): Express {
         });
         return;
       }
-      const result = await askQuestion(req.params.id, question, provider, viewerId);
+      const result = await askQuestion(req.params.id, question, provider, viewerId, { partyId, locale });
       res.json(result);
     } catch (err) {
       handleError(res, err);
@@ -248,8 +264,124 @@ export function createApp(provider: CommentaryProvider): Express {
         }
         sinceMinutes = parsed;
       }
-      const result = await getRecap(req.params.id, { sinceMinutes, since }, provider);
+      const locale = typeof req.query.locale === "string" ? req.query.locale : undefined;
+      const result = await getRecap(req.params.id, { sinceMinutes, since }, provider, locale);
       res.json(result);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // --- Round 5: fantasy-relevant plays, live predictions, watch parties -----
+
+  // Registers (replacing wholesale) a viewer's fantasy roster for this game —
+  // a small list of player names. Immediately backfills highlights from
+  // events already ingested, then tags new matching plays live as they come
+  // in via `ingestEvent`.
+  app.post("/games/:id/fantasy/:viewerId", (req, res) => {
+    try {
+      const result = setFantasyRoster(req.params.id, req.params.viewerId, req.body ?? {});
+      res.status(200).json(result);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // A viewer's fantasy-relevant plays for this game — a separate lens on the
+  // same event stream from the shared commentary feed.
+  app.get("/games/:id/fantasy/:viewerId", (req, res) => {
+    try {
+      res.json(getFantasyHighlights(req.params.id, req.params.viewerId));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Poses a new live prediction tied to the game's real event stream. Body:
+  // `{ "type"?: "next_possession_score" | "next_team_to_score" }` (defaults
+  // to "next_possession_score").
+  app.post("/games/:id/predictions", (req, res) => {
+    try {
+      const prediction = posePrediction(req.params.id, req.body ?? {});
+      res.status(201).json(prediction);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.get("/games/:id/predictions", (req, res) => {
+    try {
+      res.json(listGamePredictions(req.params.id));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.get("/games/:id/predictions/:predictionId", (req, res) => {
+    try {
+      res.json(getPredictionDetail(req.params.id, req.params.predictionId));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Submits a viewer's answer before the outcome is known. Body:
+  // `{ "viewerId": "...", "answer": "yes" | "no" | "home" | "away" }`
+  // (whichever pair the prediction's `options` are).
+  app.post("/games/:id/predictions/:predictionId/answer", (req, res) => {
+    try {
+      const answer = answerPrediction(req.params.id, req.params.predictionId, req.body ?? {});
+      res.status(201).json(answer);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // A viewer's running prediction accuracy, across every game they've
+  // answered predictions in.
+  app.get("/viewers/:viewerId/predictions/accuracy", (req, res) => {
+    try {
+      res.json(getViewerPredictionAccuracy(req.params.viewerId));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Creates (or, idempotently, returns) a named watch-party session for this
+  // game, optionally joining `viewerId` to it in the same call.
+  app.post("/games/:id/parties", (req, res) => {
+    try {
+      const { party, created } = createParty(req.params.id, req.body ?? {});
+      res.status(created ? 201 : 200).json({ party, duplicate: !created });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.post("/games/:id/parties/:partyId/join", (req, res) => {
+    try {
+      const { viewerId } = req.body ?? {};
+      const party = joinParty(req.params.id, req.params.partyId, viewerId);
+      res.status(200).json(party);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.get("/games/:id/parties/:partyId", (req, res) => {
+    try {
+      res.json(getPartyInfo(req.params.id, req.params.partyId));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // The durable history of every question+answer shared into this party so
+  // far (the same records also pushed live over `GET /games/:id/stream`,
+  // tagged `type: "party_qa"`, the instant they're asked).
+  app.get("/games/:id/parties/:partyId/qa", (req, res) => {
+    try {
+      res.json(getPartyQnAHistory(req.params.id, req.params.partyId));
     } catch (err) {
       handleError(res, err);
     }

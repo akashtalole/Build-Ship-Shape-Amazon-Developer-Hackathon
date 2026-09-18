@@ -12,9 +12,11 @@
 import { EventEmitter } from "node:events";
 
 export interface StreamEvent {
-  type: "commentary";
-  commentary: unknown;
-  state: unknown;
+  type: "commentary" | "party_qa";
+  commentary?: unknown;
+  state?: unknown;
+  /** Present on a `"party_qa"` push (see `WatchParty`/`PartyQnA` in types.ts) — the shared Q&A payload. */
+  partyQnA?: unknown;
 }
 
 const emitters = new Map<string, EventEmitter>();

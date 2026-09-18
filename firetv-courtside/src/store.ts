@@ -6,8 +6,13 @@ import type {
   GameMetrics,
   GameState,
   NotableEventRecord,
+  PartyQnA,
+  Prediction,
+  PredictionAccuracy,
+  PredictionAnswer,
   Subscription,
   ViewerPreferences,
+  WatchParty,
 } from "./types.js";
 
 const MAX_RECENT_EVENTS = 15;
@@ -46,6 +51,29 @@ interface StatsAccumulator {
 }
 const teamStatsByKey = new Map<string, StatsAccumulator>();
 const playerStatsByKey = new Map<string, StatsAccumulator>();
+
+/** A viewer's fantasy roster per game — gameId -> viewerId -> player names (display casing). */
+const fantasyRostersByGame = new Map<string, Map<string, string[]>>();
+
+/** A viewer's fantasy highlight reel per game, newest first — gameId -> viewerId -> records. */
+const fantasyHighlightsByGame = new Map<string, Map<string, NotableEventRecord[]>>();
+
+/** Predictions per game, insertion order preserved (iterated newest-first by callers). */
+const predictionsByGame = new Map<string, Prediction[]>();
+const predictionsById = new Map<string, Prediction>();
+
+/** Answers per prediction, keyed by viewerId. */
+const answersByPrediction = new Map<string, Map<string, PredictionAnswer>>();
+
+/** Running prediction accuracy per viewer, across every game. */
+const predictionAccuracyByViewer = new Map<string, { correct: number; total: number }>();
+
+/** Watch parties per game, keyed by id; a second index resolves (gameId, lowercased name) -> id for idempotent creation. */
+const partiesById = new Map<string, WatchParty>();
+const partyIdByGameAndName = new Map<string, Map<string, string>>();
+
+/** Shared Q&A history per party, newest first. */
+const qnaByParty = new Map<string, PartyQnA[]>();
 
 export function saveGame(game: GameState): void {
   games.set(game.id, game);
@@ -254,4 +282,158 @@ export function getTeamStats(teamName: string): EntityStats {
 export function getPlayerStats(playerName: string): EntityStats {
   const trimmed = playerName.trim();
   return toEntityStats(trimmed, playerStatsByKey.get(trimmed.toLowerCase()));
+}
+
+// --- Fantasy rosters & highlights --------------------------------------------
+
+/** Replaces a viewer's fantasy roster for a game wholesale (same "set, don't merge" spirit as `setViewerPreferences`). */
+export function setFantasyRoster(gameId: string, viewerId: string, players: string[]): void {
+  let byViewer = fantasyRostersByGame.get(gameId);
+  if (!byViewer) {
+    byViewer = new Map();
+    fantasyRostersByGame.set(gameId, byViewer);
+  }
+  byViewer.set(viewerId, players);
+}
+
+export function getFantasyRoster(gameId: string, viewerId: string): string[] | undefined {
+  return fantasyRostersByGame.get(gameId)?.get(viewerId);
+}
+
+/** Every (viewerId, roster) pair registered for a game — iterated by `ingestEvent` to tag new plays live. */
+export function listFantasyRosters(gameId: string): Array<{ viewerId: string; roster: string[] }> {
+  const byViewer = fantasyRostersByGame.get(gameId);
+  if (!byViewer) return [];
+  return [...byViewer.entries()].map(([viewerId, roster]) => ({ viewerId, roster }));
+}
+
+/** Replaces a viewer's fantasy highlight reel wholesale — used to (re)compute the backfill the moment a roster is (re)registered. */
+export function setFantasyHighlights(gameId: string, viewerId: string, records: NotableEventRecord[]): void {
+  let byViewer = fantasyHighlightsByGame.get(gameId);
+  if (!byViewer) {
+    byViewer = new Map();
+    fantasyHighlightsByGame.set(gameId, byViewer);
+  }
+  byViewer.set(viewerId, records);
+}
+
+/** Appends one newly-ingested play onto a viewer's fantasy highlight reel, newest first — used for live tagging after registration. */
+export function addFantasyHighlight(gameId: string, viewerId: string, record: NotableEventRecord): void {
+  const byViewer = fantasyHighlightsByGame.get(gameId);
+  const existing = byViewer?.get(viewerId) ?? [];
+  existing.unshift(record);
+  if (byViewer) byViewer.set(viewerId, existing);
+  else fantasyHighlightsByGame.set(gameId, new Map([[viewerId, existing]]));
+}
+
+export function listFantasyHighlights(gameId: string, viewerId: string): NotableEventRecord[] {
+  return fantasyHighlightsByGame.get(gameId)?.get(viewerId) ?? [];
+}
+
+/** Finds the commentary line generated for a specific event — used to pair a backfilled fantasy play with its narration. */
+export function getCommentaryForEvent(gameId: string, eventId: string): CommentaryLine | undefined {
+  return listCommentary(gameId).find((c) => c.eventId === eventId);
+}
+
+// --- Live predictions ---------------------------------------------------------
+
+export function addPrediction(prediction: Prediction): void {
+  const existing = predictionsByGame.get(prediction.gameId) ?? [];
+  existing.push(prediction);
+  predictionsByGame.set(prediction.gameId, existing);
+  predictionsById.set(prediction.id, prediction);
+}
+
+export function getPrediction(predictionId: string): Prediction | undefined {
+  return predictionsById.get(predictionId);
+}
+
+/** Every prediction for a game, newest first. */
+export function listPredictions(gameId: string): Prediction[] {
+  return [...(predictionsByGame.get(gameId) ?? [])].reverse();
+}
+
+/** Every currently-open prediction for a game, in the order they were posed. */
+export function listOpenPredictions(gameId: string): Prediction[] {
+  return (predictionsByGame.get(gameId) ?? []).filter((p) => p.status === "open");
+}
+
+export function recordPredictionAnswer(answer: PredictionAnswer): void {
+  let byViewer = answersByPrediction.get(answer.predictionId);
+  if (!byViewer) {
+    byViewer = new Map();
+    answersByPrediction.set(answer.predictionId, byViewer);
+  }
+  byViewer.set(answer.viewerId, answer);
+}
+
+export function getPredictionAnswer(predictionId: string, viewerId: string): PredictionAnswer | undefined {
+  return answersByPrediction.get(predictionId)?.get(viewerId);
+}
+
+/** Every answer submitted for a prediction — walked at resolution time to score each one. */
+export function listPredictionAnswers(predictionId: string): PredictionAnswer[] {
+  return [...(answersByPrediction.get(predictionId)?.values() ?? [])];
+}
+
+/** Folds one resolved prediction's outcome into a viewer's running accuracy. Never called for a voided prediction. */
+export function bumpPredictionAccuracy(viewerId: string, correct: boolean): void {
+  const current = predictionAccuracyByViewer.get(viewerId) ?? { correct: 0, total: 0 };
+  current.total += 1;
+  if (correct) current.correct += 1;
+  predictionAccuracyByViewer.set(viewerId, current);
+}
+
+export function getPredictionAccuracy(viewerId: string): PredictionAccuracy {
+  const rec = predictionAccuracyByViewer.get(viewerId) ?? { correct: 0, total: 0 };
+  return { viewerId, correct: rec.correct, total: rec.total, accuracy: rec.total > 0 ? rec.correct / rec.total : 0 };
+}
+
+// --- Shared watch-party sessions ----------------------------------------------
+
+/**
+ * Idempotent on `(gameId, name)` (case-insensitive), same pattern as
+ * `getOrCreateSubscription`: a second `POST /games/:id/parties` with the same
+ * name returns the original party instead of creating a duplicate session.
+ */
+export function getOrCreateParty(gameId: string, name: string, create: () => WatchParty): { party: WatchParty; created: boolean } {
+  let byName = partyIdByGameAndName.get(gameId);
+  if (!byName) {
+    byName = new Map();
+    partyIdByGameAndName.set(gameId, byName);
+  }
+  const key = name.trim().toLowerCase();
+  const existingId = byName.get(key);
+  if (existingId) {
+    return { party: partiesById.get(existingId)!, created: false };
+  }
+  const party = create();
+  byName.set(key, party.id);
+  partiesById.set(party.id, party);
+  return { party, created: true };
+}
+
+export function getParty(partyId: string): WatchParty | undefined {
+  return partiesById.get(partyId);
+}
+
+/** Adds a viewer to a party's member list, idempotent (joining twice is a no-op). */
+export function addPartyMember(partyId: string, viewerId: string): WatchParty | undefined {
+  const party = partiesById.get(partyId);
+  if (!party) return undefined;
+  if (!party.members.includes(viewerId)) {
+    party.members.push(viewerId);
+  }
+  return party;
+}
+
+export function addPartyQnA(record: PartyQnA): void {
+  const existing = qnaByParty.get(record.partyId) ?? [];
+  existing.unshift(record); // newest first
+  qnaByParty.set(record.partyId, existing);
+}
+
+/** A party's shared Q&A history, newest first. */
+export function listPartyQnA(partyId: string): PartyQnA[] {
+  return qnaByParty.get(partyId) ?? [];
 }
