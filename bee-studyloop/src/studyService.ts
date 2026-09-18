@@ -18,6 +18,10 @@ import { priorityScore } from "./priority.js";
 import { extractTopics } from "./topics.js";
 import { fromPortableTsv, toPortableTsv } from "./export.js";
 import { initialStreakState, recordStreakDay, toStreakSummary, type StreakSummary } from "./streak.js";
+import { conceptsMatch, extractConceptsFromCard } from "./conceptGraph.js";
+import { buildExplanationFeedback, gradeExplanation, scoreToRecallGrade } from "./explainGrader.js";
+import { buildStudyGuide, type StudyGuide } from "./studyGuide.js";
+import { computeReadiness, type ReadinessBreakdown } from "./readiness.js";
 import {
   getFlashcard,
   getQuiz,
@@ -28,6 +32,7 @@ import {
   listAllFlashcards,
   listFlashcardsBySession,
   listReviewStatesForStudent,
+  listSessions,
   saveFlashcard,
   saveQuiz,
   saveReviewState,
@@ -881,4 +886,161 @@ export async function regenerateFlashcard(generator: FlashcardGenerator, cardId:
   const updated: Flashcard = { ...card, front: alternative.front, back: alternative.back };
   saveFlashcard(updated);
   return { ok: true, card: updated };
+}
+
+// ===========================================================================
+// Round 5, feature 1: concept graph
+// ===========================================================================
+
+export interface ConceptCardMatch {
+  concept: string; // the specific concept string extracted from this card that matched the query
+  cardId: string;
+  sessionId: string;
+  sessionTitle: string;
+  front: string;
+  back: string;
+  tags: string[];
+}
+
+/**
+ * Every flashcard, across every session, whose front/back content resolves
+ * (via `extractConceptsFromCard`, conceptGraph.ts) to a concept matching
+ * `name` — the "show me everything related to X" query. Recomputed from real
+ * text analysis of existing card content on every call rather than read from
+ * a manual tagging index a caller would otherwise have to populate: two
+ * cards from entirely different sessions/decks, ingested weeks apart, that
+ * both define or reference the same term surface together here with no
+ * link ever having been explicitly created.
+ */
+export function findCardsByConcept(name: string): ConceptCardMatch[] {
+  const needle = name.trim();
+  if (!needle) return [];
+
+  const matches: ConceptCardMatch[] = [];
+  for (const card of listAllFlashcards()) {
+    const matchedConcept = extractConceptsFromCard(card).find((concept) => conceptsMatch(concept, needle));
+    if (!matchedConcept) continue;
+    const session = getSessionFromStore(card.sessionId);
+    matches.push({
+      concept: matchedConcept,
+      cardId: card.id,
+      sessionId: card.sessionId,
+      sessionTitle: session?.title ?? "",
+      front: card.front,
+      back: card.back,
+      tags: card.tags,
+    });
+  }
+  return matches;
+}
+
+// ===========================================================================
+// Round 5, feature 2: Feynman / peer-teaching explanation mode
+// ===========================================================================
+
+export type ExplainResult =
+  | {
+      ok: true;
+      grade: RecallGrade;
+      score: number;
+      passed: boolean;
+      matchedTerms: string[];
+      missingTerms: string[];
+      feedback: string;
+      card: Flashcard | PersonalFlashcardView;
+    }
+  | { ok: false; reason: "card_not_found" };
+
+/**
+ * The "explain it to learn it" (Feynman technique) review mode: instead of
+ * self-grading with the four-point scale, the student submits a free-text
+ * explanation of the card's concept in their own words. It's graded against
+ * the card's actual `back` content by a real (heuristic, LLM-free) key-term
+ * rubric — see explainGrader.ts — which reports exactly what was covered and
+ * what was missing. The derived coverage score is mapped onto the same
+ * `RecallGrade` vocabulary and run through the exact same scheduling/leech
+ * path a normal grade would (`recordReview`/`recordReviewForStudent`), so an
+ * explanation genuinely reschedules the card — and can extend or clear a
+ * leech streak — rather than being a side channel that only returns
+ * feedback text with no effect on the review queue.
+ *
+ * Works on any card (not gated to leeches specifically): the leech/adaptive
+ * signals already on a card are what make this mode *useful* to reach for on
+ * a card a student keeps failing, not a precondition the API enforces — a
+ * card doesn't stop being explainable just because it hasn't failed three
+ * times yet.
+ */
+export function submitExplanation(
+  cardId: string,
+  explanation: string,
+  studentId: string | undefined,
+  now: Date = new Date()
+): ExplainResult {
+  const card = getFlashcard(cardId);
+  if (!card) return { ok: false, reason: "card_not_found" };
+
+  const graded = gradeExplanation(card.back, explanation);
+  const grade = scoreToRecallGrade(graded.score);
+  const updated = (studentId ? recordReviewForStudent(studentId, cardId, grade, now) : recordReview(cardId, grade, now))!;
+
+  return {
+    ok: true,
+    grade,
+    score: graded.score,
+    passed: graded.passed,
+    matchedTerms: graded.matchedTerms,
+    missingTerms: graded.missingTerms,
+    feedback: buildExplanationFeedback(graded),
+    card: updated,
+  };
+}
+
+// ===========================================================================
+// Round 5, feature 3: cross-session study guide synthesis
+// ===========================================================================
+
+/**
+ * Consolidated study guide for every session tagged with `topic` (see
+ * topics.ts) — a deduplicated merged summary plus the union of concepts
+ * (conceptGraph.ts) covered across all of them (see studyGuide.ts for the
+ * actual merge/dedupe logic), rather than the raw per-card concatenation
+ * `GET /flashcards/search?topic=` already gives. Returns `undefined` if no
+ * session carries this topic tag at all.
+ */
+export function buildTopicStudyGuide(topic: string): StudyGuide | undefined {
+  const needle = topic.trim().toLowerCase();
+  if (!needle) return undefined;
+
+  const sessions = listSessions().filter((s) => s.topics.some((t) => t.toLowerCase() === needle));
+  if (sessions.length === 0) return undefined;
+
+  const cardsBySession = new Map<string, Flashcard[]>();
+  for (const session of sessions) cardsBySession.set(session.id, listFlashcardsBySession(session.id));
+
+  return buildStudyGuide(needle, sessions, cardsBySession);
+}
+
+// ===========================================================================
+// Round 5, feature 4: exam readiness score
+// ===========================================================================
+
+/**
+ * Composite, explainable 0-100 exam-readiness score for every card tagged
+ * with `topic` (see readiness.ts for the full weighted formula and
+ * plain-language breakdown). With `studentId`, reads that student's own
+ * personal deck (joined decks + directly-reviewed cards, via
+ * `personalViewsForStudent`) and their own study streak; without it, reads
+ * the shared, student-less flashcard pool every other unscoped endpoint
+ * reads, with no streak signal (there's no single student to credit a streak
+ * to on the shared pool).
+ */
+export function getTopicReadiness(topic: string, studentId: string | undefined, now: Date = new Date()): ReadinessBreakdown {
+  const needle = topic.trim().toLowerCase();
+  const currentStreak = studentId ? getStreakForStudent(studentId).currentStreak : 0;
+
+  const cards: Array<Pick<Flashcard, "dueAt" | "isLeech" | "lastGrade" | "lastReviewedAt">> = studentId
+    ? personalViewsForStudent(studentId).filter((v) => v.tags.some((t) => t.toLowerCase() === needle))
+    : listAllFlashcards().filter((c) => c.tags.some((t) => t.toLowerCase() === needle));
+
+  return computeReadiness(cards, currentStreak, now);
 }

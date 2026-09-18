@@ -4,13 +4,16 @@ import type { RecallGrade } from "./types.js";
 import {
   appendSessionSegments,
   buildReviewSession,
+  buildTopicStudyGuide,
   exportAllFlashcards,
   exportSessionFlashcards,
+  findCardsByConcept,
   getQuizPrompts,
   getQuizResults,
   getReminderDigest,
   getSessionWithCards,
   getStreakForStudent,
+  getTopicReadiness,
   importFlashcards,
   ingestSession,
   joinSharedDeck,
@@ -23,6 +26,7 @@ import {
   regenerateFlashcard,
   searchFlashcardsByTopic,
   startQuiz,
+  submitExplanation,
   submitQuizAnswer,
 } from "./studyService.js";
 
@@ -356,6 +360,68 @@ export function createApp(generator: FlashcardGenerator): Express {
       return;
     }
     res.json(result.card);
+  });
+
+  // Concept graph: every flashcard, across every session, whose front/back
+  // content resolves to a concept matching :name — built from real text
+  // analysis of existing card content (see conceptGraph.ts), not a manual
+  // tagging system a caller has to populate. See README "Concept graph".
+  app.get("/concepts/:name", (req, res) => {
+    const name = req.params.name;
+    if (!name || !name.trim()) {
+      res.status(400).json({ error: "A concept name is required, e.g. /concepts/mitochondria" });
+      return;
+    }
+    res.json({ concept: name.trim().toLowerCase(), cards: findCardsByConcept(name) });
+  });
+
+  // Feynman/peer-teaching mode: grade a free-text explanation against the
+  // card's actual answer content (a real heuristic key-term rubric, no LLM
+  // dependency — see explainGrader.ts) instead of a normal self-graded
+  // recall grade, and reschedule the card through the same SM-2/leech
+  // machinery via the derived grade. See README "Feynman/peer-teaching mode".
+  app.post("/review/:cardId/explain", (req, res) => {
+    const { explanation, studentId } = req.body ?? {};
+    if (typeof explanation !== "string" || !explanation.trim()) {
+      res.status(400).json({ error: "explanation is required — a free-text explanation of the card's concept in your own words." });
+      return;
+    }
+    if (studentId !== undefined && (typeof studentId !== "string" || !studentId.trim())) {
+      res.status(400).json({ error: "studentId, if provided, must be a non-empty string." });
+      return;
+    }
+
+    const result = submitExplanation(req.params.cardId, explanation, typeof studentId === "string" ? studentId.trim() : undefined);
+    if (!result.ok) {
+      res.status(404).json({ error: "No flashcard with that ID." });
+      return;
+    }
+    res.json(result);
+  });
+
+  // Cross-session synthesis: merges every session tagged with :topic into
+  // one deduplicated study guide (merged summary + union of concepts
+  // covered), rather than a raw concatenation of their summaries. See
+  // README "Cross-session synthesis / study guide generation".
+  app.get("/topics/:topic/study-guide", (req, res) => {
+    const guide = buildTopicStudyGuide(req.params.topic);
+    if (!guide) {
+      res.status(404).json({ error: "No study session is tagged with that topic." });
+      return;
+    }
+    res.json(guide);
+  });
+
+  // Exam readiness score: a composite, explainable 0-100 score for every
+  // card tagged with :topic, combining schedule health (fraction not
+  // due/overdue), recency-weighted recent grade history, and study streak.
+  // Optional ?studentId= scopes it to one student's own deck + streak. See
+  // README "Exam readiness score".
+  app.get("/topics/:topic/readiness", (req, res) => {
+    const studentId = req.query.studentId;
+    const scopedStudentId = typeof studentId === "string" && studentId.trim() ? studentId.trim() : undefined;
+    const readiness = getTopicReadiness(req.params.topic, scopedStudentId);
+    res.json({ topic: req.params.topic.trim().toLowerCase(), studentId: scopedStudentId, ...readiness });
   });
 
   app.get("/healthz", (_req, res) => {

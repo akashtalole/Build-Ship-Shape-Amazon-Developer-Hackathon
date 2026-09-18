@@ -69,18 +69,27 @@ src/
   priority.ts              Adaptive review-ordering priority-score formula, as a pure function
   topics.ts                Heuristic topic-tag extraction (word-frequency, not real NLP)
   export.ts                Portable TSV export formatting (Anki-importable)
+  conceptGraph.ts          Round 5: per-card concept extraction (definition/cloze/generic-Q&A tiers) +
+                           concept-string matching, as pure functions
+  explainGrader.ts         Round 5: Feynman-mode key-term coverage rubric for a free-text explanation
+                           against a card's answer, as pure functions
+  studyGuide.ts            Round 5: cross-session study-guide synthesis (deduplicated summary merge +
+                           union of concepts), as a pure function
+  readiness.ts             Round 5: composite, explainable exam-readiness score formula, as a pure function
   studyService.ts          Business logic: ingestion (incl. idempotent + incremental + adaptive bias),
                            due/leech/search queries, record review, shared-deck join, quiz sampling/
-                           grading/results, reminder digest
-  server.ts                Express app factory — see "How it works", "Advanced features", and "Round 3"
-                           for the full route list
+                           grading/results, reminder digest, concept graph lookup, explanation grading,
+                           study-guide synthesis, and readiness scoring
+  server.ts                Express app factory — see "How it works", "Advanced features", "Round 3",
+                           "Round 4", and "Round 5" for the full route list
   index.ts                 Entry point
 test/
   smoke.test.ts            End-to-end test over real HTTP covering the base lifecycle (ingest -> summary/
                            flashcards -> due queue -> good/again review rescheduling -> 404s -> invalid
                            grade -> empty transcript -> raw-text transcript) plus every feature in
-                           "Advanced features" and "Round 3" below, and direct unit checks of scheduler.ts,
-                           leech.ts, priority.ts, and topics.ts
+                           "Advanced features", "Round 3", "Round 4", and "Round 5" below, and direct unit
+                           checks of scheduler.ts, leech.ts, priority.ts, topics.ts, conceptGraph.ts,
+                           explainGrader.ts, studyGuide.ts, and readiness.ts
 ```
 
 ## Running it
@@ -132,9 +141,9 @@ resets the streak and shortens the interval back down instead of continuing to g
 id or fetching an unknown session id returns a clean 404; an invalid grade returns a 400; an empty/whitespace-only
 transcript still returns a sensible response (a fallback summary, zero flashcards) instead of crashing; and a raw
 text-block transcript (not pre-segmented) is ingested successfully too. A couple of direct unit-style checks of
-`scheduler.ts`'s interval/ease-factor math round it out. Every feature in **Advanced features** and **Round 3**
-below has its own passing HTTP-level check plus, where the logic is pure, a direct unit-style check — see the
-"Feature N" tests in `test/smoke.test.ts`.
+`scheduler.ts`'s interval/ease-factor math round it out. Every feature in **Advanced features**, **Round 3**,
+**Round 4**, and **Round 5** below has its own passing HTTP-level check plus, where the logic is pure, a direct
+unit-style check — see the "Feature N" tests in `test/smoke.test.ts`.
 
 ## Advanced features
 
@@ -296,7 +305,12 @@ behind an interface from the start.
   one-off demo scenario.
 - **Quality of Idea:** Goes beyond a transcript viewer or generic summarizer by closing the loop into an active
   learning system — extraction feeding a real scheduling algorithm that adapts to how well material was recalled,
-  which is what makes it a study *coach* rather than a note-taking tool.
+  which is what makes it a study *coach* rather than a note-taking tool. Round 5 pushes this further with four
+  features that go beyond "more infrastructure": a concept graph built from real text analysis (not manual
+  tagging) that links material across separate sessions/decks; a genuine Feynman/peer-teaching mode with a real
+  key-term rubric wired into the same scheduling machinery as a normal grade; cross-session study-guide synthesis
+  that deduplicates rather than concatenates; and a composite, explainable exam-readiness score — each a
+  capability a student would actually reach for, not a demo-only stub.
 
 ## Round 3: quiz mode, shared decks, reminders, adaptive generation bias
 
@@ -518,6 +532,113 @@ phrasing, rather than writing a second cloze generator.
 ```bash
 curl -X POST localhost:4466/flashcards/<cardId>/regenerate
 # -> the same card id, with a fresh front/back and identical interval/easeFactor/dueAt/isLeech
+```
+
+## Round 5: concept graph, Feynman mode, study-guide synthesis, exam readiness
+
+The first four rounds were product-completeness features (quiz mode, streaks, import/export). This round is four
+features chosen specifically to be genuinely novel study-coaching functionality — not more infrastructure hardening
+— each independently tested in `test/smoke.test.ts` (search for "Feature 15" through "Feature 18").
+
+### 15. Concept graph
+
+`GET /concepts/:name` answers "show me everything related to X," across every session and deck, built from real
+text analysis of existing flashcard content — **not** a manual tagging system a caller populates. `conceptGraph.ts`
+extracts 1-2 lightweight "concept" strings from a single card's own `front`/`back`, in three tiers:
+
+1. **Definition-style fronts** ("What is/are `<X>`?") — this covers both `flashcardGenerator.ts`'s tier-2
+   definition cards *and* any tier-1 Q&A card whose source question happened to be phrased that way — yield the
+   defined term/noun phrase itself (e.g. `mitochondrion`, or `the powerhouse of the cell`).
+2. **Cloze cards** ("Fill in the blank: ...") yield the blanked word/phrase — the card's own `back` — as the
+   concept.
+3. **Any other Q&A pair** yields the highest-scoring significant word(s) shared across its front and back, using
+   the same word-frequency + capitalization-bonus heuristic `topics.ts` already uses for a whole transcript, just
+   scoped to one card's two fields.
+
+This is what makes it a real *graph*: two cards from entirely different sessions ingested weeks apart — one a
+"What is Mitochondrion?" definition card, the other a "What does Mitochondrion do?" generic Q&A pair from an
+unrelated deck — both resolve to the concept `mitochondrion` and surface together, with no link ever created by
+hand.
+
+```bash
+curl localhost:4466/concepts/mitochondrion
+# -> { "concept": "mitochondrion", "cards": [ { "cardId": "...", "sessionId": "...", "sessionTitle": "...",
+#                                                "front": "...", "back": "...", "tags": [...] }, ... ] }
+```
+
+### 16. Feynman/peer-teaching explanation mode
+
+`POST /review/:cardId/explain { explanation, studentId? }` is the "explain it to learn it" technique: instead of
+self-grading with the four-point scale, a student submits a free-text explanation of the card's concept in their
+own words, and StudyLoop grades it against the card's actual `back` content with a real (heuristic, LLM-free)
+key-term rubric in `explainGrader.ts` — not string equality. It extracts the answer's significant key terms, checks
+which ones the explanation mentions (after light stemming on both sides, so "cells" credits "cell" and
+"photosynthesizes" credits "photosynthesis"), and reports exactly which terms were covered and which were missing.
+
+The derived coverage score is mapped onto the same `RecallGrade` vocabulary (`score >= 0.85` → `easy`, `>= 0.5` →
+`good`, `>= 0.25` → `hard`, else `again`) and run through the **exact same scheduling/leech machinery** a normal
+grade would (`recordReview`/`recordReviewForStudent`) — so a weak explanation genuinely reschedules the card and
+can push it toward becoming a leech (or clear one), rather than being a side channel that only returns feedback
+text with no effect on the review queue. It works on any card, not just ones already flagged as leeches — the
+leech/adaptive signals already tracked elsewhere are what make this mode *worth reaching for* on a card a student
+keeps failing, not a precondition the API enforces.
+
+```bash
+curl -X POST localhost:4466/review/<cardId>/explain -H "Content-Type: application/json" -d '{
+  "explanation": "Mitochondria are the part of the cell that makes energy the cell can use."
+}'
+# -> { "grade": "good", "score": 0.71, "passed": true,
+#      "matchedTerms": ["mitochondria", "energy", "cell"], "missingTerms": ["respiration"],
+#      "feedback": "Good start — you covered mitochondria, energy, cell, but missed mentioning respiration.",
+#      "card": { ...rescheduled exactly like a normal "good" grade... } }
+```
+
+### 17. Cross-session study guide synthesis
+
+`GET /topics/:topic/study-guide` merges every session tagged with `topic` (see Feature 3's heuristic tagging) into
+one consolidated study guide — a real union-of-material synthesis (`studyGuide.ts`), not a raw concatenation of
+their summaries:
+
+- Each session's auto-generated summary has its per-session boilerplate prefix ("Session covered N statement(s)
+  across K speaker(s).", meaningless once merged) stripped, is split into sentences, and every sentence is
+  deduplicated by a normalized key against every other session's — so two sessions that happened to restate the
+  same fact contribute it to the guide once, not twice.
+- `concepts` is the union of every concept `extractConceptsFromCard` (Feature 15's concept graph) resolves across
+  every flashcard in every one of these sessions, deduplicated the same way.
+
+```bash
+curl localhost:4466/topics/ribosome/study-guide
+# -> { "topic": "ribosome", "sessionCount": 2, "cardCount": 5,
+#      "sessions": [ {"id": "...", "title": "Cell biology deep dive"}, {"id": "...", "title": "Protein synthesis review"} ],
+#      "combinedSummary": "Ribosome is the cellular structure that synthesizes proteins. ...",
+#      "concepts": ["messenger rna", "protein synthesis", "ribosome", ...] }
+```
+
+### 18. Exam readiness score
+
+`GET /topics/:topic/readiness?studentId=` returns a composite, explainable 0-100 exam-readiness score
+(`readiness.ts`) combining three signals **already tracked elsewhere in the store** — no new state invented:
+
+```
+score = notDueFraction * 50        // share of cards NOT currently due — SM-2 pushed them out because
+                                    // they've been recalled reliably; entirely-overdue scores 0 here
+      + recentPerformance * 35     // each graded card's quality (again=0/hard=0.4/good=0.75/easy=1),
+                                    // weighted by exponential recency decay (14-day half-life) — a
+                                    // grade from yesterday counts far more than one from months ago
+      + streakFactor * 15          // min(currentStreak, 7) / 7 — consistent daily review is a real
+                                    // signal independent of any one card's own state
+```
+
+With `studentId`, it reads that student's own personal deck (joined decks + directly-reviewed cards) and their own
+study streak; without it, the shared student-less pool with no streak signal. The response always includes a
+plain-language `reasons` breakdown of what's dragging the score down — e.g. `"12 cards overdue"`, `"3 leeches
+unresolved"`, `"no active study streak"` — rather than a bare number a student has to guess at.
+
+```bash
+curl "localhost:4466/topics/thermodynamics/readiness?studentId=alice"
+# -> { "topic": "thermodynamics", "studentId": "alice", "score": 62, "cardCount": 14, "dueCount": 3,
+#      "overdueCount": 2, "leechCount": 1, "notDueFraction": 0.79, "recentPerformance": 0.68, "streakDays": 4,
+#      "reasons": ["2 cards overdue", "1 leech unresolved"] }
 ```
 
 ## Friction log

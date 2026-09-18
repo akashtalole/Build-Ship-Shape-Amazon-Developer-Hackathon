@@ -226,3 +226,79 @@ regenerate-a-card).
    content and exporting *that* (`GET /sessions/:id/export`) rather than the ever-growing global export, plus a
    second, explicitly-crafted small TSV with a deliberate duplicate row to test the within-batch dedup behavior
    directly instead of hoping the accumulated global state would happen to exercise it.
+
+## Round 5: concept graph, Feynman mode, study-guide synthesis, exam readiness
+
+The brief for this pass was explicit and different from the previous four: stop hardening infrastructure and add
+features a judge would say "I haven't seen that idea before" — real functionality, not stubs. Notes from building
+the concept graph, the Feynman/peer-teaching explanation mode, cross-session study-guide synthesis, and the exam
+readiness score.
+
+### What worked well
+
+- Every one of these four features turned out to be a genuine *composition* of round 1-4 primitives rather than a
+  parallel system: the concept graph reuses nothing external but is itself immediately reusable (the study guide's
+  `concepts` union is just `extractConceptsFromCard` called across more cards); the Feynman mode reuses
+  `recordReview`/`recordReviewForStudent` verbatim rather than inventing a second scheduling path, so an
+  explanation-graded card and a normally-graded card are indistinguishable to every other endpoint (leech
+  detection, adaptive ordering, streaks all "just work" on it for free); the readiness score reuses `isDue`'s own
+  timestamp comparison, each card's own `lastGrade`, and `streak.ts`'s existing `currentStreak` rather than
+  tracking anything new. Four "novel" features added zero new persisted state to `store.ts` — everything is derived
+  on read from data the store already had.
+- Writing `conceptGraph.ts`'s three extraction tiers cheapest-first (definition-style front, then cloze, then
+  generic word-overlap) and having each tier `return` immediately on a match — the same short-circuit shape
+  `flashcardGenerator.ts`'s own three tiers already use — meant no card ever needed more than one tier evaluated to
+  get a real answer, and made the module trivially unit-testable tier-by-tier in isolation.
+- Deciding to make `POST /review/:cardId/explain` work on *any* card rather than gating it to leeches only (the
+  spec's framing, "for a card a student has struggled with," described the *use case*, not a hard precondition) was
+  the right call once actually building it: enforcing a leech-only precondition would have meant either an awkward
+  412-style error for a perfectly reasonable "let me explain this one just to check my understanding" request, or a
+  second code path for "explain a non-leech" vs. "explain a leech" that didn't need to exist — the grading logic
+  doesn't care why the student is explaining.
+
+### Friction encountered
+
+1. **Concept extraction's generic (non-"what is") tier is the same word-frequency heuristic as `topics.ts`, scoped
+   down from a whole transcript to two short fields — and at that scale, ties are common and the tie-break
+   (alphabetical) can pick a less-meaningful word over a more-meaningful one that just happens to sort later.** An
+   early test fixture ("What does the mitochondrion do?" / "It converts nutrients into usable energy.") produced
+   `["converts", "energy"]` instead of anything mentioning "mitochondrion" at all, because every content word in
+   that pair appeared exactly once with no capitalization bonus, and alphabetical tie-break has no way to know
+   "mitochondrion" is the actual subject. The fix was accepting this as a real, documented limitation of a
+   frequency-only heuristic at small scale (the same honest tradeoff `topics.ts` already made for whole
+   transcripts) and writing test fixtures where the shared term is either capitalized in the source text (the
+   existing capitalization-bonus signal) or repeated, rather than trying to patch the heuristic with more special
+   cases for a hackathon-scope build. A production version would want real named-entity recognition here, not a
+   frequency count.
+2. **The Feynman-mode rubric's key-term extraction has no way to distinguish "this word matters" from "this word
+   is merely long."** `keyTerms()` treats any non-stopword >= 4 characters in the answer as something the
+   explanation must mention, which means a grammatically necessary but substantively unimportant word (e.g.
+   "process," "through") counts exactly as much as the actual concept term. This is deliberately not "fixed" with a
+   second, more selective word list — there's no principled, tunable-without-real-data line between "important key
+   term" and "just a long word," the same honest admission round 2's friction log already made about the priority
+   formula's weights — but it does mean a technically-passing explanation can occasionally miss the word that
+   actually mattered ("mitochondria") while still crediting a structural word ("respiration" vs. "through") equally.
+   Documented in `explainGrader.ts`'s doc comment as a known LLM-free tradeoff rather than smoothed over.
+3. **Deciding what counts as a "duplicate sentence" for study-guide merging required picking a normalization that's
+   forgiving of punctuation/case but not of real paraphrasing — and there's no way to do better without an LLM.**
+   `normalizeSentenceKey` strips punctuation and lowercases before deduping, which correctly collapses two sessions
+   both stating "Mitochondria is the powerhouse of the cell." verbatim, but does nothing for two sessions that say
+   the same thing in different words ("Mitochondria produce the cell's energy" vs. "Mitochondria is the powerhouse
+   of the cell") — those appear in the merged guide as two separate, seemingly-redundant sentences. A real
+   semantic-similarity dedup (embeddings, or an LLM pass) would catch that; exact-after-normalization was the
+   honest LLM-free ceiling, called out here rather than oversold as smarter deduplication than it is.
+4. **The exam-readiness score's three weights (50/35/15) and the streak cap (7 days) and recency half-life
+   (14 days) are, once again, reasoned-about rather than tuned against real usage data** — the exact same
+   "arbitrary weights, no data to calibrate against" position round 2's priority formula and round 3's weak-topic
+   threshold were already honest about. The recency half-life in particular is doing a lot of implicit work (it's
+   what makes "recent" grade history mean something different from "any" grade history at all), and 14 days was
+   chosen only because it felt like a plausible "still fairly fresh" window for exam prep, not because any review
+   data was available to fit it against.
+5. **Testing the readiness score's streak/recency components over real HTTP has the exact same real-clock problem
+   round 2 and round 4 already hit (and solved the same way).** Building up a multi-day streak, or checking that a
+   grade from "yesterday" outweighs one from "a month ago," requires backdating reviews the way the priority-
+   ordering, reminder-digest, and streak tests already do — `POST /review/:cardId` has no way to inject a fake
+   `now` over the wire, and grading always pushes `dueAt` at least a day into the real future. The readiness tests
+   follow the same documented pattern already established in this file: call `recordReviewForStudent` and
+   `getTopicReadiness` directly with an injected `now`, rather than sleeping the test suite for real days or adding
+   a test-only clock-override endpoint that would only exist to serve tests.
