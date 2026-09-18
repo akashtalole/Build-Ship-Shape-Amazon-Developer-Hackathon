@@ -14,6 +14,8 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
+import { createHmac } from "node:crypto";
 import {
   ModelRouter,
   SIDECAR_COST_USD,
@@ -817,6 +819,356 @@ async function testPersistentMetrics() {
   }
 }
 
+// --- Round 4: per-caller budgets, canary/A-B sidecar routing, outbound alert webhooks, Prometheus export ---
+
+async function testPerCallerBudgets() {
+  const router = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+
+  // --- Two callers, two independent budgets, each covering exactly one escalation ---
+  router.setBudget(FOUNDATION_COST_USD, 60_000, "alice");
+  router.setBudget(FOUNDATION_COST_USD * 3, 60_000, "bob"); // bob's is generous enough for three escalations
+
+  const alice1 = await router.route(AMBIGUOUS_TEXT + " alice one", { callerId: "alice" });
+  assert.equal(alice1.path, "foundation", "alice's first escalation should still go through");
+  const alice2 = await router.route(AMBIGUOUS_TEXT + " alice two", { callerId: "alice" });
+  assert.equal(alice2.budgetExceeded, true, "alice's second escalation should be throttled — her budget only covered one");
+  console.log("✓ setBudget(limit, periodMs, callerId) configures an independent budget for one specific caller");
+
+  const bob1 = await router.route(AMBIGUOUS_TEXT + " bob one", { callerId: "bob" });
+  assert.equal(bob1.path, "foundation");
+  const bob2 = await router.route(AMBIGUOUS_TEXT + " bob two", { callerId: "bob" });
+  assert.equal(bob2.path, "foundation", "bob's own, separate budget should be untouched by alice's exhausted one");
+  console.log("✓ two callers with different configured limits are throttled completely independently of each other");
+
+  // --- A caller who never configured their own budget falls back to the shared default (still unconfigured here => unthrottled) ---
+  const carol = await router.route(AMBIGUOUS_TEXT + " carol", { callerId: "carol" });
+  assert.equal(carol.path, "foundation");
+  assert.equal(carol.budgetExceeded, undefined);
+  console.log("✓ a caller who never set their own budget falls back to the shared default budget (unconfigured here, so unthrottled)");
+
+  // --- GET-budget-equivalent: alice's own status, independent of the (still unconfigured) shared default ---
+  const aliceStatus = router.getBudgetStatus("alice");
+  assert.equal(aliceStatus.enabled, true);
+  assert.equal(aliceStatus.exceeded, true);
+  const defaultStatus = router.getBudgetStatus();
+  assert.equal(defaultStatus.enabled, false, "the shared default was never configured, independent of alice's own budget");
+  console.log("✓ getBudgetStatus(callerId) reports that caller's own status, independent of the shared default's");
+
+  // --- Clearing one caller's override reverts them to the shared default, not to "no budget object at all" ---
+  router.clearBudget("alice");
+  router.setBudget(FOUNDATION_COST_USD * 5, 60_000); // now configure a generous shared default
+  const aliceAfterClear = await router.route(AMBIGUOUS_TEXT + " alice three", { callerId: "alice" });
+  assert.equal(aliceAfterClear.path, "foundation", "alice should now be governed by the shared default, not stuck throttled or magically unbudgeted");
+  console.log("✓ clearing a caller's override reverts them to the shared default budget rather than leaving them unbudgeted");
+
+  // --- GET /metrics-equivalent lists every caller with an explicit override ---
+  const metrics = router.getMetrics();
+  const callerIds = metrics.callerBudgets.map((b) => b.callerId).sort();
+  assert.deepEqual(callerIds, ["bob"], "only bob still has an explicit override — alice's was cleared, carol never set one");
+  console.log("✓ GET /metrics's callerBudgets lists exactly the callers with an explicit override currently configured");
+}
+
+async function testPerCallerBudgetsOverHttp() {
+  const router = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+  const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+  const httpServer = app.listen(0);
+  const { port } = httpServer.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    // --- Configure a budget scoped to caller "dana" only, via the same X-Caller-Id header the rate limiter uses ---
+    const setRes = await fetch(`${base}/budget`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Caller-Id": "dana" },
+      body: JSON.stringify({ limit: FOUNDATION_COST_USD, periodMs: 60_000 }),
+    });
+    assert.equal(setRes.status, 200);
+
+    // --- GET /budget with dana's header reflects her own budget; without any header, the shared default is untouched ---
+    const danaBudget = await (await fetch(`${base}/budget`, { headers: { "X-Caller-Id": "dana" } })).json();
+    assert.equal(danaBudget.enabled, true);
+    assert.equal(danaBudget.limitUsd, FOUNDATION_COST_USD);
+    const defaultBudget = await (await fetch(`${base}/budget`)).json();
+    assert.equal(defaultBudget.enabled, false, "configuring dana's own budget must not affect the shared default");
+    console.log("✓ POST/GET /budget scoped via X-Caller-Id configures and reads a caller-specific budget, independent of the shared default");
+
+    // --- Dana's first escalation goes through; her second is throttled ---
+    await fetch(`${base}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Caller-Id": "dana" },
+      body: JSON.stringify({ text: "Can you check on things sometime, no rush, per-caller budget test one?" }),
+    });
+    const danaThrottledRes = await fetch(`${base}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Caller-Id": "dana" },
+      body: JSON.stringify({ text: "Can you check on things sometime, no rush, per-caller budget test two?" }),
+    });
+    const danaThrottledBody = await danaThrottledRes.json();
+    assert.equal(danaThrottledBody.budgetExceeded, true);
+
+    // --- A different caller, with no override of their own, keeps escalating normally — unaffected by dana's exhausted budget ---
+    const erinRes = await fetch(`${base}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Caller-Id": "erin" },
+      body: JSON.stringify({ text: "Can you check on things sometime, no rush, per-caller budget test for erin?" }),
+    });
+    const erinBody = await erinRes.json();
+    assert.equal(erinBody.path, "foundation");
+    assert.equal(erinBody.budgetExceeded, undefined);
+    console.log("✓ over real HTTP, a caller-scoped budget throttles only that caller — a different caller with no override keeps escalating normally");
+
+    // --- GET /budget/all surfaces dana's override alongside the shared default ---
+    const allBudgets = await (await fetch(`${base}/budget/all`)).json();
+    assert.equal(allBudgets.default.enabled, false);
+    assert.ok(allBudgets.callers.some((c: { callerId: string }) => c.callerId === "dana"));
+    console.log("✓ GET /budget/all lists every caller with an explicit override alongside the shared default");
+  } finally {
+    httpServer.close();
+  }
+}
+
+// A marker phrase that appears in none of MockSidecarClassifier's built-in
+// keyword lists (checked by inspection — see sidecarClassifier.ts) so the
+// primary always reports its zero-signal default ("informational", 0.3)
+// for text containing it, while a candidate configured with it as an extra
+// "urgent" keyword always disagrees — a clean, deterministic disagreement
+// signal independent of the random traffic-split draw.
+const CANARY_MARKER = "zzzcanarymarkerzzz";
+
+async function testCanaryRouting() {
+  const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  const candidate = new MockSidecarClassifier({ extraKeywords: [{ label: "urgent", keywords: [CANARY_MARKER] }] });
+
+  const beforeRegistration = router.getCanaryStatus();
+  assert.equal(beforeRegistration.enabled, false);
+  console.log("✓ with no canary registered, getCanaryStatus() reports enabled: false");
+
+  const PERCENTAGE = 0.4;
+  router.setCanary(PERCENTAGE, candidate);
+  assert.equal(router.getCanaryStatus().enabled, true);
+  assert.equal(router.getCanaryStatus().percentage, PERCENTAGE);
+
+  const SAMPLE_SIZE = 400;
+  for (let i = 0; i < SAMPLE_SIZE; i++) {
+    // A fresh, distinct input every iteration so the response cache never
+    // short-circuits the sidecar/candidate comparison after the first call.
+    await router.route(`Please review this ${CANARY_MARKER} note, item number ${i}, when you have a moment.`);
+  }
+
+  const status = router.getCanaryStatus();
+  assert.equal(status.evaluations, SAMPLE_SIZE, "every request should have evaluated both the primary and the candidate on the same input");
+  assert.equal(status.disagreements, SAMPLE_SIZE, "the marker keyword makes the primary and candidate disagree on every single one of these inputs");
+  assert.equal(status.disagreementRate, 1);
+  console.log(`✓ a canary configured with a distinguishing keyword disagrees with the primary on every evaluated input where that keyword appears (${status.disagreements}/${status.evaluations})`);
+
+  // Genuinely probabilistic, so a generous tolerance band around the
+  // configured 40% keeps this from flaking while still proving the traffic
+  // split is real (not 0% and not 100%).
+  const observedRate = status.servedRequests / status.evaluations;
+  assert.ok(
+    observedRate > 0.2 && observedRate < 0.6,
+    `expected the candidate to serve roughly ${PERCENTAGE * 100}% of ${SAMPLE_SIZE} requests, observed ${(observedRate * 100).toFixed(1)}% (${status.servedRequests}/${status.evaluations})`
+  );
+  console.log(`✓ a canary registered at ${PERCENTAGE * 100}% traffic actually serves roughly that share of requests over ${SAMPLE_SIZE} samples (observed ${(observedRate * 100).toFixed(1)}%)`);
+
+  router.clearCanary();
+  assert.equal(router.getCanaryStatus().enabled, false);
+  assert.equal(router.getCanaryStatus().percentage, 0);
+  assert.equal(router.getCanaryStatus().evaluations, SAMPLE_SIZE, "clearing the canary must not erase the cumulative comparison counters");
+  console.log("✓ clearing the canary disables routing to it without erasing the cumulative comparison metrics");
+
+  const metrics = router.getMetrics();
+  assert.equal(metrics.canaryEnabled, false);
+  assert.equal(metrics.canaryEvaluations, SAMPLE_SIZE);
+  assert.equal(metrics.canaryDisagreements, SAMPLE_SIZE);
+  console.log("✓ GET /metrics folds in the same canary evaluation/disagreement counts");
+}
+
+async function testCanaryRoutingOverHttp() {
+  const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+  const httpServer = app.listen(0);
+  const { port } = httpServer.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const badRes = await fetch(`${base}/router/canary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ percentage: 1.5 }),
+    });
+    assert.equal(badRes.status, 400);
+    console.log("✓ POST /router/canary rejects an out-of-range 'percentage' with 400");
+
+    const registerRes = await fetch(`${base}/router/canary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ percentage: 0.5, config: { confidenceScale: 0.5 } }),
+    });
+    assert.equal(registerRes.status, 200);
+    const registerBody = await registerRes.json();
+    assert.equal(registerBody.enabled, true);
+    assert.equal(registerBody.percentage, 0.5);
+
+    const getRes = await fetch(`${base}/router/canary`);
+    const getBody = await getRes.json();
+    assert.equal(getBody.enabled, true);
+    assert.equal(getBody.percentage, 0.5);
+    console.log("✓ POST/GET /router/canary registers a candidate sidecar at a given traffic percentage and reads back its status");
+
+    const deleteRes = await fetch(`${base}/router/canary`, { method: "DELETE" });
+    const deleteBody = await deleteRes.json();
+    assert.equal(deleteBody.enabled, false);
+    console.log("✓ DELETE /router/canary clears the registered candidate");
+  } finally {
+    httpServer.close();
+  }
+}
+
+async function testAlertWebhooks() {
+  // A local HTTP listener standing in for the operator's own webhook receiver.
+  const received: { body: string; headers: Record<string, string | string[] | undefined> }[] = [];
+  const listener = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      received.push({ body: Buffer.concat(chunks).toString("utf8"), headers: req.headers });
+      res.writeHead(200);
+      res.end("ok");
+    });
+  });
+  await new Promise<void>((resolve) => listener.listen(0, resolve));
+  const listenerPort = (listener.address() as AddressInfo).port;
+  const listenerUrl = `http://127.0.0.1:${listenerPort}/hook`;
+
+  try {
+    // --- budget_exceeded, registered and triggered over real HTTP ---
+    const router = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+    const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+    const httpServer = app.listen(0);
+    const { port } = httpServer.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    try {
+      const regRes = await fetch(`${base}/alerts/webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: listenerUrl }),
+      });
+      assert.equal(regRes.status, 200);
+      const regBody = await regRes.json();
+      assert.ok(typeof regBody.secret === "string" && regBody.secret.length > 0, "registering a webhook should hand back a signing secret");
+      console.log("✓ POST /alerts/webhook registers a callback URL and hands back a fresh signing secret");
+
+      const statusRes = await fetch(`${base}/alerts/webhook`);
+      const statusBody = await statusRes.json();
+      assert.equal(statusBody.registered, true);
+      assert.equal(statusBody.url, listenerUrl);
+
+      router.setBudget(FOUNDATION_COST_USD, 60_000);
+      await router.route(AMBIGUOUS_TEXT + " alert budget one"); // consumes the whole budget
+      await router.route(AMBIGUOUS_TEXT + " alert budget two"); // exceeds it -> should fire budget_exceeded
+      await router.flushAlertWebhooks();
+
+      assert.ok(received.length >= 1, "the local listener should have received at least one webhook delivery");
+      const delivery = received[received.length - 1];
+      assert.equal(delivery.headers["x-modelrouter-event"], "budget_exceeded");
+      const expectedSignature = createHmac("sha256", regBody.secret).update(delivery.body).digest("hex");
+      assert.equal(delivery.headers["x-modelrouter-signature"], expectedSignature, "the delivery must be signed with HMAC-SHA256 over the raw body using the secret handed back at registration");
+      const eventBody = JSON.parse(delivery.body);
+      assert.equal(eventBody.type, "budget_exceeded");
+      console.log("✓ exceeding a configured budget fires a correctly HMAC-SHA256-signed 'budget_exceeded' webhook delivery to the registered callback URL");
+
+      const deleteRes = await fetch(`${base}/alerts/webhook`, { method: "DELETE" });
+      assert.equal((await deleteRes.json()).registered, false);
+      console.log("✓ DELETE /alerts/webhook unregisters the callback");
+    } finally {
+      httpServer.close();
+    }
+
+    // --- circuit_open, registered and triggered directly against the router (unit-style) ---
+    received.length = 0;
+    const flakyRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider({ alwaysFail: true }));
+    const registration = flakyRouter.registerAlertWebhook(listenerUrl);
+    for (let i = 0; i < 3; i++) {
+      // Default circuit-breaker threshold is 3 consecutive failures.
+      await flakyRouter.route(AMBIGUOUS_TEXT + " circuit trip " + i);
+    }
+    assert.equal(flakyRouter.getMetrics().circuitState, "open", "3 consecutive foundation failures should have tripped the circuit open");
+    await flakyRouter.flushAlertWebhooks();
+
+    const circuitDelivery = received.find((r) => r.headers["x-modelrouter-event"] === "circuit_open");
+    assert.ok(circuitDelivery, "the circuit breaker opening should fire a 'circuit_open' alert webhook");
+    const expectedCircuitSignature = createHmac("sha256", registration.secret).update(circuitDelivery!.body).digest("hex");
+    assert.equal(circuitDelivery!.headers["x-modelrouter-signature"], expectedCircuitSignature);
+    console.log("✓ the circuit breaker tripping open fires a correctly signed 'circuit_open' webhook delivery too");
+
+    // A subsequent failure while already open must not re-fire the alert (transition-only, not one-per-failure).
+    received.length = 0;
+    await flakyRouter.route(AMBIGUOUS_TEXT + " circuit trip already open");
+    await flakyRouter.flushAlertWebhooks();
+    assert.equal(received.filter((r) => r.headers["x-modelrouter-event"] === "circuit_open").length, 0, "no new circuit_open alert should fire while the circuit is already open");
+    console.log("✓ a 'circuit_open' alert fires only on the transition into the open state, not on every subsequent failure while it stays open");
+  } finally {
+    listener.close();
+  }
+}
+
+async function testPrometheusMetrics() {
+  const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+  const httpServer = app.listen(0);
+  const { port } = httpServer.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    await fetch(`${base}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: URGENT_TEXT }),
+    });
+    router.setBudget(1, 60_000, "prom-caller");
+
+    const res = await fetch(`${base}/metrics/prometheus`);
+    assert.equal(res.status, 200);
+    assert.ok(res.headers.get("content-type")?.includes("text/plain"));
+    const text = await res.text();
+
+    // Well-formed exposition format: every metric name that appears has both a HELP and a TYPE comment.
+    assert.ok(text.includes("# HELP model_router_requests_total"));
+    assert.ok(text.includes("# TYPE model_router_requests_total counter"));
+    assert.match(text, /^model_router_requests_total \d+(\.\d+)?$/m, "expected a bare 'name value' line for the (unlabeled) requests_total series");
+    console.log("✓ GET /metrics/prometheus returns 200 text/plain with well-formed # HELP/# TYPE comments and a matching data line");
+
+    // Labeled series (circuit breaker state, and the per-caller budget we just configured).
+    assert.match(text, /model_router_circuit_state\{state="closed"\} 1/);
+    assert.match(text, /model_router_circuit_state\{state="open"\} 0/);
+    assert.match(text, /model_router_budget_limit_usd\{caller="prom-caller"\} 1/);
+    console.log("✓ GET /metrics/prometheus renders labeled series for circuit-breaker state and per-caller budgets");
+
+    // Round-4 feature metric names are all present.
+    for (const name of [
+      "model_router_canary_enabled",
+      "model_router_canary_percentage",
+      "model_router_canary_evaluations_total",
+      "model_router_alert_webhook_registered",
+      "model_router_alert_webhook_deliveries_total",
+    ]) {
+      assert.ok(text.includes(name), `expected the exposition text to mention ${name}`);
+    }
+    console.log("✓ GET /metrics/prometheus includes the round-4 canary and alert-webhook metric names");
+
+    // GET /metrics (JSON) is unchanged by the new endpoint's existence.
+    const jsonRes = await fetch(`${base}/metrics`);
+    assert.equal(jsonRes.headers.get("content-type")?.includes("application/json"), true);
+    const jsonBody = await jsonRes.json();
+    assert.equal(typeof jsonBody.totalRequests, "number");
+    console.log("✓ GET /metrics still returns the original JSON shape, unaffected by the new Prometheus endpoint");
+  } finally {
+    httpServer.close();
+  }
+}
+
 async function main() {
   await testRouterUnit();
   await testResponseCache();
@@ -831,6 +1183,12 @@ async function main() {
   await testCostBudget();
   await testCostBudgetOverHttp();
   await testPersistentMetrics();
+  await testPerCallerBudgets();
+  await testPerCallerBudgetsOverHttp();
+  await testCanaryRouting();
+  await testCanaryRoutingOverHttp();
+  await testAlertWebhooks();
+  await testPrometheusMetrics();
   console.log("\nAll model-router smoke tests passed.");
 }
 

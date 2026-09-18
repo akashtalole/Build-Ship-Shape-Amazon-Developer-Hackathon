@@ -108,6 +108,33 @@ function confidenceForHits(hits: number): number {
 }
 
 /**
+ * Tuning knobs for a `MockSidecarClassifier` instance, used to construct a
+ * deliberately *different* second classifier for canary/A-B sidecar routing
+ * (`POST /router/canary`) — the two sidecar "versions" a real deployment
+ * would compare are two different trained-model artifacts behind two
+ * SageMaker endpoints; here, since both are the same keyword-heuristic
+ * class, the difference has to come from configuration instead.
+ */
+export interface SidecarClassifierConfig {
+  /**
+   * Keyword/phrase rules layered on top of the built-in set (see
+   * `KEYWORD_SETS` above), matched the same case-insensitive-substring way
+   * and counted toward that label's hit total. Lets a candidate
+   * configuration react to inputs the primary's built-in set doesn't, for a
+   * genuine (not simulated) behavioral difference between the two.
+   */
+  extraKeywords?: { label: UrgencyLabel; keywords: string[] }[];
+  /**
+   * Multiplies the confidence this instance would otherwise report (clamped
+   * back to [0, 1] afterward). Default 1 (no change). Lets a candidate
+   * simulate being systematically more or less confident than the primary
+   * on the exact same inputs — e.g. a newer model version that's more
+   * conservative about the "urgent" label.
+   */
+  confidenceScale?: number;
+}
+
+/**
  * Deterministic, keyword-based stand-in for a SageMaker real-time (or
  * serverless) inference endpoint.
  *
@@ -139,6 +166,22 @@ function confidenceForHits(hits: number): number {
  * API keys are stored in application code.
  */
 export class MockSidecarClassifier implements SidecarClassifier {
+  /** Per-instance keyword sets: the built-in `KEYWORD_SETS`, plus this instance's `config.extraKeywords` layered on top — computed once here rather than on every `classify()` call. */
+  private readonly keywordSets: KeywordSet[];
+  private readonly confidenceScale: number;
+
+  constructor(config: SidecarClassifierConfig = {}) {
+    this.confidenceScale = config.confidenceScale ?? 1;
+    // Deep-copy so mutating a per-instance set (below) never touches the
+    // shared module-level `KEYWORD_SETS` that every other instance reads.
+    this.keywordSets = KEYWORD_SETS.map((set) => ({ label: set.label, keywords: [...set.keywords] }));
+    for (const extra of config.extraKeywords ?? []) {
+      const target = this.keywordSets.find((set) => set.label === extra.label);
+      if (target) target.keywords.push(...extra.keywords);
+      else this.keywordSets.push({ label: extra.label, keywords: [...extra.keywords] });
+    }
+  }
+
   async classify(input: string): Promise<SidecarResult> {
     const text = input.toLowerCase();
 
@@ -147,7 +190,7 @@ export class MockSidecarClassifier implements SidecarClassifier {
     // A trained-model endpoint wouldn't have this exact signal (see
     // SidecarResult's doc comment), but a hand-written rule set gets it for
     // free, which is one honest advantage of choosing simplicity here.
-    const hitCounts = KEYWORD_SETS.map((set) => {
+    const hitCounts = this.keywordSets.map((set) => {
       const matches = set.keywords.filter((keyword) => text.includes(keyword));
       return { label: set.label, hits: matches.length, matches };
     });
@@ -161,7 +204,7 @@ export class MockSidecarClassifier implements SidecarClassifier {
       // No keyword signal at all — the sidecar has nothing to go on, so it
       // reports its default label at low confidence, which is exactly the
       // signal the router needs to escalate to the foundation model.
-      return { label: "informational", confidence: 0.3, matchedKeywords: [] };
+      return { label: "informational", confidence: this.scaleConfidence(0.3), matchedKeywords: [] };
     }
 
     let confidence = confidenceForHits(winner.hits);
@@ -173,6 +216,11 @@ export class MockSidecarClassifier implements SidecarClassifier {
       confidence = Math.max(0.2, confidence - 0.15);
     }
 
-    return { label: winner.label, confidence, matchedKeywords: winner.matches };
+    return { label: winner.label, confidence: this.scaleConfidence(confidence), matchedKeywords: winner.matches };
+  }
+
+  /** Applies this instance's `confidenceScale` (a no-op at the default of 1) and clamps back to a valid [0, 1] confidence. */
+  private scaleConfidence(confidence: number): number {
+    return Math.min(1, Math.max(0, confidence * this.confidenceScale));
   }
 }
