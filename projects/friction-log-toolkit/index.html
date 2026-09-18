@@ -1015,6 +1015,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#friction-log-top-n-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log top [N] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#friction-log-edit-id-note-note-tag-tag" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1052,6 +1063,17 @@
     <span class="md-ellipsis">
       
         friction-log sync &lt;url&gt; [--push|--pull]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-aggregate-url1-url2-out-file-title-title" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log aggregate &lt;url1&gt; &lt;url2&gt; ... [--out &lt;file&gt;] [--title &lt;title&gt;]
       
     </span>
   </a>
@@ -1114,10 +1136,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#friction-log-export-out-file-title-title-format-jsonmdtxt-since-date-until-date" class="md-nav__link">
+  <a href="#friction-log-export-out-file-title-title-format-jsonmdtxttimeline-since-date-until-date" class="md-nav__link">
     <span class="md-ellipsis">
       
-        friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt] [--since &lt;date&gt;] [--until &lt;date&gt;]
+        friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt|timeline] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-export-format-github-issues-ownerrepo-out-dir-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log export --format github-issues &lt;owner/repo&gt; [--out &lt;dir&gt;] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#team-aggregation-theme-clustering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Team aggregation &amp; theme clustering
       
     </span>
   </a>
@@ -1430,6 +1474,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#friction-log-top-n-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log top [N] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#friction-log-edit-id-note-note-tag-tag" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1467,6 +1522,17 @@
     <span class="md-ellipsis">
       
         friction-log sync &lt;url&gt; [--push|--pull]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-aggregate-url1-url2-out-file-title-title" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log aggregate &lt;url1&gt; &lt;url2&gt; ... [--out &lt;file&gt;] [--title &lt;title&gt;]
       
     </span>
   </a>
@@ -1529,10 +1595,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#friction-log-export-out-file-title-title-format-jsonmdtxt-since-date-until-date" class="md-nav__link">
+  <a href="#friction-log-export-out-file-title-title-format-jsonmdtxttimeline-since-date-until-date" class="md-nav__link">
     <span class="md-ellipsis">
       
-        friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt] [--since &lt;date&gt;] [--until &lt;date&gt;]
+        friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt|timeline] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-export-format-github-issues-ownerrepo-out-dir-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log export --format github-issues &lt;owner/repo&gt; [--out &lt;dir&gt;] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#team-aggregation-theme-clustering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Team aggregation &amp; theme clustering
       
     </span>
   </a>
@@ -1772,6 +1860,29 @@ Daily<span class="w"> </span>activity:
 </code></pre></div>
 <p><strong>The bar chart</strong> (<code>Daily activity</code>) prints one line per calendar day that has at least one entry (a log spanning a huge date range with long empty gaps doesn't print a wall of zero-count days), in chronological order. Below 40 entries in a single day, a bar is exactly <code>count</code> block characters (<code>█</code>) long, so the bar itself is an exact, at-a-glance count — not just decoration next to the trailing number. Only once a day's count exceeds 40 does every bar get scaled down together (the busiest day becomes exactly 40 characters, every other day shrinks by the same factor), so one very busy day can't blow out terminal width while relative proportions between days stay meaningful. No dependency — just repeated <code>█</code> characters, same zero-dependency philosophy as everything else in this CLI.</p>
 <p><strong>Date-range filtering</strong> — see <a href="#date-range-filtering---since--until">Date-range filtering</a> below.</p>
+<h3 id="friction-log-top-n-since-date-until-date"><code>friction-log top [N] [--since &lt;date&gt;] [--until &lt;date&gt;]</code><a class="headerlink" href="#friction-log-top-n-since-date-until-date" title="Permanent link">&para;</a></h3>
+<p>Scores every entry with a real, explainable severity heuristic and prints the <code>N</code> highest-scoring entries first (default 5) — the command to run right before writing the submission's own friction-log section, instead of re-reading the whole log by hand to figure out which handful of entries actually matter.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>top<span class="w"> </span><span class="m">3</span>
+Top<span class="w"> </span><span class="m">3</span><span class="w"> </span>entries<span class="w"> </span>by<span class="w"> </span>severity<span class="w"> </span>score:
+<span class="m">1</span>.<span class="w"> </span><span class="o">[</span>score<span class="w"> </span><span class="m">8</span>.6<span class="o">]</span><span class="w"> </span><span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>The<span class="w"> </span>MCP<span class="w"> </span>schema<span class="w"> </span>validator<span class="w"> </span>crashed<span class="w"> </span>on<span class="w"> </span>a<span class="w"> </span>valid<span class="w"> </span>payload,<span class="w"> </span>lost<span class="w"> </span>an<span class="w"> </span>hour
+<span class="w">     </span>-<span class="w"> </span>tagged<span class="w"> </span><span class="s2">"friction"</span><span class="w"> </span><span class="o">(</span>+5<span class="o">)</span>
+<span class="w">     </span>-<span class="w"> </span>wording<span class="w"> </span><span class="s2">"crashed"</span><span class="w"> </span>raises<span class="w"> </span>severity<span class="w"> </span><span class="o">(</span>+3<span class="o">)</span>
+<span class="w">     </span>-<span class="w"> </span>one<span class="w"> </span>of<span class="w"> </span>the<span class="w"> </span>earlier<span class="w"> </span>entries<span class="w"> </span><span class="o">(</span>+0.6<span class="w"> </span>recency<span class="o">)</span>
+<span class="m">2</span>.<span class="w"> </span><span class="o">[</span>score<span class="w"> </span><span class="m">7</span><span class="o">]</span><span class="w"> </span><span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>MCP<span class="w"> </span>schema<span class="w"> </span>validation<span class="w"> </span>errors<span class="w"> </span>had<span class="w"> </span>no<span class="w"> </span>line<span class="w"> </span>numbers
+<span class="w">     </span>-<span class="w"> </span>tagged<span class="w"> </span><span class="s2">"friction"</span><span class="w"> </span><span class="o">(</span>+5<span class="o">)</span>
+<span class="w">     </span>-<span class="w"> </span>wording<span class="w"> </span><span class="s2">"errors"</span><span class="w"> </span>raises<span class="w"> </span>severity<span class="w"> </span><span class="o">(</span>+2<span class="o">)</span>
+<span class="w">     </span>-<span class="w"> </span>one<span class="w"> </span>of<span class="w"> </span>the<span class="w"> </span>earlier<span class="w"> </span>entries<span class="w"> </span><span class="o">(</span>+0.0<span class="w"> </span>recency<span class="o">)</span>
+<span class="m">3</span>.<span class="w"> </span><span class="o">[</span>score<span class="w"> </span><span class="m">5</span><span class="o">]</span><span class="w"> </span><span class="o">[</span>feature-request<span class="o">]</span><span class="w"> </span>Should<span class="w"> </span>add<span class="w"> </span>dark<span class="w"> </span>mode
+<span class="w">     </span>-<span class="w"> </span>tagged<span class="w"> </span><span class="s2">"feature-request"</span><span class="w"> </span><span class="o">(</span>+2<span class="o">)</span>
+<span class="w">     </span>-<span class="w"> </span>one<span class="w"> </span>of<span class="w"> </span>the<span class="w"> </span>more<span class="w"> </span>recent<span class="w"> </span>entries<span class="w"> </span><span class="o">(</span>+3.0<span class="w"> </span>recency<span class="o">)</span>
+</code></pre></div>
+<p><strong>How the score is built</strong> (see <code>src/severity.ts</code> — every component is a plain, readable function, no ML, no external call): each entry's score is the sum of three independently-explainable pieces, each printed as its own <code>reasons</code> line so the ranking is never a black box:</p>
+<ol>
+<li><strong>Tag weight</strong> — <code>friction</code> (+5) outweighs <code>feature-request</code> (+2) and the default <code>note</code> (+1); <code>worked-well</code> (+0) isn't a problem at all, so it never outranks anything that is.</li>
+<li><strong>Keyword weight</strong> — the note's own wording: <code>blocker</code>/<code>showstopper</code>/<code>critical</code>-class language is worth the most, <code>crash</code>/<code>dead end</code>/<code>couldn't</code>/<code>impossible</code> next, <code>error</code>/<code>broke</code>/<code>stuck</code>/<code>hours</code> a bit less — while <code>minor</code>/<code>cosmetic</code>/<code>nit</code>/<code>slightly</code>-style hedging actively subtracts points, since a note that hedges its own severity usually means it. Same word-boundary keyword matching as the auto-tag heuristic in spirit, just with weighted rules instead of a single tag guess.</li>
+<li><strong>Recency weight</strong> — a relative rank (0 to +3) among <em>only the entries being scored</em> (so <code>top --since ...</code> on a narrower window recomputes it), rewarding a problem that's still fresh — likely still unresolved — near a hackathon deadline.</li>
+</ol>
+<p><code>--since</code>/<code>--until</code> narrow the pool <code>top</code> ranks over first, same as <code>list</code>/<code>export</code>/<code>stats</code>. <code>friction-log top</code> on an empty log (or an empty date range) prints a friendly message instead of an error.</p>
 <h3 id="friction-log-edit-id-note-note-tag-tag"><code>friction-log edit &lt;id&gt; [--note &lt;note&gt;] [--tag &lt;tag&gt;]</code><a class="headerlink" href="#friction-log-edit-id-note-note-tag-tag" title="Permanent link">&para;</a></h3>
 <p>Updates an existing entry in place, by the short id shown in <code>list</code>. Pass <code>--note</code>, <code>--tag</code>, or both; anything you omit is left unchanged.</p>
 <div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>edit<span class="w"> </span>a1b2c3d4<span class="w"> </span>--tag<span class="w"> </span>worked-well
@@ -1828,6 +1939,25 @@ $<span class="w"> </span>friction-log<span class="w"> </span>sync<span class="w"
 </ul>
 <p>Because both directions dedup by entry <code>id</code>, running <code>sync</code> repeatedly (a cron job, a pre-submission ritual, a flaky connection retried) never doubles up entries — a second identical push or pull reports <code>+0 new</code> and leaves everything else unchanged. <code>sync</code> requires a log to already exist (<code>friction-log init</code> first), same as <code>list</code>/<code>export</code>/<code>stats</code>/<code>serve</code>/<code>watch</code>; an unreachable URL, a non-2xx response, or a response that doesn't match the JSON shape above all fail clearly instead of hanging or crashing with a raw stack trace.</p>
 <p>No real server ships with this CLI — the contract above is everything a teammate (or this project's own test suite, which spins up a throwaway <code>node:http</code> listener as a stand-in) needs to implement to be a valid sync target.</p>
+<h3 id="friction-log-aggregate-url1-url2-out-file-title-title"><code>friction-log aggregate &lt;url1&gt; &lt;url2&gt; ... [--out &lt;file&gt;] [--title &lt;title&gt;]</code><a class="headerlink" href="#friction-log-aggregate-url1-url2-out-file-title-title" title="Permanent link">&para;</a></h3>
+<p>Team-wide triage, built directly on <code>sync</code>'s existing mechanism: pulls entries from every URL given (each one answering the exact same <code>GET</code> half of the sync HTTP contract above — anything already valid as a <code>sync</code> target is a valid <code>aggregate</code> source, no new server-side code needed), merges them with the same id-based dedup <code>merge</code>/<code>sync</code> use, and — this is the point — <strong>groups the combined set by shared theme</strong> instead of just concatenating everyone's raw list.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>aggregate<span class="w"> </span>https://alice.example.com/friction-log<span class="w"> </span>https://bob.example.com/friction-log
+<span class="c1"># Team Friction Log — Aggregated</span>
+
+_Aggregated<span class="w"> </span>from<span class="w"> </span><span class="m">2</span><span class="w"> </span>sources<span class="w"> </span><span class="o">(</span>...<span class="o">)</span><span class="w"> </span>—<span class="w"> </span><span class="m">5</span><span class="w"> </span>entries<span class="w"> </span>after<span class="w"> </span>de-duplication<span class="w"> </span><span class="o">(</span><span class="m">1</span><span class="w"> </span>duplicate<span class="w"> </span>id<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>skipped<span class="o">)</span>,<span class="w"> </span>grouped<span class="w"> </span>into<span class="w"> </span><span class="m">4</span><span class="w"> </span>themes._
+
+<span class="c1">## Themes</span>
+
+<span class="c1">### 1. mcp, schema _(2 entries, mostly "friction")_</span>
+
+-<span class="w"> </span>**<span class="o">[</span>friction<span class="o">]</span>**<span class="w"> </span>MCP<span class="w"> </span>schema<span class="w"> </span>validation<span class="w"> </span>kept<span class="w"> </span>failing<span class="w"> </span>with<span class="w"> </span>no<span class="w"> </span>line<span class="w"> </span>numbers<span class="w"> </span>_<span class="o">(</span>...<span class="o">)</span>_
+-<span class="w"> </span>**<span class="o">[</span>friction<span class="o">]</span>**<span class="w"> </span>Our<span class="w"> </span>MCP<span class="w"> </span>schema<span class="w"> </span>validator<span class="w"> </span>also<span class="w"> </span>crashed<span class="w"> </span>constantly,<span class="w"> </span>lost<span class="w"> </span>hours<span class="w"> </span>_<span class="o">(</span>...<span class="o">)</span>_
+
+<span class="c1">### 2. mode, oauth, painlessly, ring, sandbox _(1 entry, mostly "worked-well")_</span>
+...
+</code></pre></div>
+<p>That first theme is the whole reason <code>aggregate</code> exists: Alice and Bob each independently hit the same underlying "MCP schema validation" problem, worded completely differently, on separate machines — and instead of two unrelated bullets buried on opposite ends of a merged list, they land under one heading together. See <a href="#team-aggregation--theme-clustering">Team aggregation &amp; theme clustering</a> below for how the clustering itself works.</p>
+<p>A source that can't be reached (an offline teammate, a typo'd URL) is listed under "Unreachable sources" in the report instead of failing the whole aggregation — useful mid-hackathon when not everyone's instance is guaranteed to be up at once. <code>--out &lt;file&gt;</code> writes the Markdown report to a file instead of printing it; <code>aggregate</code> needs no local <code>.friction-log.json</code> at all, since it's a pure cross-team reporting command, not something that touches the local log.</p>
 <h3 id="friction-log-template-add-name-text-with-placeholders-tag-tag"><code>friction-log template add &lt;name&gt; "&lt;text with {placeholders}&gt;" [--tag &lt;tag&gt;]</code><a class="headerlink" href="#friction-log-template-add-name-text-with-placeholders-tag-tag" title="Permanent link">&para;</a></h3>
 <p>Saves a reusable note template under <code>&lt;name&gt;</code>, with any number of <code>{placeholder}</code> tokens (a placeholder name is letters/digits/underscore). Re-running <code>template add</code> with a name that already exists <strong>replaces</strong> it rather than creating a duplicate. <code>--tag</code> is optional — a template can carry its own tag, applied by <code>template use</code> whenever that command's own <code>--tag</code> is omitted.</p>
 <div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>template<span class="w"> </span>add<span class="w"> </span>flaky-endpoint<span class="w"> </span><span class="s2">"{endpoint} returned {code} with no explanation"</span><span class="w"> </span>--tag<span class="w"> </span>friction
@@ -1891,8 +2021,8 @@ Suggested<span class="w"> </span>tag:<span class="w"> </span>friction<span class
 <p>Since it's built on Node's <code>readline</code>, it works the same whether stdin is a real terminal or a pipe — so it's also scriptable:</p>
 <div class="highlight"><pre><span></span><code>$<span class="w"> </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'First rapid note\nSecond note #feature-request\n\n'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>friction-log<span class="w"> </span>watch
 </code></pre></div>
-<h3 id="friction-log-export-out-file-title-title-format-jsonmdtxt-since-date-until-date"><code>friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt] [--since &lt;date&gt;] [--until &lt;date&gt;]</code><a class="headerlink" href="#friction-log-export-out-file-title-title-format-jsonmdtxt-since-date-until-date" title="Permanent link">&para;</a></h3>
-<p>Renders the log as Markdown (default), plain text, or raw JSON, either to stdout or to a file. This is the command you run right before writing your hackathon submission's own <code>FRICTION_LOG.md</code> — or, with <code>--format json</code>, before feeding your friction log into some other script or CI check.</p>
+<h3 id="friction-log-export-out-file-title-title-format-jsonmdtxttimeline-since-date-until-date"><code>friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt|timeline] [--since &lt;date&gt;] [--until &lt;date&gt;]</code><a class="headerlink" href="#friction-log-export-out-file-title-title-format-jsonmdtxttimeline-since-date-until-date" title="Permanent link">&para;</a></h3>
+<p>Renders the log as Markdown (default), plain text, raw JSON, or a narrative timeline, either to stdout or to a file. This is the command you run right before writing your hackathon submission's own <code>FRICTION_LOG.md</code> — or, with <code>--format json</code>, before feeding your friction log into some other script or CI check. A fifth format, <code>github-issues</code>, has different arguments (an <code>&lt;owner/repo&gt;</code> and a directory instead of a file) and is documented separately just below.</p>
 <p><strong>Date-range filtering</strong> — see <a href="#date-range-filtering---since--until">Date-range filtering</a> below.</p>
 <div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--out<span class="w"> </span>FRICTION_LOG.md<span class="w"> </span>--title<span class="w"> </span><span class="s2">"Team Rocket — Friction Log"</span>
 ✓<span class="w"> </span>Exported<span class="w"> </span>friction<span class="w"> </span>log<span class="w"> </span>to<span class="w"> </span>FRICTION_LOG.md
@@ -1940,6 +2070,59 @@ FRICTION ENCOUNTERED
 
 <span class="k">-</span><span class="w"> </span><span class="gs">**[note]**</span> Random thought: should track time-of-day too <span class="ge">_(2026-09-02 12:28:15 UTC)_</span>
 </code></pre></div>
+<p><code>--format timeline</code> turns the log into chronological <strong>narrative prose</strong> instead of a bulleted list — the format built for pasting straight into a Devpost write-up's "challenges we ran into" section, where a bulleted export reads oddly out of context:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--format<span class="w"> </span>timeline
+<span class="c1"># Friction Log — Timeline</span>
+
+_A<span class="w"> </span>chronological<span class="w"> </span>narrative<span class="w"> </span>of<span class="w"> </span><span class="m">5</span><span class="w"> </span>entries<span class="w"> </span>logged<span class="w"> </span>between<span class="w"> </span>...<span class="w"> </span>and<span class="w"> </span>...,<span class="w"> </span>generated<span class="w"> </span>by<span class="w"> </span>friction-log-toolkit<span class="w"> </span>—<span class="w"> </span>paste<span class="w"> </span>this<span class="w"> </span>into<span class="w"> </span>a<span class="w"> </span>write-up<span class="err">'</span>s<span class="w"> </span><span class="s2">"challenges we ran into"</span><span class="w"> </span>section._
+
+Early<span class="w"> </span>on,<span class="w"> </span>friction<span class="w"> </span>showed<span class="w"> </span>up<span class="w"> </span>more<span class="w"> </span>than<span class="w"> </span>once:<span class="w"> </span>first<span class="w"> </span>MCP<span class="w"> </span>schema<span class="w"> </span>validation<span class="w"> </span>errors<span class="w"> </span>had<span class="w"> </span>no<span class="w"> </span>line<span class="w"> </span>numbers,<span class="w"> </span><span class="k">then</span><span class="w"> </span>the<span class="w"> </span>MCP<span class="w"> </span>schema<span class="w"> </span>validator<span class="w"> </span>crashed<span class="w"> </span>on<span class="w"> </span>a<span class="w"> </span>valid<span class="w"> </span>payload.
+
+Partway<span class="w"> </span>through,<span class="w"> </span>this<span class="w"> </span>was<span class="w"> </span>resolved:<span class="w"> </span>fixed<span class="w"> </span>the<span class="w"> </span>MCP<span class="w"> </span>schema<span class="w"> </span>validator<span class="w"> </span>issue<span class="w"> </span>by<span class="w"> </span>pinning<span class="w"> </span>an<span class="w"> </span>older<span class="w"> </span>version.
+
+Later<span class="w"> </span>on,<span class="w"> </span>the<span class="w"> </span>team<span class="w"> </span>noted<span class="w"> </span>a<span class="w"> </span>feature<span class="w"> </span>request:<span class="w"> </span>should<span class="w"> </span>add<span class="w"> </span>a<span class="w"> </span>dark<span class="w"> </span>mode<span class="w"> </span>toggle.
+
+Then,<span class="w"> </span>ring<span class="w"> </span>OAuth<span class="w"> </span>sandbox<span class="w"> </span>mode<span class="w"> </span>worked<span class="w"> </span>painlessly<span class="w"> </span>—<span class="w"> </span>a<span class="w"> </span>welcome<span class="w"> </span>bit<span class="w"> </span>of<span class="w"> </span>smooth<span class="w"> </span>sailing.
+</code></pre></div>
+<p>Consecutive entries sharing a tag are folded into one connected paragraph ("friction showed up more than once: first X, then Y") instead of one templated line per entry, and a <code>worked-well</code> paragraph that shares significant wording with an earlier <code>friction</code> paragraph (via the same theme-overlap check <code>aggregate</code>'s clustering uses — see below) is phrased as a resolution ("this was resolved: ...") rather than a generic "went smoothly" note. The whole thing is template-based and fully deterministic — the same log always produces the exact same prose, no LLM call involved, in the same spirit as <code>bee-studyloop</code>'s <code>TemplateFlashcardGenerator</code>.</p>
+<h3 id="friction-log-export-format-github-issues-ownerrepo-out-dir-since-date-until-date"><code>friction-log export --format github-issues &lt;owner/repo&gt; [--out &lt;dir&gt;] [--since &lt;date&gt;] [--until &lt;date&gt;]</code><a class="headerlink" href="#friction-log-export-format-github-issues-ownerrepo-out-dir-since-date-until-date" title="Permanent link">&para;</a></h3>
+<p>Formats every actionable entry (everything except <code>worked-well</code>, which isn't a problem to file) as a ready-to-file GitHub issue — one Markdown file per <strong>theme cluster</strong> (reusing the exact same <code>clusterByTheme</code> clustering <code>aggregate</code> uses, so several entries about the same root problem become one issue instead of a flood of near-duplicates) — written to <code>--out</code> (a directory, default <code>./github-issues</code>).</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--format<span class="w"> </span>github-issues<span class="w"> </span>acme/my-repo<span class="w"> </span>--out<span class="w"> </span>github-issues
+✓<span class="w"> </span>Wrote<span class="w"> </span><span class="m">2</span><span class="w"> </span>GitHub<span class="w"> </span>issue<span class="w"> </span>file<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>to<span class="w"> </span>github-issues/<span class="w"> </span><span class="k">for</span><span class="w"> </span>acme/my-repo.
+This<span class="w"> </span>is<span class="w"> </span>LOCAL<span class="w"> </span>FILE<span class="w"> </span>EXPORT<span class="w"> </span>ONLY<span class="w"> </span>—<span class="w"> </span>nothing<span class="w"> </span>was<span class="w"> </span>filed<span class="w"> </span>on<span class="w"> </span>GitHub.<span class="w"> </span>Review<span class="w"> </span>each<span class="w"> </span>file,<span class="w"> </span><span class="k">then</span><span class="w"> </span>run<span class="w"> </span>e.g.:
+<span class="w">  </span>gh<span class="w"> </span>issue<span class="w"> </span>create<span class="w"> </span>-R<span class="w"> </span>acme/my-repo<span class="w"> </span>--title<span class="w"> </span><span class="s2">"..."</span><span class="w"> </span>--body-file<span class="w"> </span>github-issues/001-mcp-schema.md
+</code></pre></div>
+<p>Each file looks like:</p>
+<div class="highlight"><pre><span></span><code><span class="gh"># [friction-log] MCP Schema</span>
+
+<span class="k">&gt; </span><span class="ge">Suggested target repository: **acme/my-repo**. This file was generated locally by friction-log-toolkit — it was **not** filed on GitHub automatically. Review it, then run:</span>
+<span class="k">&gt;</span>
+<span class="ge">&gt; `gh issue create -R acme/my-repo --title "[friction-log] MCP Schema" --body-file &lt;this-file&gt;`</span>
+<span class="k">&gt;</span>
+<span class="ge">&gt; ...or paste this content into the GitHub UI yourself.</span>
+
+<span class="gu">## What happened</span>
+
+<span class="k">1.</span> <span class="gs">**[friction]**</span> MCP schema validation errors had no line numbers <span class="ge">_(...)_</span>
+<span class="k">2.</span> <span class="gs">**[friction]**</span> MCP schema validation errors also hit the staging deploy <span class="ge">_(...)_</span>
+
+<span class="gu">## Suggested labels</span>
+
+<span class="sb">`friction-log`</span>, <span class="sb">`friction`</span>
+</code></pre></div>
+<blockquote>
+<p><strong>This never touches the network and never needs a GitHub token.</strong> <code>export --format github-issues</code> is a pure local-file formatter — nothing in this code path calls the GitHub API, <code>gh</code>, or any credential. It writes Markdown files you review and file yourself (via <code>gh issue create --body-file</code>, or by pasting into the GitHub UI); nothing is ever created on GitHub automatically by running this command.</p>
+</blockquote>
+<p>A log with no actionable entries (everything tagged <code>worked-well</code>) writes nothing and says so rather than creating an empty directory. An invalid or missing <code>&lt;owner/repo&gt;</code> argument fails clearly.</p>
+<h3 id="team-aggregation-theme-clustering">Team aggregation &amp; theme clustering<a class="headerlink" href="#team-aggregation-theme-clustering" title="Permanent link">&para;</a></h3>
+<p>Both <code>aggregate</code> (above) and <code>export --format github-issues</code> (above) share the same clustering engine, <code>src/cluster.ts</code>'s <code>clusterByTheme</code> — worth documenting once, here, since it's the core "genuinely group related entries" idea both features build on:</p>
+<ul>
+<li>Every note is reduced to a <strong>word profile</strong>: ALL-CAPS acronyms (<code>MCP</code>, <code>OAuth</code>, <code>AWS</code>, ...) found in the original text, plus other significant lowercase words (length ≥ 4, minus a small stopword list).</li>
+<li>Two entries are considered "about the same theme" if they share <strong>at least one acronym</strong>, or <strong>at least two ordinary significant words</strong> — a single shared common word alone is too weak a signal, but a shared acronym is distinctive enough on its own.</li>
+<li>Clustering is greedy: each cluster starts from one entry and absorbs every other entry that overlaps with the cluster's <em>running</em> shared-word intersection, narrowing that intersection on every addition — so the cluster's final theme label is always words genuinely common to <em>every</em> member, not just whoever happened to seed it.</li>
+<li>A cluster with nothing distinctive to share (a lone, short, or generic note) falls back to <code>suggestTag</code>'s existing auto-tag keyword heuristic for its label — the same keyword matching <code>add</code>/<code>watch</code> already use to guess <code>friction</code>/<code>worked-well</code>/<code>feature-request</code>, reused here rather than reimplemented.</li>
+</ul>
+<p>This is deliberately <strong>not</strong> an ML classifier or an embedding-based similarity search — no dependency, no network call, fully deterministic — but it's exactly the mechanism that lets five teammates who each independently hit the same "MCP schema validation" style error land under one heading instead of five scattered, differently-worded bullets.</p>
 <h3 id="date-range-filtering-since-until">Date-range filtering (<code>--since</code>/<code>--until</code>)<a class="headerlink" href="#date-range-filtering-since-until" title="Permanent link">&para;</a></h3>
 <p><code>list</code>, <code>export</code>, and <code>stats</code> all accept <code>--since &lt;date&gt;</code> and/or <code>--until &lt;date&gt;</code>, narrowing to entries in that range <strong>before</strong> any tag filtering, grouping, or aggregation runs. Either flag can be used alone. Both accept anything JavaScript's <code>Date.parse</code> can read — a bare <code>"2026-09-01"</code>, a full ISO-8601 timestamp like <code>"2026-09-01T14:00:00Z"</code>, or anything else <code>Date.parse</code> understands.</p>
 <div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>list<span class="w"> </span>--since<span class="w"> </span><span class="m">2026</span>-09-02
@@ -2036,10 +2219,20 @@ friction-log<span class="w"> </span>—<span class="w"> </span>capture<span clas
     autotag.ts              the auto-tag keyword heuristic (suggestTag), shared by add and watch
     templates.ts             reusable {placeholder} note templates, own .friction-log-templates.json file
     chart.ts                 the "stats" ASCII bar chart renderer, no dependency
-    sync.ts                   push/pull against a remote over the sync HTTP contract, reuses mergeEntries
-    commands.ts             init/add/list/search/export/stats/edit/remove/merge/useTemplate logic (+ mergeEntries,
-                             shared by merge and sync) + --since/--until filtering, decoupled from argv parsing
-    exporter.ts              Markdown/plain-text/JSON report generation from a LogFile
+    sync.ts                   push/pull against a remote over the sync HTTP contract, reuses mergeEntries;
+                               also exports fetchRemoteEntries (the GET half), reused by aggregate.ts
+    severity.ts                the "top" severity/impact scoring heuristic (scoreEntries): tag weight +
+                                keyword wording + relative recency, each explained in a `reasons` list
+    cluster.ts                  theme clustering (clusterByTheme): groups entries by shared significant
+                                 words/acronyms, falling back to suggestTag for an unlabeled cluster's
+                                 theme — the engine behind "aggregate" and "export --format github-issues"
+    aggregate.ts                  "aggregate": pulls + merges multiple remotes' entries (via sync's
+                                   fetchRemoteEntries + commands' mergeEntries) and clusters them by theme
+    commands.ts             init/add/list/search/export/stats/top/edit/remove/merge/useTemplate/
+                             exportGithubIssuesToFiles logic (+ mergeEntries, shared by merge and sync)
+                             + --since/--until filtering, decoupled from argv parsing
+    exporter.ts              Markdown/plain-text/JSON/timeline report generation from a LogFile, the
+                              GitHub-issues file formatter, and the aggregate report formatter
     server.ts                 the "serve" HTTP server: dependency-free node:http, re-reads the log file per request
     watch.ts                   the "watch" REPL: pure handleWatchLine/resolveWatchTag (testable directly) + the
                                 readline-driven loop (with the auto-tag confirmation step) around them
@@ -2053,7 +2246,7 @@ friction-log<span class="w"> </span>—<span class="w"> </span>capture<span clas
 <h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>npm<span class="w"> </span><span class="nb">test</span>
 </code></pre></div>
-<p>This runs <code>npm run build</code> followed by <code>test/smoke.test.ts</code> (via <code>tsx</code>, using Node's built-in <code>assert/strict</code>). The test is a genuine end-to-end test: it invokes the <strong>compiled</strong> CLI (<code>node dist/cli.js ...</code>) as a real child process against a fresh temporary directory (<code>node:fs.mkdtempSync</code> + <code>node:os.tmpdir()</code>), created and cleaned up per scenario — no mocking of the filesystem or of <code>commands.ts</code>. As of this round, that's <strong>137 passing checks</strong>.</p>
+<p>This runs <code>npm run build</code> followed by <code>test/smoke.test.ts</code> (via <code>tsx</code>, using Node's built-in <code>assert/strict</code>). The test is a genuine end-to-end test: it invokes the <strong>compiled</strong> CLI (<code>node dist/cli.js ...</code>) as a real child process against a fresh temporary directory (<code>node:fs.mkdtempSync</code> + <code>node:os.tmpdir()</code>), created and cleaned up per scenario — no mocking of the filesystem or of <code>commands.ts</code>. As of this round, that's <strong>182 passing checks</strong>.</p>
 <p>It covers:</p>
 <ul>
 <li><strong>Golden path</strong> — <code>init</code> → <code>add</code> five entries across all four tag categories → <code>list</code> (all, and filtered by tag) → <code>export --out</code> → the resulting Markdown has the right headings with the right entries filed under each one, in the right order.</li>
@@ -2074,13 +2267,18 @@ friction-log<span class="w"> </span>—<span class="w"> </span>capture<span clas
 <li><strong><code>stats</code> ASCII bar chart</strong> — six entries backdated (directly in the log file, real boundaries) across three days with counts 1/3/2, confirming the chart renders one line per day with a raw block-character count matching each day's total exactly, and that bar lengths are proportional (the 3-entry day's bar is longest) — plus that an empty log prints no "Daily activity" section at all.</li>
 <li><strong>Entry templates</strong> — <code>template add</code>/<code>list</code>/<code>use</code> end to end: a template with a <code>{placeholder}</code> fills in correctly and logs with the template's own tag; <code>--tag</code> on <code>use</code> overrides that tag; a missing <code>--set</code> for a required placeholder and an unknown template name both fail clearly; re-adding an existing template name replaces it instead of duplicating; a template with no tag at all falls through to <code>add</code>'s normal default chain.</li>
 <li><strong><code>sync</code> push/pull</strong> — a genuine round-trip against a real <code>node:http</code> server standing in for "the remote" (spun up in-process on an ephemeral port, reusing the exact same <code>mergeEntries</code> the real CLI's <code>merge</code> uses for its own dedup): pushing from one directory, pulling into a fresh second directory, confirming both directions report accurate added/duplicate/total counts, that re-running either is fully idempotent (<code>+0 new</code> the second time), and that entries genuinely round-trip both ways through the remote (B's new entry reaches A via a second pull) — plus that <code>sync</code> with neither or both of <code>--push</code>/<code>--pull</code>, and a genuinely unreachable URL, all fail clearly instead of hanging.</li>
+<li><strong>Severity scoring / <code>top</code></strong> — <code>scoreEntries</code> unit-tested directly: a blocker/crashed-worded friction entry outranks a plain worked-well entry, "minor"/"slightly" hedging measurably lowers a note's keyword score while "crashed"/"blocked" raises it, a more recent entry scores a higher recency component than an older one with identical wording, and every result carries human-readable <code>reasons</code>; plus a full <code>friction-log top</code>/<code>top N</code> subprocess run confirming the printed ranking order, the reasons lines, the default-N-of-5 behavior, and that a non-numeric or non-positive <code>N</code> fails clearly.</li>
+<li><strong>Theme clustering (<code>cluster.ts</code>)</strong> — <code>clusterByTheme</code> unit-tested directly: entries sharing an ALL-CAPS acronym cluster even with otherwise unrelated wording, entries sharing only <em>one</em> ordinary word do <strong>not</strong> cluster (two are required), entries sharing two or more ordinary words do, a cluster's <code>dominantTag</code> reflects its members' most common tag, and an entry with nothing distinctive to extract falls back to the existing <code>suggestTag</code> auto-tag heuristic for its theme label.</li>
+<li><strong><code>aggregate</code></strong> — two real <code>node:http</code> servers standing in for two teammates' remotes (one returning entries via plain <code>GET</code>, no <code>sync</code>-style <code>POST</code> needed) confirm: their independently-worded "MCP schema validation" entries land in one grouped theme; an entry sharing the same id across both sources is de-duplicated exactly once and reported as such; an unrelated entry stays in its own theme; one unreachable source alongside one reachable source still succeeds, listing the failure under "Unreachable sources" rather than aborting the whole run; <code>--out</code> writes the report to a file; and no URLs at all fails clearly. Run via the same non-blocking <code>runCliAsync</code> helper <code>sync</code>'s tests use, for the same event-loop reason documented in this round's friction notes below.</li>
+<li><strong><code>export --format github-issues</code></strong> — end to end: two friction entries sharing a theme are written to a single issue file (not two), a <code>worked-well</code> entry is excluded from the file count entirely, the generated file names the target repo, includes the <code>gh issue create -R ... --body-file ...</code> suggestion and an explicit "LOCAL FILE EXPORT ONLY" / "nothing was filed on GitHub" notice, lists every clustered entry, and suggests labels — plus that a missing or malformed <code>&lt;owner/repo&gt;</code> fails clearly, and a log with only <code>worked-well</code> entries writes nothing (no directory created) and says so.</li>
+<li><strong><code>export --format timeline</code></strong> — end to end: two consecutive friction entries fold into one "friction showed up more than once: first X, then Y" paragraph, a later <code>worked-well</code> entry sharing wording with that friction paragraph is phrased as a resolution, an unrelated <code>worked-well</code> entry is phrased as plain smooth sailing instead, a <code>feature-request</code> entry gets its own template, an acronym at the start of a note (<code>MCP</code>) is never mangled into <code>mCP</code>, phase language appears and doesn't repeat back-to-back, a single-entry log renders one bare capitalized sentence with no phase prefix, and an empty log says there's nothing to narrate instead of erroring.</li>
 </ul>
 <h2 id="judging-criteria-alignment">Judging-criteria alignment<a class="headerlink" href="#judging-criteria-alignment" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Tech Implementation</strong> — A real, typed, strict-mode TypeScript CLI with zero runtime dependencies beyond Node itself (the local web dashboard and <code>sync</code>'s remote contract are Node's built-in <code>http</code>/<code>fetch</code>, not Express or axios; the REPL is Node's built-in <code>readline</code>), a clean layered architecture (<code>store</code>/<code>config</code>/<code>git</code>/<code>autotag</code>/<code>templates</code>/<code>chart</code> → <code>commands</code>/<code>server</code>/<code>watch</code>/<code>sync</code> → <code>cli</code>), and a genuine subprocess-level end-to-end test suite (<strong>137 checks</strong>) covering the golden path, edge cases, and every feature added across all four rounds — including a real git repo spun up in a temp directory for git-aware tagging, a real HTTP server hit with real <code>fetch()</code> calls on an ephemeral port for <code>serve</code>, a <em>second</em> real HTTP server standing in for a sync remote (reusing the exact same dedup logic <code>merge</code> uses, so both are provably safe to run repeatedly), and both a direct unit test of the exact functions <code>watch</code> uses and a full piped-stdin subprocess run for <code>watch</code> (including its interactive auto-tag confirmation step). <code>npx tsc --noEmit</code> passes with zero errors.</li>
-<li><strong>Design</strong> — The whole point of the tool is near-zero friction to use: one short command to log a thought the moment it happens, with a sensible default tag — now guessed for you from the note's own wording when you don't have one in mind — so you never have to stop and think about taxonomy mid-flow. <code>watch</code> pushes that further — no flags at all once it's running, just typing and Enter, with an inline <code>#tag</code> convention for when a tag matters, and a confirmable (not silently-applied) suggestion the rest of the time. Errors are actionable, not stack traces. The exported Markdown is a drop-in match for the <code>FRICTION_LOG.md</code> structure judges are already reading elsewhere in this repo, <code>serve</code> gives a shareable, always-current dashboard view with zero setup, and templates turn a friction point you keep re-describing (a flaky endpoint, a recurring doc gap) into one command instead of retyping the shape of it every time.</li>
-<li><strong>Potential Impact</strong> — Every team in this hackathon (and Amazon's own developer-experience team, reading the resulting friction logs as structured feedback) benefits from more accurate, more complete friction logs, captured as things actually happen instead of reconstructed from memory at 11pm before the deadline. <code>sync</code> extends that from a single machine to an actual team — everyone's <code>watch</code> sessions converging into one shared friction log without anyone hand-merging JSON files. It's equally usable on any track — Fire TV, Alexa+, Bee, Ring — since it has no dependency on any Amazon SDK at all.</li>
-<li><strong>Quality of Idea</strong> — This submission satisfies the Open Source mini-challenge's required tech (<strong>"a new public repository"</strong>) directly and completely, on its own, regardless of what primary track a team pairs it with. It's also self-referential in a way that's memorable: the tool that helps you write your friction log has its own friction log (see <code>FRICTION_LOG.md</code>), written using the exact section structure the tool itself produces.</li>
+<li><strong>Tech Implementation</strong> — A real, typed, strict-mode TypeScript CLI with zero runtime dependencies beyond Node itself (the local web dashboard and <code>sync</code>/<code>aggregate</code>'s remote contract are Node's built-in <code>http</code>/<code>fetch</code>, not Express or axios; the REPL is Node's built-in <code>readline</code>), a clean layered architecture (<code>store</code>/<code>config</code>/<code>git</code>/<code>autotag</code>/<code>templates</code>/<code>chart</code>/<code>severity</code>/<code>cluster</code> → <code>commands</code>/<code>server</code>/<code>watch</code>/<code>sync</code>/<code>aggregate</code> → <code>cli</code>), and a genuine subprocess-level end-to-end test suite (<strong>182 checks</strong>) covering the golden path, edge cases, and every feature added across all five rounds — including a real git repo spun up in a temp directory for git-aware tagging, a real HTTP server hit with real <code>fetch()</code> calls on an ephemeral port for <code>serve</code>, further real HTTP servers standing in for sync/aggregate remotes (reusing the exact same dedup logic <code>merge</code> uses, so all three are provably safe to run repeatedly), a direct unit test of the exact functions <code>watch</code>/<code>severity</code>/<code>cluster</code> use, and a full piped-stdin subprocess run for <code>watch</code> (including its interactive auto-tag confirmation step). <code>npx tsc --noEmit</code> passes with zero errors.</li>
+<li><strong>Design</strong> — The whole point of the tool is near-zero friction to use: one short command to log a thought the moment it happens, with a sensible default tag — now guessed for you from the note's own wording when you don't have one in mind — so you never have to stop and think about taxonomy mid-flow. <code>watch</code> pushes that further — no flags at all once it's running, just typing and Enter, with an inline <code>#tag</code> convention for when a tag matters, and a confirmable (not silently-applied) suggestion the rest of the time. Errors are actionable, not stack traces. The exported Markdown is a drop-in match for the <code>FRICTION_LOG.md</code> structure judges are already reading elsewhere in this repo, <code>serve</code> gives a shareable, always-current dashboard view with zero setup, templates turn a friction point you keep re-describing into one command instead of retyping its shape every time, and <code>top</code>/<code>export --format timeline</code> turn deadline-day panic ("what actually goes in the submission?") into one command each, with the ranking's reasoning shown, not hidden.</li>
+<li><strong>Potential Impact</strong> — Every team in this hackathon (and Amazon's own developer-experience team, reading the resulting friction logs as structured feedback) benefits from more accurate, more complete friction logs, captured as things actually happen instead of reconstructed from memory at 11pm before the deadline. <code>sync</code> extends that from a single machine to an actual team, and <code>aggregate</code> takes it further still — turning everyone's individually-captured friction into one team-wide, theme-grouped report instead of a pile of JSON files someone has to read by hand; <code>export --format github-issues</code> turns that same report directly into filable tracker issues for whichever platform team owns the problem, without ever touching a token or an API. It's equally usable on any track — Fire TV, Alexa+, Bee, Ring — since it has no dependency on any Amazon SDK at all.</li>
+<li><strong>Quality of Idea</strong> — This submission satisfies the Open Source mini-challenge's required tech (<strong>"a new public repository"</strong>) directly and completely, on its own, regardless of what primary track a team pairs it with. It's also self-referential in a way that's memorable: the tool that helps you write your friction log has its own friction log (see <code>FRICTION_LOG.md</code>), written using the exact section structure the tool itself produces. This round in particular leans into ideas a friction-log tool hasn't obviously had before — an explainable severity ranking instead of a flat list, cross-teammate theme clustering built on the same primitives as <code>sync</code>, and a deterministic prose generator that reads like a person wrote it, all without reaching for an LLM or any external dependency.</li>
 </ul>
 <h2 id="scope-boundaries-next-steps-for-real-open-source-adoption">Scope boundaries / next steps for real open-source adoption<a class="headerlink" href="#scope-boundaries-next-steps-for-real-open-source-adoption" title="Permanent link">&para;</a></h2>
 <p>This is a hackathon-scoped submission. Genuine next steps toward real adoption, intentionally left out of scope here:</p>
@@ -2095,6 +2293,9 @@ friction-log<span class="w"> </span>—<span class="w"> </span>capture<span clas
 <li><code>sync</code> has no authentication story at all — the contract is plain unauthenticated JSON over HTTP, fine for a hackathon team's own trusted endpoint but not something to point at anything public; a real next step would be an <code>Authorization</code> header (a token from an env var or <code>.friction-logrc.json</code>) the client sends and the remote contract documents checking.</li>
 <li>The auto-tag heuristic's keyword lists are hardcoded in <code>autotag.ts</code>; letting a team extend or override them (e.g. via <code>.friction-logrc.json</code>) instead of editing source would make it useful for vocabulary specific to a given SDK or platform.</li>
 <li>Templates are per-directory only, same as the log itself — sharing a team's template set the way <code>sync</code> shares entries (or just checking <code>.friction-log-templates.json</code> into the repo, since it's already git-friendly plain JSON) is a natural next step, just not automated yet.</li>
+<li>The severity heuristic's tag weights and keyword lists are hardcoded in <code>severity.ts</code>, same situation as <code>autotag.ts</code>'s keyword lists above — letting a team tune what counts as "severe" for their own domain via <code>.friction-logrc.json</code> would be a natural, small follow-up.</li>
+<li><code>aggregate</code> inherits <code>sync</code>'s lack of an authentication story (see above) — the same "an <code>Authorization</code> header the client sends and the remote documents checking" next step applies to it too, and to a bigger degree, since it's designed to talk to several teammates' endpoints at once.</li>
+<li><code>export --format github-issues</code> clusters entries the same way <code>aggregate</code> does but only ever looks at the <em>local</em> log; running it against an <code>aggregate</code> report instead (one issue file per cross-team theme, not just per-person) is the natural next combination once both features have shipped for a round.</li>
 </ul>
 <p><strong>Backward compatibility note</strong>: <code>id</code>, <code>gitBranch</code>, and <code>gitCommit</code> are additive, optional fields on <code>LogEntry</code> — an existing <code>.friction-log.json</code> written by v1 (no <code>id</code>s at all) still loads and works with every command. The first time such a file is read, missing ids are backfilled and the file is rewritten once to persist them (so <code>edit</code>/<code>remove</code>/<code>merge</code> have something stable to reference); no other field is touched, and nothing is required to be present that wasn't already.</p>
 
