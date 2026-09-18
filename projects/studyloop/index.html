@@ -1186,6 +1186,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#round-5-concept-graph-feynman-mode-study-guide-synthesis-exam-readiness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 5: concept graph, Feynman mode, study-guide synthesis, exam readiness
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round 5: concept graph, Feynman mode, study-guide synthesis, exam readiness">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#15-concept-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        15. Concept graph
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#16-feynmanpeer-teaching-explanation-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        16. Feynman/peer-teaching explanation mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#17-cross-session-study-guide-synthesis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        17. Cross-session study guide synthesis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#18-exam-readiness-score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18. Exam readiness score
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#friction-log" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1692,6 +1753,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#round-5-concept-graph-feynman-mode-study-guide-synthesis-exam-readiness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 5: concept graph, Feynman mode, study-guide synthesis, exam readiness
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round 5: concept graph, Feynman mode, study-guide synthesis, exam readiness">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#15-concept-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        15. Concept graph
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#16-feynmanpeer-teaching-explanation-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        16. Feynman/peer-teaching explanation mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#17-cross-session-study-guide-synthesis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        17. Cross-session study guide synthesis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#18-exam-readiness-score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18. Exam readiness score
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#friction-log" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1785,18 +1907,27 @@ export — each described in detail in <strong>Advanced features</strong> below.
   priority.ts              Adaptive review-ordering priority-score formula, as a pure function
   topics.ts                Heuristic topic-tag extraction (word-frequency, not real NLP)
   export.ts                Portable TSV export formatting (Anki-importable)
+  conceptGraph.ts          Round 5: per-card concept extraction (definition/cloze/generic-Q&amp;A tiers) +
+                           concept-string matching, as pure functions
+  explainGrader.ts         Round 5: Feynman-mode key-term coverage rubric for a free-text explanation
+                           against a card's answer, as pure functions
+  studyGuide.ts            Round 5: cross-session study-guide synthesis (deduplicated summary merge +
+                           union of concepts), as a pure function
+  readiness.ts             Round 5: composite, explainable exam-readiness score formula, as a pure function
   studyService.ts          Business logic: ingestion (incl. idempotent + incremental + adaptive bias),
                            due/leech/search queries, record review, shared-deck join, quiz sampling/
-                           grading/results, reminder digest
-  server.ts                Express app factory — see "How it works", "Advanced features", and "Round 3"
-                           for the full route list
+                           grading/results, reminder digest, concept graph lookup, explanation grading,
+                           study-guide synthesis, and readiness scoring
+  server.ts                Express app factory — see "How it works", "Advanced features", "Round 3",
+                           "Round 4", and "Round 5" for the full route list
   index.ts                 Entry point
 test/
   smoke.test.ts            End-to-end test over real HTTP covering the base lifecycle (ingest -&gt; summary/
                            flashcards -&gt; due queue -&gt; good/again review rescheduling -&gt; 404s -&gt; invalid
                            grade -&gt; empty transcript -&gt; raw-text transcript) plus every feature in
-                           "Advanced features" and "Round 3" below, and direct unit checks of scheduler.ts,
-                           leech.ts, priority.ts, and topics.ts
+                           "Advanced features", "Round 3", "Round 4", and "Round 5" below, and direct unit
+                           checks of scheduler.ts, leech.ts, priority.ts, topics.ts, conceptGraph.ts,
+                           explainGrader.ts, studyGuide.ts, and readiness.ts
 </code></pre></div>
 <h2 id="running-it">Running it<a class="headerlink" href="#running-it" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>npm<span class="w"> </span>install
@@ -1837,9 +1968,9 @@ resets the streak and shortens the interval back down instead of continuing to g
 id or fetching an unknown session id returns a clean 404; an invalid grade returns a 400; an empty/whitespace-only
 transcript still returns a sensible response (a fallback summary, zero flashcards) instead of crashing; and a raw
 text-block transcript (not pre-segmented) is ingested successfully too. A couple of direct unit-style checks of
-<code>scheduler.ts</code>'s interval/ease-factor math round it out. Every feature in <strong>Advanced features</strong> and <strong>Round 3</strong>
-below has its own passing HTTP-level check plus, where the logic is pure, a direct unit-style check — see the
-"Feature N" tests in <code>test/smoke.test.ts</code>.</p>
+<code>scheduler.ts</code>'s interval/ease-factor math round it out. Every feature in <strong>Advanced features</strong>, <strong>Round 3</strong>,
+<strong>Round 4</strong>, and <strong>Round 5</strong> below has its own passing HTTP-level check plus, where the logic is pure, a direct
+unit-style check — see the "Feature N" tests in <code>test/smoke.test.ts</code>.</p>
 <h2 id="advanced-features">Advanced features<a class="headerlink" href="#advanced-features" title="Permanent link">&para;</a></h2>
 <p>A second implementation pass added six production-grade features on top of the v1 pipeline above. Each is
 independently tested in <code>test/smoke.test.ts</code> (search for "Feature 1" through "Feature 6").</p>
@@ -1968,7 +2099,12 @@ behind an interface from the start.</p>
   one-off demo scenario.</li>
 <li><strong>Quality of Idea:</strong> Goes beyond a transcript viewer or generic summarizer by closing the loop into an active
   learning system — extraction feeding a real scheduling algorithm that adapts to how well material was recalled,
-  which is what makes it a study <em>coach</em> rather than a note-taking tool.</li>
+  which is what makes it a study <em>coach</em> rather than a note-taking tool. Round 5 pushes this further with four
+  features that go beyond "more infrastructure": a concept graph built from real text analysis (not manual
+  tagging) that links material across separate sessions/decks; a genuine Feynman/peer-teaching mode with a real
+  key-term rubric wired into the same scheduling machinery as a normal grade; cross-session study-guide synthesis
+  that deduplicates rather than concatenates; and a composite, explainable exam-readiness score — each a
+  capability a student would actually reach for, not a demo-only stub.</li>
 </ul>
 <h2 id="round-3-quiz-mode-shared-decks-reminders-adaptive-generation-bias">Round 3: quiz mode, shared decks, reminders, adaptive generation bias<a class="headerlink" href="#round-3-quiz-mode-shared-decks-reminders-adaptive-generation-bias" title="Permanent link">&para;</a></h2>
 <p>A third pass added four more features, each independently tested in <code>test/smoke.test.ts</code> (search for
@@ -2149,6 +2285,92 @@ same exported helper Feature 10's adaptive bias already reuses — for a guarant
 phrasing, rather than writing a second cloze generator.</p>
 <div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/flashcards/&lt;cardId&gt;/regenerate
 <span class="c1"># -&gt; the same card id, with a fresh front/back and identical interval/easeFactor/dueAt/isLeech</span>
+</code></pre></div>
+<h2 id="round-5-concept-graph-feynman-mode-study-guide-synthesis-exam-readiness">Round 5: concept graph, Feynman mode, study-guide synthesis, exam readiness<a class="headerlink" href="#round-5-concept-graph-feynman-mode-study-guide-synthesis-exam-readiness" title="Permanent link">&para;</a></h2>
+<p>The first four rounds were product-completeness features (quiz mode, streaks, import/export). This round is four
+features chosen specifically to be genuinely novel study-coaching functionality — not more infrastructure hardening
+— each independently tested in <code>test/smoke.test.ts</code> (search for "Feature 15" through "Feature 18").</p>
+<h3 id="15-concept-graph">15. Concept graph<a class="headerlink" href="#15-concept-graph" title="Permanent link">&para;</a></h3>
+<p><code>GET /concepts/:name</code> answers "show me everything related to X," across every session and deck, built from real
+text analysis of existing flashcard content — <strong>not</strong> a manual tagging system a caller populates. <code>conceptGraph.ts</code>
+extracts 1-2 lightweight "concept" strings from a single card's own <code>front</code>/<code>back</code>, in three tiers:</p>
+<ol>
+<li><strong>Definition-style fronts</strong> ("What is/are <code>&lt;X&gt;</code>?") — this covers both <code>flashcardGenerator.ts</code>'s tier-2
+   definition cards <em>and</em> any tier-1 Q&amp;A card whose source question happened to be phrased that way — yield the
+   defined term/noun phrase itself (e.g. <code>mitochondrion</code>, or <code>the powerhouse of the cell</code>).</li>
+<li><strong>Cloze cards</strong> ("Fill in the blank: ...") yield the blanked word/phrase — the card's own <code>back</code> — as the
+   concept.</li>
+<li><strong>Any other Q&amp;A pair</strong> yields the highest-scoring significant word(s) shared across its front and back, using
+   the same word-frequency + capitalization-bonus heuristic <code>topics.ts</code> already uses for a whole transcript, just
+   scoped to one card's two fields.</li>
+</ol>
+<p>This is what makes it a real <em>graph</em>: two cards from entirely different sessions ingested weeks apart — one a
+"What is Mitochondrion?" definition card, the other a "What does Mitochondrion do?" generic Q&amp;A pair from an
+unrelated deck — both resolve to the concept <code>mitochondrion</code> and surface together, with no link ever created by
+hand.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>localhost:4466/concepts/mitochondrion
+<span class="c1"># -&gt; { "concept": "mitochondrion", "cards": [ { "cardId": "...", "sessionId": "...", "sessionTitle": "...",</span>
+<span class="c1">#                                                "front": "...", "back": "...", "tags": [...] }, ... ] }</span>
+</code></pre></div>
+<h3 id="16-feynmanpeer-teaching-explanation-mode">16. Feynman/peer-teaching explanation mode<a class="headerlink" href="#16-feynmanpeer-teaching-explanation-mode" title="Permanent link">&para;</a></h3>
+<p><code>POST /review/:cardId/explain { explanation, studentId? }</code> is the "explain it to learn it" technique: instead of
+self-grading with the four-point scale, a student submits a free-text explanation of the card's concept in their
+own words, and StudyLoop grades it against the card's actual <code>back</code> content with a real (heuristic, LLM-free)
+key-term rubric in <code>explainGrader.ts</code> — not string equality. It extracts the answer's significant key terms, checks
+which ones the explanation mentions (after light stemming on both sides, so "cells" credits "cell" and
+"photosynthesizes" credits "photosynthesis"), and reports exactly which terms were covered and which were missing.</p>
+<p>The derived coverage score is mapped onto the same <code>RecallGrade</code> vocabulary (<code>score &gt;= 0.85</code> → <code>easy</code>, <code>&gt;= 0.5</code> →
+<code>good</code>, <code>&gt;= 0.25</code> → <code>hard</code>, else <code>again</code>) and run through the <strong>exact same scheduling/leech machinery</strong> a normal
+grade would (<code>recordReview</code>/<code>recordReviewForStudent</code>) — so a weak explanation genuinely reschedules the card and
+can push it toward becoming a leech (or clear one), rather than being a side channel that only returns feedback
+text with no effect on the review queue. It works on any card, not just ones already flagged as leeches — the
+leech/adaptive signals already tracked elsewhere are what make this mode <em>worth reaching for</em> on a card a student
+keeps failing, not a precondition the API enforces.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/review/&lt;cardId&gt;/explain<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "explanation": "Mitochondria are the part of the cell that makes energy the cell can use."</span>
+<span class="s1">}'</span>
+<span class="c1"># -&gt; { "grade": "good", "score": 0.71, "passed": true,</span>
+<span class="c1">#      "matchedTerms": ["mitochondria", "energy", "cell"], "missingTerms": ["respiration"],</span>
+<span class="c1">#      "feedback": "Good start — you covered mitochondria, energy, cell, but missed mentioning respiration.",</span>
+<span class="c1">#      "card": { ...rescheduled exactly like a normal "good" grade... } }</span>
+</code></pre></div>
+<h3 id="17-cross-session-study-guide-synthesis">17. Cross-session study guide synthesis<a class="headerlink" href="#17-cross-session-study-guide-synthesis" title="Permanent link">&para;</a></h3>
+<p><code>GET /topics/:topic/study-guide</code> merges every session tagged with <code>topic</code> (see Feature 3's heuristic tagging) into
+one consolidated study guide — a real union-of-material synthesis (<code>studyGuide.ts</code>), not a raw concatenation of
+their summaries:</p>
+<ul>
+<li>Each session's auto-generated summary has its per-session boilerplate prefix ("Session covered N statement(s)
+  across K speaker(s).", meaningless once merged) stripped, is split into sentences, and every sentence is
+  deduplicated by a normalized key against every other session's — so two sessions that happened to restate the
+  same fact contribute it to the guide once, not twice.</li>
+<li><code>concepts</code> is the union of every concept <code>extractConceptsFromCard</code> (Feature 15's concept graph) resolves across
+  every flashcard in every one of these sessions, deduplicated the same way.</li>
+</ul>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>localhost:4466/topics/ribosome/study-guide
+<span class="c1"># -&gt; { "topic": "ribosome", "sessionCount": 2, "cardCount": 5,</span>
+<span class="c1">#      "sessions": [ {"id": "...", "title": "Cell biology deep dive"}, {"id": "...", "title": "Protein synthesis review"} ],</span>
+<span class="c1">#      "combinedSummary": "Ribosome is the cellular structure that synthesizes proteins. ...",</span>
+<span class="c1">#      "concepts": ["messenger rna", "protein synthesis", "ribosome", ...] }</span>
+</code></pre></div>
+<h3 id="18-exam-readiness-score">18. Exam readiness score<a class="headerlink" href="#18-exam-readiness-score" title="Permanent link">&para;</a></h3>
+<p><code>GET /topics/:topic/readiness?studentId=</code> returns a composite, explainable 0-100 exam-readiness score
+(<code>readiness.ts</code>) combining three signals <strong>already tracked elsewhere in the store</strong> — no new state invented:</p>
+<div class="highlight"><pre><span></span><code>score = notDueFraction * 50        // share of cards NOT currently due — SM-2 pushed them out because
+                                    // they've been recalled reliably; entirely-overdue scores 0 here
+      + recentPerformance * 35     // each graded card's quality (again=0/hard=0.4/good=0.75/easy=1),
+                                    // weighted by exponential recency decay (14-day half-life) — a
+                                    // grade from yesterday counts far more than one from months ago
+      + streakFactor * 15          // min(currentStreak, 7) / 7 — consistent daily review is a real
+                                    // signal independent of any one card's own state
+</code></pre></div>
+<p>With <code>studentId</code>, it reads that student's own personal deck (joined decks + directly-reviewed cards) and their own
+study streak; without it, the shared student-less pool with no streak signal. The response always includes a
+plain-language <code>reasons</code> breakdown of what's dragging the score down — e.g. <code>"12 cards overdue"</code>, <code>"3 leeches
+unresolved"</code>, <code>"no active study streak"</code> — rather than a bare number a student has to guess at.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span><span class="s2">"localhost:4466/topics/thermodynamics/readiness?studentId=alice"</span>
+<span class="c1"># -&gt; { "topic": "thermodynamics", "studentId": "alice", "score": 62, "cardCount": 14, "dueCount": 3,</span>
+<span class="c1">#      "overdueCount": 2, "leechCount": 1, "notDueFraction": 0.79, "recentPerformance": 0.68, "streakDays": 4,</span>
+<span class="c1">#      "reasons": ["2 cards overdue", "1 leech unresolved"] }</span>
 </code></pre></div>
 <h2 id="friction-log">Friction log<a class="headerlink" href="#friction-log" title="Permanent link">&para;</a></h2>
 <p>See <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/bee-studyloop/FRICTION_LOG.md"><code>FRICTION_LOG.md</code></a> for notes captured while building this (eligible for the hackathon's
