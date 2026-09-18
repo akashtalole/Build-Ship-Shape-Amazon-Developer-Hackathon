@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
-import { LogAlreadyExistsError, LogNotFoundError } from "./store.js";
+import { LogAlreadyExistsError, LogNotFoundError, logExists } from "./store.js";
 import {
   EntryNotFoundError,
   add,
@@ -10,22 +10,28 @@ import {
   list,
   merge,
   removeEntry,
+  search,
   stats,
 } from "./commands.js";
 import { formatTimestamp } from "./exporter.js";
 import type { ExportFormat } from "./exporter.js";
+import { createFrictionLogServer } from "./server.js";
+import { runWatch } from "./watch.js";
 
 const USAGE = `friction-log — capture friction points in the moment, export them as a Markdown report.
 
 Usage:
   friction-log init [--force]
   friction-log add "<note>" [--tag <tag>]
-  friction-log list [--tag <tag>]
-  friction-log export [--out <file>] [--title <title>] [--format json|md|txt]
-  friction-log stats
+  friction-log list [--tag <tag>] [--since <date>] [--until <date>]
+  friction-log search "<query>" [--tag <tag>]
+  friction-log export [--out <file>] [--title <title>] [--format json|md|txt] [--since <date>] [--until <date>]
+  friction-log stats [--since <date>] [--until <date>]
   friction-log edit <id> [--note <note>] [--tag <tag>]
   friction-log remove <id>
   friction-log merge <otherFile> --into <targetFile>
+  friction-log serve [--port <port>]
+  friction-log watch
 
 Conventional tags (grouped specially by "export"):
   worked-well       something that went smoothly
@@ -44,17 +50,38 @@ Git-aware tagging: "add" automatically records the current branch and short
 commit hash on the entry when run inside a git repo (silently omitted
 otherwise — no error).
 
+Date-range filtering: "--since"/"--until" on "list"/"export"/"stats" accept
+anything JavaScript's Date.parse can read (e.g. "2026-09-01" or a full
+ISO-8601 timestamp) and narrow entries to that range before any tag
+filtering or grouping happens. A bare "--until 2026-09-01" (no time part)
+means "through the end of that day", not its first instant.
+
+"search" does a case-insensitive substring match against each entry's note
+text (not fuzzy, not tokenized) — "line num" matches "no line numbers".
+
+"serve" starts a local, dependency-free HTTP server (Ctrl-C to stop) showing
+all entries, re-read from disk on every request, with a tag filter form.
+
+"watch" is an interactive prompt-log-prompt loop for rapid-fire logging.
+End a line with "#tagname" to tag it inline; a blank line, "exit", or "quit"
+stops the loop.
+
 Examples:
   friction-log init
   friction-log add "Alexa+ skill schema validation errors had no line numbers" --tag friction
   friction-log add "Ring API sandbox mode made local testing painless" --tag worked-well
   friction-log list --tag friction
+  friction-log list --since 2026-09-02 --until 2026-09-02
+  friction-log search "line numbers"
+  friction-log search "docs" --tag friction
   friction-log export --out FRICTION_LOG.md --title "Team Rocket — Friction Log"
   friction-log export --format json --out entries.json
-  friction-log stats
+  friction-log stats --since 2026-09-02
   friction-log edit a1b2c3d4 --tag worked-well
   friction-log remove a1b2c3d4
   friction-log merge ../teammate/.friction-log.json --into .friction-log.json
+  friction-log serve --port 4848
+  friction-log watch
 `;
 
 /** Minimal, dependency-free argv parser: pulls out --flags (with values) and leaves positional args. */
@@ -88,7 +115,7 @@ function fail(message: string): never {
 
 const VALID_FORMATS: ExportFormat[] = ["json", "md", "txt"];
 
-export function run(argv: string[], cwd: string = process.cwd()): void {
+export async function run(argv: string[], cwd: string = process.cwd()): Promise<void> {
   const [command, ...rest] = argv;
   const { positional, flags } = parseArgs(rest);
 
@@ -114,12 +141,38 @@ export function run(argv: string[], cwd: string = process.cwd()): void {
 
       case "list": {
         const tag = typeof flags.tag === "string" ? flags.tag : undefined;
-        const entries = list(cwd, { tag });
+        const since = typeof flags.since === "string" ? flags.since : undefined;
+        const until = typeof flags.until === "string" ? flags.until : undefined;
+        const entries = list(cwd, { tag, since, until });
         if (entries.length === 0) {
-          console.log(tag ? `No entries tagged "${tag}".` : "No entries logged yet.");
+          console.log(tag ? `No entries tagged "${tag}" in range.` : "No entries logged yet in range.");
           break;
         }
         for (const entry of entries) {
+          console.log(`[${entry.tag}] ${entry.id}  ${entry.timestamp}  ${entry.note}`);
+        }
+        break;
+      }
+
+      case "search": {
+        const query = positional[0];
+        if (!query) {
+          fail('Missing search query. Usage: friction-log search "<query>" [--tag <tag>]');
+        }
+        const tag = typeof flags.tag === "string" ? flags.tag : undefined;
+        const results = search(cwd, query, { tag });
+        if (results.length === 0) {
+          console.log(
+            tag ? `No entries matching "${query}" tagged "${tag}".` : `No entries matching "${query}".`
+          );
+          break;
+        }
+        console.log(
+          `Found ${results.length} match${results.length === 1 ? "" : "es"} for "${query}"${
+            tag ? ` (tag: ${tag})` : ""
+          }:`
+        );
+        for (const entry of results) {
           console.log(`[${entry.tag}] ${entry.id}  ${entry.timestamp}  ${entry.note}`);
         }
         break;
@@ -129,10 +182,18 @@ export function run(argv: string[], cwd: string = process.cwd()): void {
         const out = typeof flags.out === "string" ? flags.out : undefined;
         const title = typeof flags.title === "string" ? flags.title : undefined;
         const formatFlag = typeof flags.format === "string" ? flags.format : undefined;
+        const since = typeof flags.since === "string" ? flags.since : undefined;
+        const until = typeof flags.until === "string" ? flags.until : undefined;
         if (formatFlag && !VALID_FORMATS.includes(formatFlag as ExportFormat)) {
           fail(`Unknown export format "${formatFlag}". Expected one of: ${VALID_FORMATS.join(", ")}.`);
         }
-        const content = exportLog(cwd, { out, title, format: formatFlag as ExportFormat | undefined });
+        const content = exportLog(cwd, {
+          out,
+          title,
+          format: formatFlag as ExportFormat | undefined,
+          since,
+          until,
+        });
         if (out) {
           console.log(`✓ Exported friction log to ${out}`);
         } else {
@@ -142,7 +203,9 @@ export function run(argv: string[], cwd: string = process.cwd()): void {
       }
 
       case "stats": {
-        const result = stats(cwd);
+        const since = typeof flags.since === "string" ? flags.since : undefined;
+        const until = typeof flags.until === "string" ? flags.until : undefined;
+        const result = stats(cwd, { since, until });
         console.log("Friction Log Stats");
         console.log("-------------------");
         console.log(`Total entries: ${result.totalEntries}`);
@@ -212,6 +275,45 @@ export function run(argv: string[], cwd: string = process.cwd()): void {
         break;
       }
 
+      case "serve": {
+        if (!logExists(cwd)) {
+          throw new LogNotFoundError(cwd);
+        }
+        let port = 4848;
+        if (typeof flags.port === "string") {
+          const parsed = Number(flags.port);
+          if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+            fail(`Invalid --port "${flags.port}". Expected an integer between 0 and 65535.`);
+          }
+          port = parsed;
+        }
+        const server = createFrictionLogServer(cwd);
+        await new Promise<void>((resolveListen) => {
+          server.listen(port, () => {
+            const address = server.address();
+            const actualPort = address && typeof address !== "string" ? address.port : port;
+            console.log(`✓ Friction log server running at http://localhost:${actualPort}/`);
+            console.log("Press Ctrl-C to stop.");
+            resolveListen();
+          });
+        });
+        process.on("SIGINT", () => {
+          console.log("\nStopping friction-log server.");
+          server.close(() => process.exit(0));
+        });
+        // Keep the process alive on the open server handle — no explicit
+        // await here, `serve` is meant to run until interrupted.
+        break;
+      }
+
+      case "watch": {
+        if (!logExists(cwd)) {
+          throw new LogNotFoundError(cwd);
+        }
+        await runWatch(cwd);
+        break;
+      }
+
       case undefined:
       case "-h":
       case "--help":
@@ -239,4 +341,7 @@ export function run(argv: string[], cwd: string = process.cwd()): void {
   }
 }
 
-run(process.argv.slice(2));
+run(process.argv.slice(2)).catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
