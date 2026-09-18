@@ -29,6 +29,7 @@ import { MockBedrockProvider, FAILURE_TRIGGER } from "../src/foundationModel.js"
 import { MockReviewerProvider } from "../src/reviewerModel.js";
 import { createApp } from "../src/server.js";
 import { RateLimiter } from "../src/rateLimiter.js";
+import { loadAuditRecords } from "../src/auditTrail.js";
 
 // Fixed inputs chosen so MockSidecarClassifier's keyword heuristics produce
 // known, reliable confidence scores:
@@ -935,6 +936,12 @@ async function testPerCallerBudgetsOverHttp() {
 // signal independent of the random traffic-split draw.
 const CANARY_MARKER = "zzzcanarymarkerzzz";
 
+// A second, distinct marker phrase (also checked by inspection against every
+// built-in keyword list) used for the ensemble-voting tests below, kept
+// separate from CANARY_MARKER so the two features' fixtures can never
+// accidentally collide.
+const ENSEMBLE_MARKER = "zzzensemblemarkerzzz";
+
 async function testCanaryRouting() {
   const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
   const candidate = new MockSidecarClassifier({ extraKeywords: [{ label: "urgent", keywords: [CANARY_MARKER] }] });
@@ -1109,6 +1116,26 @@ async function testAlertWebhooks() {
     await flakyRouter.flushAlertWebhooks();
     assert.equal(received.filter((r) => r.headers["x-modelrouter-event"] === "circuit_open").length, 0, "no new circuit_open alert should fire while the circuit is already open");
     console.log("✓ a 'circuit_open' alert fires only on the transition into the open state, not on every subsequent failure while it stays open");
+
+    // --- drift_alert (round 5), registered and triggered directly against the router (unit-style) ---
+    received.length = 0;
+    const driftRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+    const driftRegistration = driftRouter.registerAlertWebhook(listenerUrl);
+    driftRouter.configureDriftDetection({ sampleRate: 1, windowSize: 3, alertThreshold: 0.9 });
+    for (let i = 0; i < 3; i++) {
+      // SHADOW_DISAGREEMENT_TEXT is a confident sidecar-path input whose implied
+      // foundation-model label deliberately disagrees (see its own comment above) —
+      // a genuine, deterministic drift signal, not a scripted "always disagree" toggle.
+      await driftRouter.route(`${SHADOW_DISAGREEMENT_TEXT} drift webhook variant ${i}`);
+    }
+    await driftRouter.flushDriftEvaluations();
+    await driftRouter.flushAlertWebhooks();
+
+    const driftDelivery = received.find((r) => r.headers["x-modelrouter-event"] === "drift_alert");
+    assert.ok(driftDelivery, "a sustained drop in the rolling sidecar/foundation-model agreement rate should fire a 'drift_alert' webhook");
+    const expectedDriftSignature = createHmac("sha256", driftRegistration.secret).update(driftDelivery!.body).digest("hex");
+    assert.equal(driftDelivery!.headers["x-modelrouter-signature"], expectedDriftSignature, "the drift_alert delivery must be signed the same HMAC-SHA256-over-raw-body way as the other alert types");
+    console.log("✓ a sustained drift-detection disagreement fires a correctly signed 'drift_alert' webhook via the same outbound-alert mechanism");
   } finally {
     listener.close();
   }
@@ -1169,6 +1196,439 @@ async function testPrometheusMetrics() {
   }
 }
 
+// --- Round 5: sidecar drift detection, multi-sidecar ensemble voting, cost-optimization recommender, audit trail ---
+
+async function testDriftDetection() {
+  // --- Default status: unconfigured, no evidence of drift ---
+  const idleRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  const idleStatus = idleRouter.getDriftStatus();
+  assert.equal(idleStatus.enabled, false);
+  assert.equal(idleStatus.rollingAgreementRate, 1, "no samples yet should read as 'no evidence of drift', not 0% agreement");
+  assert.equal(idleStatus.alertActive, false);
+  console.log("✓ with drift detection unconfigured, getDriftStatus() reports enabled: false and no evidence of drift");
+
+  // --- Sampling only kicks in on the configured fraction, using an injectable random for determinism ---
+  const randomValues = [0.9, 0.1]; // alternate above/below a 0.5 sample rate
+  let callIdx = 0;
+  const sampledRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), {
+    random: () => randomValues[callIdx++ % randomValues.length],
+  });
+  sampledRouter.configureDriftDetection({ sampleRate: 0.5, windowSize: 5, alertThreshold: 0.8 });
+  assert.equal(sampledRouter.getDriftStatus().enabled, true);
+  assert.equal(sampledRouter.getDriftStatus().sampleRate, 0.5);
+
+  await sampledRouter.route(URGENT_TEXT + " drift sample skip"); // random draw 0.9 >= 0.5 -> not sampled
+  await sampledRouter.route(URGENT_TEXT + " drift sample take"); // random draw 0.1 < 0.5 -> sampled
+  await sampledRouter.flushDriftEvaluations();
+  assert.equal(sampledRouter.getDriftStatus().totalEvaluations, 1, "only the draw below sampleRate should trigger a background comparison");
+  console.log("✓ drift sampling fires a background comparison only on the configured random fraction of confident sidecar-path requests, independent of the per-request shadowMode flag");
+
+  // --- Rolling-window disagreement activates the alert once the window is full ---
+  const driftingRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  driftingRouter.configureDriftDetection({ sampleRate: 1, windowSize: 4, alertThreshold: 0.9 });
+  for (let i = 0; i < 4; i++) {
+    const result = await driftingRouter.route(`${SHADOW_DISAGREEMENT_TEXT} drift variant ${i}`);
+    assert.equal(result.path, "sidecar", "drift sampling must only ever trigger on the confident fast path");
+  }
+  await driftingRouter.flushDriftEvaluations();
+  const drifted = driftingRouter.getDriftStatus();
+  assert.equal(drifted.rollingEvaluations, 4);
+  assert.equal(drifted.rollingAgreementRate, 0, "the deliberately-disagreeing fixture should register zero rolling agreement");
+  assert.equal(drifted.alertActive, true, "a rolling agreement rate below the alert threshold with a full window should activate the alert");
+  assert.ok(drifted.lastAlertFiredAt, "an activated alert should record when it last fired");
+  console.log(`✓ a sustained rolling disagreement between the sidecar and the foundation model (rolling agreement rate ${drifted.rollingAgreementRate}) activates the drift alert once the window is full`);
+
+  // --- Recovery (a window full of agreements) clears the alert ---
+  for (let i = 0; i < 4; i++) {
+    await driftingRouter.route(`${URGENT_TEXT} drift recovery ${i}`);
+  }
+  await driftingRouter.flushDriftEvaluations();
+  const recovered = driftingRouter.getDriftStatus();
+  assert.equal(recovered.rollingAgreementRate, 1, "the rolling window should now be entirely agreements");
+  assert.equal(recovered.alertActive, false, "the alert should clear once the rolling agreement rate recovers above threshold");
+  console.log("✓ the drift alert clears once the rolling agreement rate recovers above threshold, allowing a fresh alert on a later drop");
+
+  // --- Fewer than a full window never activates the alert, avoiding noise from a handful of early samples ---
+  const freshRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  freshRouter.configureDriftDetection({ sampleRate: 1, windowSize: 10, alertThreshold: 0.9 });
+  await freshRouter.route(SHADOW_DISAGREEMENT_TEXT + " insufficient samples");
+  await freshRouter.flushDriftEvaluations();
+  assert.equal(freshRouter.getDriftStatus().rollingEvaluations, 1);
+  assert.equal(freshRouter.getDriftStatus().alertActive, false, "a single disagreement in a not-yet-full window must not trip the alert");
+  console.log("✓ the drift alert never fires before the rolling window has a full set of samples");
+
+  // --- Disabling drift detection stops new sampling but preserves cumulative stats ---
+  driftingRouter.disableDriftDetection();
+  assert.equal(driftingRouter.getDriftStatus().enabled, false);
+  assert.equal(driftingRouter.getDriftStatus().totalEvaluations, 8, "disabling must not erase cumulative drift stats");
+  const beforeReenable = driftingRouter.getMetrics();
+  assert.equal(beforeReenable.driftEnabled, false);
+  assert.equal(beforeReenable.driftTotalEvaluations, 8);
+  console.log("✓ disabling drift detection stops new sampling without erasing cumulative comparison stats, reflected in GET /metrics too");
+}
+
+async function testDriftDetectionOverHttp() {
+  const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+  const httpServer = app.listen(0);
+  const { port } = httpServer.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const badRes = await fetch(`${base}/drift/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sampleRate: 1.5 }),
+    });
+    assert.equal(badRes.status, 400);
+    console.log("✓ POST /drift/config rejects an out-of-range 'sampleRate' with 400");
+
+    const configRes = await fetch(`${base}/drift/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sampleRate: 1, windowSize: 3, alertThreshold: 0.75 }),
+    });
+    assert.equal(configRes.status, 200);
+    const configBody = await configRes.json();
+    assert.equal(configBody.enabled, true);
+    assert.equal(configBody.windowSize, 3);
+    assert.equal(configBody.alertThreshold, 0.75);
+
+    const statusRes = await fetch(`${base}/drift/status`);
+    const statusBody = await statusRes.json();
+    assert.equal(statusBody.enabled, true);
+    assert.equal(statusBody.sampleRate, 1);
+    console.log("✓ POST/GET /drift/config(/status) configures drift sampling over HTTP and reads back its status");
+
+    for (let i = 0; i < 3; i++) {
+      await fetch(`${base}/classify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: `${SHADOW_DISAGREEMENT_TEXT} http drift ${i}` }),
+      });
+    }
+    await router.flushDriftEvaluations();
+    const afterTrafficRes = await fetch(`${base}/drift/status`);
+    const afterTraffic = await afterTrafficRes.json();
+    assert.equal(afterTraffic.rollingEvaluations, 3);
+    assert.equal(afterTraffic.alertActive, true, "a sustained disagreement over real HTTP traffic should activate the alert");
+    console.log("✓ drift sampling over real HTTP /classify traffic populates the rolling window and can activate the alert");
+
+    const deleteRes = await fetch(`${base}/drift/config`, { method: "DELETE" });
+    const deleteBody = await deleteRes.json();
+    assert.equal(deleteBody.enabled, false);
+    console.log("✓ DELETE /drift/config disables drift sampling");
+  } finally {
+    httpServer.close();
+  }
+}
+
+async function testEnsembleVoting() {
+  // --- No ensemble configured: the primary alone decides, exactly as before this feature existed ---
+  const soloRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  const soloStatus = soloRouter.getEnsembleStatus();
+  assert.equal(soloStatus.enabled, false);
+  assert.equal(soloStatus.memberCount, 1, "the primary alone always counts as one member");
+  console.log("✓ with no ensemble configured, getEnsembleStatus() reports enabled: false and memberCount: 1 (the primary alone)");
+
+  // --- Ensemble corroboration can push a combined confidence over the threshold even though the primary alone was only borderline ---
+  const primary = new CountingSidecar();
+  const foundation = new CountingFoundation();
+  // REVIEWER_AGREE_TEXT gives the primary exactly 0.60 confidence on "routine" (see its own comment above).
+  // This member sees the same input but its own confidence, scaled up, corroborates "routine" more strongly.
+  const corroborator = new MockSidecarClassifier({ extraKeywords: [{ label: "routine", keywords: ["leaking"] }], confidenceScale: 1.3 });
+  const router = new ModelRouter(primary, foundation);
+  router.setEnsemble([{ classifier: corroborator, weight: 1, name: "corroborator" }]);
+  assert.equal(router.getEnsembleStatus().enabled, true);
+  assert.equal(router.getEnsembleStatus().memberCount, 2);
+
+  const corroborated = await router.route(REVIEWER_AGREE_TEXT);
+  assert.equal(corroborated.path, "sidecar", "ensemble corroboration should resolve this at the sidecar tier even though the primary alone (confidence 0.60) would have needed to escalate");
+  assert.equal(corroborated.label, "routine");
+  assert.ok(closeTo(corroborated.confidence, 0.8), `expected the weighted-average combined confidence (0.60+1.00)/2=0.80, got ${corroborated.confidence}`);
+  assert.ok(corroborated.sidecar.ensembleVotes && corroborated.sidecar.ensembleVotes.length === 2, "the result should report each member's individual vote for explainability");
+  assert.equal(foundation.calls, 0, "the ensemble should have resolved this without ever escalating to the foundation model");
+  assert.ok(closeTo(corroborated.totalCostUsd, 2 * SIDECAR_COST_USD), "an ensemble of 2 members should bill 2 real sidecar-endpoint invocations, not a flat single fee");
+  console.log(`✓ two corroborating ensemble members combine to a higher confidence (${corroborated.confidence.toFixed(2)}) than the primary alone had, resolving at the sidecar tier without escalating`);
+
+  // --- A genuine ensemble disagreement keeps the combined confidence too low, so it still escalates ---
+  const disagreePrimary = new CountingSidecar();
+  const disagreeFoundation = new CountingFoundation();
+  const disagreeingMember = new MockSidecarClassifier({ extraKeywords: [{ label: "urgent", keywords: [ENSEMBLE_MARKER] }] });
+  const disagreeRouter = new ModelRouter(disagreePrimary, disagreeFoundation);
+  disagreeRouter.setEnsemble([{ classifier: disagreeingMember, weight: 1 }]);
+  const disagreed = await disagreeRouter.route(`please review this ${ENSEMBLE_MARKER} note calmly`);
+  assert.equal(disagreed.path, "foundation", "a genuine ensemble disagreement should keep combined confidence below threshold, so it still escalates");
+  assert.ok(closeTo(disagreed.confidence, 0.275), `expected the weighted combined confidence (1*0.3 + 1*0.55)/2=0.275, got ${disagreed.confidence}`);
+  assert.ok(disagreeFoundation.calls >= 1, "the foundation model should actually have been invoked");
+  const disagreeMetrics = disagreeRouter.getMetrics();
+  assert.equal(disagreeMetrics.ensembleEvaluations, 1);
+  assert.equal(disagreeMetrics.ensembleDisagreements, 1);
+  assert.ok(closeTo(disagreeMetrics.ensembleDisagreementRate, 1));
+  console.log("✓ a genuine ensemble disagreement keeps the combined confidence too low to resolve at the sidecar tier, correctly escalating to the foundation model rather than picking a winner arbitrarily");
+
+  // --- Clearing the ensemble reverts to the primary alone, without erasing cumulative stats ---
+  disagreeRouter.clearEnsemble();
+  assert.equal(disagreeRouter.getEnsembleStatus().enabled, false);
+  assert.equal(disagreeRouter.getEnsembleStatus().memberCount, 1);
+  assert.equal(disagreeRouter.getEnsembleStatus().evaluations, 1, "clearing the ensemble must not erase the cumulative comparison counters");
+  console.log("✓ clearing the ensemble reverts to the primary sidecar alone without erasing cumulative vote-comparison metrics");
+}
+
+async function testEnsembleVotingOverHttp() {
+  const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+  const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+  const httpServer = app.listen(0);
+  const { port } = httpServer.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const badRes = await fetch(`${base}/router/ensemble`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ members: [] }),
+    });
+    assert.equal(badRes.status, 400);
+    console.log("✓ POST /router/ensemble rejects an empty 'members' array with 400");
+
+    const registerRes = await fetch(`${base}/router/ensemble`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ members: [{ weight: 2, name: "voter-2", config: { confidenceScale: 0.9 } }] }),
+    });
+    assert.equal(registerRes.status, 200);
+    const registerBody = await registerRes.json();
+    assert.equal(registerBody.enabled, true);
+    assert.equal(registerBody.memberCount, 2);
+    assert.ok(registerBody.members.some((m: { name: string; weight: number }) => m.name === "voter-2" && m.weight === 2));
+
+    const getRes = await fetch(`${base}/router/ensemble`);
+    const getBody = await getRes.json();
+    assert.equal(getBody.enabled, true);
+    assert.equal(getBody.memberCount, 2);
+    console.log("✓ POST/GET /router/ensemble registers a weighted ensemble member over HTTP and reads back its status");
+
+    const deleteRes = await fetch(`${base}/router/ensemble`, { method: "DELETE" });
+    const deleteBody = await deleteRes.json();
+    assert.equal(deleteBody.enabled, false);
+    assert.equal(deleteBody.memberCount, 1);
+    console.log("✓ DELETE /router/ensemble clears every registered member, reverting to the primary alone");
+  } finally {
+    httpServer.close();
+  }
+}
+
+async function testCostRecommendation() {
+  // --- Not enough escalation samples yet ---
+  const freshRouter = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+  const early = freshRouter.generateCostRecommendation();
+  assert.equal(early.recommendationType, "insufficient_data");
+  assert.equal(early.suggestedThreshold, null);
+  console.log("✓ GET /recommendations/cost-equivalent reports insufficient_data before enough escalations have been observed");
+
+  // --- "no_change": a cluster of genuinely low-confidence (below the reviewer band) escalations shouldn't be shortcut ---
+  const noChangeRouter = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+  for (let i = 0; i < 5; i++) {
+    const result = await noChangeRouter.route(`${AMBIGUOUS_TEXT} no-change sample ${i}`);
+    assert.equal(result.path, "foundation");
+  }
+  const noChange = noChangeRouter.generateCostRecommendation();
+  assert.equal(noChange.recommendationType, "no_change");
+  assert.equal(noChange.sampleSize, 5);
+  assert.equal(noChange.projectedFoundationCallReductionPct, 0);
+  console.log("✓ a cluster of genuinely low-confidence (below-reviewer-band) escalations correctly yields no_change rather than recommending an unsafe threshold shortcut");
+
+  // --- "enable_reviewer_tier": reviewer-band escalations with no reviewer configured ---
+  const noReviewerRouter = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+  for (let i = 0; i < 5; i++) {
+    const result = await noReviewerRouter.route(`${REVIEWER_AGREE_TEXT} reviewer-lever sample ${i}`);
+    assert.equal(result.path, "foundation", "with no reviewer configured, a reviewer-band input still escalates straight to the foundation model");
+  }
+  const reviewerRec = noReviewerRouter.generateCostRecommendation();
+  assert.equal(reviewerRec.recommendationType, "enable_reviewer_tier");
+  assert.equal(reviewerRec.sampleSize, 5);
+  assert.ok(closeTo(reviewerRec.projectedFoundationCallReductionPct!, 100));
+  assert.ok(reviewerRec.projectedCostSavingsUsd! > 0, "the reviewer-tier recommendation should project real, positive dollar savings");
+  assert.ok(reviewerRec.rationale.includes("reviewer"), `rationale should mention the reviewer tier, got: ${reviewerRec.rationale}`);
+  console.log(`✓ recent escalations clustered in the reviewer band with no reviewer configured yield an enable_reviewer_tier recommendation (projected savings $${reviewerRec.projectedCostSavingsUsd!.toFixed(4)})`);
+
+  // --- "lower_threshold": reviewer-band escalations that a *configured* reviewer still couldn't resolve ---
+  const withReviewerRouter = new ModelRouter(new CountingSidecar(), new CountingFoundation(), { reviewer: new MockReviewerProvider() });
+  for (let i = 0; i < 5; i++) {
+    const result = await withReviewerRouter.route(`${REVIEWER_DISAGREE_TEXT} lower-threshold sample ${i}`);
+    assert.equal(result.path, "foundation", "the reviewer's own disagreement should cascade this fixture to the full foundation model");
+  }
+  const lowerRec = withReviewerRouter.generateCostRecommendation();
+  assert.equal(lowerRec.recommendationType, "lower_threshold");
+  assert.ok(closeTo(lowerRec.suggestedThreshold!, DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD));
+  assert.ok(closeTo(lowerRec.projectedFoundationCallReductionPct!, 100));
+  assert.ok(lowerRec.projectedCostSavingsUsd! > 0);
+  assert.equal(lowerRec.projectedAccuracyRiskPct, null, "no feedback/shadow data has been collected yet, so accuracy risk should be honestly reported as unknown");
+  console.log(`✓ escalations a configured reviewer still couldn't resolve yield a lower_threshold recommendation (suggested threshold ${lowerRec.suggestedThreshold}, projected savings $${lowerRec.projectedCostSavingsUsd!.toFixed(4)})`);
+
+  // --- The recommendation reuses the router's real pooled feedback/shadow accuracy data when available ---
+  const withFeedbackRouter = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+  for (let i = 0; i < 5; i++) {
+    await withFeedbackRouter.route(`${AMBIGUOUS_TEXT} feedback sample ${i}`);
+  }
+  const urgentIds: string[] = [];
+  for (const text of ["There's a fire in the pantry, call 911!", "Smoke alarm going off, emergency, help!", "Intruder in the backyard, call 911 immediately!"]) {
+    const r = await withFeedbackRouter.route(text);
+    assert.equal(r.path, "sidecar");
+    urgentIds.push(r.requestId);
+  }
+  urgentIds.forEach((id) => withFeedbackRouter.recordFeedback(id, true)); // 100% observed accuracy
+  const withAccuracy = withFeedbackRouter.generateCostRecommendation();
+  assert.equal(withAccuracy.accuracySampleSize, 3);
+  assert.ok(closeTo(withAccuracy.projectedAccuracyRiskPct!, 0), "100% observed feedback accuracy should project ~0% accuracy risk");
+  console.log(`✓ once pooled feedback/shadow-evaluation data exists, the recommendation's projectedAccuracyRiskPct reuses it (accuracySampleSize ${withAccuracy.accuracySampleSize}, risk ${withAccuracy.projectedAccuracyRiskPct}%)`);
+}
+
+async function testCostRecommendationOverHttp() {
+  const router = new ModelRouter(new CountingSidecar(), new CountingFoundation());
+  const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+  const httpServer = app.listen(0);
+  const { port } = httpServer.address() as AddressInfo;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const earlyRes = await fetch(`${base}/recommendations/cost`);
+    assert.equal(earlyRes.status, 200);
+    const earlyBody = await earlyRes.json();
+    assert.equal(earlyBody.recommendationType, "insufficient_data");
+
+    for (let i = 0; i < 5; i++) {
+      await fetch(`${base}/classify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: `${REVIEWER_AGREE_TEXT} http recommendation sample ${i}` }),
+      });
+    }
+
+    const res = await fetch(`${base}/recommendations/cost`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.recommendationType, "enable_reviewer_tier");
+    assert.equal(body.sampleSize, 5);
+    assert.ok(typeof body.rationale === "string" && body.rationale.length > 0);
+    console.log("✓ GET /recommendations/cost computes a concrete, numerically-justified recommendation from real HTTP traffic, not a canned message");
+  } finally {
+    httpServer.close();
+  }
+}
+
+async function testAuditTrailExport() {
+  const tempDir = mkdtempSync(join(tmpdir(), "model-router-audit-test-"));
+  const auditPath = join(tempDir, "audit-log.jsonl");
+  try {
+    // --- In-memory only (no auditLogPath configured): still queryable for the life of the process ---
+    const memoryOnlyRouter = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider());
+    const urgent = await memoryOnlyRouter.route(URGENT_TEXT + " audit memory");
+    const ambiguous = await memoryOnlyRouter.route(AMBIGUOUS_TEXT + " audit memory");
+    const memoryExport = memoryOnlyRouter.exportAuditTrail();
+    assert.equal(memoryExport.persisted, false, "an unconfigured auditLogPath should read from the in-memory buffer, not a file");
+    assert.equal(memoryExport.recordCount, 2);
+    const memoryIds = memoryExport.records.map((r) => r.requestId).sort();
+    assert.deepEqual(memoryIds, [urgent.requestId, ambiguous.requestId].sort());
+    console.log("✓ with no auditLogPath configured, exportAuditTrail() still returns real records from the bounded in-memory buffer");
+
+    // --- Durable, file-backed audit trail ---
+    const clock = { time: 10_000_000 };
+    const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), { now: () => clock.time, auditLogPath: auditPath });
+    router.setBudget(1, 60_000); // so the record's budget snapshot fields are exercised too
+
+    const first = await router.route(URGENT_TEXT + " audit one");
+    clock.time += 5_000;
+    const second = await router.route(AMBIGUOUS_TEXT + " audit two");
+    clock.time += 5_000;
+    const cacheHit = await router.route(URGENT_TEXT + " audit one"); // repeats the first input -> a cache hit
+    assert.equal(cacheHit.cacheHit, true);
+
+    assert.ok(existsSync(auditPath), "a configured auditLogPath should be written to as requests are handled");
+    const onDisk = loadAuditRecords(auditPath);
+    assert.equal(onDisk.length, 3, "every routing decision, cache hits included, should be recorded");
+    const firstRecord = onDisk.find((r) => r.requestId === first.requestId);
+    assert.ok(firstRecord, "the durable log should contain a record for the first request's real requestId");
+    assert.equal(firstRecord!.path, "sidecar");
+    assert.equal(firstRecord!.label, "urgent");
+    assert.equal(firstRecord!.cacheHit, false);
+    assert.equal(firstRecord!.budgetEnabled, true, "the budget snapshot in effect at the time should be recorded");
+    const cacheHitRecord = onDisk.find((r) => r.requestId === cacheHit.requestId);
+    assert.ok(cacheHitRecord, "a cache-hit routing decision should still be recorded, not silently omitted");
+    assert.equal(cacheHitRecord!.cacheHit, true);
+    console.log("✓ a configured auditLogPath persists a compact JSON-Lines record for every routing decision, cache hits included");
+
+    // --- since= filtering ---
+    const sinceExport = router.exportAuditTrail({ sinceMs: 10_000_001 }); // after the first record's timestamp, at/before the second's
+    assert.equal(sinceExport.persisted, true);
+    assert.equal(sinceExport.recordCount, 2, "the since filter should exclude the first (earlier) record but keep the second and the cache hit");
+    assert.ok(!sinceExport.records.some((r) => r.requestId === first.requestId));
+    console.log("✓ exportAuditTrail({ sinceMs }) filters out records timestamped before the given cutoff");
+
+    // --- limit= caps the export to the most recent N records ---
+    const limitedExport = router.exportAuditTrail({ limit: 1 });
+    assert.equal(limitedExport.recordCount, 1);
+    assert.equal(limitedExport.records[0].requestId, cacheHit.requestId, "a limited export should keep the most recent record(s)");
+    console.log("✓ exportAuditTrail({ limit }) caps the export to the most recent N records");
+
+    // --- Aggregate totals and per-path counts are computed correctly ---
+    const fullExport = router.exportAuditTrail();
+    assert.equal(fullExport.recordCount, 3);
+    assert.ok(closeTo(fullExport.totalCostUsd, first.totalCostUsd + second.totalCostUsd + cacheHit.totalCostUsd));
+    assert.equal(fullExport.pathCounts["sidecar"], 2, "both the fresh urgent classification and the cache hit report path 'sidecar'");
+    assert.equal(fullExport.pathCounts["foundation"], 1);
+    console.log("✓ the audit export's aggregate totalCostUsd/totalLatencyMs and per-path counts match the underlying records");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function testAuditTrailExportOverHttp() {
+  const tempDir = mkdtempSync(join(tmpdir(), "model-router-audit-http-test-"));
+  const auditPath = join(tempDir, "audit-log.jsonl");
+  try {
+    const router = new ModelRouter(new MockSidecarClassifier(), new MockBedrockProvider(), { auditLogPath: auditPath });
+    const app = createApp(router, { rateLimiter: new RateLimiter({ limit: 100, windowMs: 60_000 }) });
+    const httpServer = app.listen(0);
+    const { port } = httpServer.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    try {
+      await fetch(`${base}/classify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Caller-Id": "audit-caller" },
+        body: JSON.stringify({ text: URGENT_TEXT + " http audit" }),
+      });
+      await fetch(`${base}/classify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Caller-Id": "audit-caller" },
+        body: JSON.stringify({ text: AMBIGUOUS_TEXT + " http audit" }),
+      });
+
+      const badRes = await fetch(`${base}/audit/export?since=not-a-real-date`);
+      assert.equal(badRes.status, 400);
+      console.log("✓ GET /audit/export rejects an unparseable 'since' with 400");
+
+      const res = await fetch(`${base}/audit/export`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.persisted, true);
+      assert.equal(body.recordCount, 2);
+      assert.ok(body.records.every((r: { callerId: string }) => r.callerId === "audit-caller"));
+      console.log("✓ GET /audit/export returns a compliance-ready export of real routing decisions made over HTTP, including the caller id");
+
+      const limitedRes = await fetch(`${base}/audit/export?limit=1`);
+      const limitedBody = await limitedRes.json();
+      assert.equal(limitedBody.recordCount, 1);
+      console.log("✓ GET /audit/export?limit=N caps the export over HTTP too");
+    } finally {
+      httpServer.close();
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   await testRouterUnit();
   await testResponseCache();
@@ -1189,6 +1649,14 @@ async function main() {
   await testCanaryRoutingOverHttp();
   await testAlertWebhooks();
   await testPrometheusMetrics();
+  await testDriftDetection();
+  await testDriftDetectionOverHttp();
+  await testEnsembleVoting();
+  await testEnsembleVotingOverHttp();
+  await testCostRecommendation();
+  await testCostRecommendationOverHttp();
+  await testAuditTrailExport();
+  await testAuditTrailExportOverHttp();
   console.log("\nAll model-router smoke tests passed.");
 }
 

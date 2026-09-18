@@ -6,3 +6,7 @@ dist/
 # Demo-grade persisted metrics state (feature: persistent metrics) — runtime
 # output from actually running the server locally, not source.
 metrics-state.json
+
+# Demo-grade persisted audit trail (feature: per-request audit trail export,
+# round 5) — runtime output from actually running the server locally, not source.
+audit-log.jsonl

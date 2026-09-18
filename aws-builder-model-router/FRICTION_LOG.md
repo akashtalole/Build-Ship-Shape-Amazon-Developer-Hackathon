@@ -250,3 +250,94 @@ bonus.
     (unchanged from round 3) but per-caller overrides, the canary, and the alert-webhook registration reset to
     "unconfigured" — acceptable for a demo process that's expected to stay up for the length of a demo, and called
     out here so it's a known boundary rather than a surprise.
+
+## Round 5: sidecar drift detection, multi-sidecar ensemble voting, cost-optimization recommender, audit trail export
+
+This round's brief was explicitly different from every prior one: not "add another production-hardening feature"
+(caching, budgets, circuit breakers, canary — all genuinely useful, but all the same *category* of feature), but
+"build something a judge hasn't seen in this submission's own history yet." That framing changed the actual hardest
+problems this round, away from "how do I make a mock deterministic for a test" (rounds 1–4's dominant friction) and
+toward "what's the honest, non-arbitrary design for a feature that doesn't have an obvious precedent to copy."
+
+24. **Deciding what ensemble voting's confidence-combination formula should actually be took several false starts,
+    because the "obviously right" options were each subtly wrong for a classifier that only reports one label +
+    confidence, not a full probability distribution.** A real soft-voting ensemble averages full probability vectors
+    across members; a real hard-voting ensemble counts votes and reports agreement fraction as "confidence," discarding
+    each member's own certainty entirely. Neither is available here (`SidecarResult` only ever carries the *winning*
+    label's confidence, not a score for every label), and my first instinct — "more votes for the same label should
+    push confidence up, not just average it" — turned out to be actively misleading: with only "weight × confidence
+    summed per label, divided by total weight," unanimous agreement can *never* exceed the most confident member's own
+    number (it's a weighted average, diluted by anyone less sure), which at first felt like a bug. Sitting with it, I
+    realized that's actually the *honest* behavior for the information actually available: agreement can rescue a
+    genuinely uncertain member (pulling the combined number up toward a more confident corroborating member, which is
+    real, useful signal), but it can't manufacture certainty beyond what the most confident member actually reported —
+    a real ensemble of narrow classifiers shouldn't get to claim more confidence than any of its parts actually has.
+    I kept the weighted-average formula and wrote the "why not something flashier" reasoning directly into
+    `runEnsembleVote()`'s doc comment rather than let a reader wonder why agreement doesn't multiply confidence.
+25. **Engineering a test fixture where ensemble *disagreement* keeps combined confidence low, distinct from a fixture
+    where ensemble *agreement* pushes it above threshold, needed two entirely different marker strategies — I
+    initially tried to reuse one fixture for both and it couldn't do either job well.** The "agreement" case needed a
+    real input (`REVIEWER_AGREE_TEXT`, already confidence 0.60 on its own) plus a second member that corroborates the
+    *same* label more strongly — landed on scaling up a legitimate keyword-hit-based confidence via `confidenceScale`
+    on a member that also picks up one of the existing hits, so the corroboration is a genuine (if configured)
+    difference in classifier behavior, not a canned override. The "disagreement" case needed the opposite: a member
+    that votes for a *different* label entirely, which meant a fresh marker keyword (`ENSEMBLE_MARKER`, checked by
+    inspection against the built-in keyword lists the same way `CANARY_MARKER` was in round 4) added only to one
+    member's `extraKeywords`, on an input with zero other keyword signal so the primary's own zero-hit default
+    ("informational", 0.3) and the marked member's single-keyword hit ("urgent", 0.55) are the *only* two votes in
+    play — deterministic, and hand-verifiable against the weighted-average formula by pen and paper.
+26. **Drift detection's hardest design question wasn't the mechanism (which is genuinely just shadow evaluation's
+    fire-and-forget pattern again) — it was *why this isn't just shadow mode with a different name*, and I had to be
+    honest with myself that the mechanism really is that similar.** What actually makes it a different feature: (a)
+    shadow mode is opt-in *per request* (`shadowMode: true`); drift detection is a router-level *sampled fraction* of
+    all confident traffic, sampled independently of what any individual request asked for; (b) shadow mode reports an
+    *all-time* agreement rate with no alerting; drift detection tracks a *rolling window* specifically so a router
+    that's been running for weeks doesn't have one bad hour permanently diluted into invisibility by months of prior
+    good behavior, and fires an *alert* on a sustained drop — the actual production use case ("tell me when something
+    changes," not "let me query a lifetime average on demand"). I made sure the smoke tests exercise exactly those two
+    differences (the injectable-random sampling-rate test, and the rolling-window-recovers-after-agreement test) so
+    the distinction is demonstrated, not just asserted in a doc comment.
+27. **The cost recommender's first design was subtly self-defeating: a "lower the threshold" lever with no floor other
+    than a hardcoded 0.3 would recommend chasing *any* escalation sample down to wherever its own confidence sat, which
+    made the "enable the reviewer tier" lever completely unreachable** — any escalation sample with confidence >= 0.3
+    (essentially always true) got caught by the threshold-lowering search before the reviewer-tier check ever ran, so
+    I'd built two levers where one silently starved the other. The fix wasn't a special case; it was noticing that the
+    codebase already has a principled floor for "how low is too low to trust the sidecar alone" —
+    `reviewerConfidenceThreshold`, the exact boundary `DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD`'s doc comment already
+    argues for (below it, the sidecar has "essentially no real signal"). Bounding the threshold-lowering search at that
+    same floor, and checking the reviewer-tier lever *first* for anything still in that band, made the two levers
+    mutually exclusive by construction instead of by an arbitrary tie-break, and it meant the recommender's logic
+    reuses the router's own existing confidence-band architecture rather than inventing a second, competing notion of
+    "how confident is confident enough."
+28. **A second, quieter version of the same bug: my first escalation-sample tracker counted every non-sidecar-path
+    request, including ones that resolved cheaply at the reviewer tier — which meant a healthy, working reviewer setup
+    would still show up as "cost to optimize away," which is backwards.** The recommender's actual job is reducing
+    *foundation-model* calls specifically (the feature's own framing), and a `"reviewer"`-path resolution is the
+    cheap tier already working as intended, not a cost problem. Narrowing the sample condition to `"foundation"` and
+    `"fallback"` paths only fixed this, and doing so surfaced the fix for friction #27 too (once reviewer-resolved
+    traffic stopped polluting the sample, the reviewer-band vs. lower-threshold distinction became cleanly testable
+    with real fixtures rather than fixtures fighting the bug).
+29. **Reusing `metricsPersistence.ts`'s file-based persistence "approach" for the audit trail, as asked, turned out to
+    mean something more specific than "call the same functions" — the two features' data shapes are fundamentally
+    different (a fixed-size snapshot vs. an ever-growing log), and copying the whole-file-rewrite pattern verbatim
+    would have been actively bad engineering, not faithful reuse.** `saveMetricsState` rewrites the entire file on
+    every save because the state it saves never grows — a handful of cumulative counters, always the same size. An
+    audit trail is a log: rewriting the *entire* history on every single request would be O(n) work per request and
+    O(n²) over a session, purely because I'd have mechanically copied a pattern that only worked for the other
+    feature's different shape. I kept everything else from that file's philosophy — plain synchronous Node `fs`,
+    one plain-text file, no external database, no locking, "a read failure starts fresh/skips rather than crashing
+    the demo" — and used JSON Lines with `appendFileSync` instead of a single rewritten JSON blob, an O(1)-per-record
+    write that's still just as inspectable with `cat`/`tail`/`jq`. I documented the deviation explicitly in
+    `auditTrail.ts`'s own doc comment rather than let a reader assume it was an oversight or that I'd missed the
+    instruction to reuse the existing approach.
+30. **The audit trail's `timestamp` field silently used real wall-clock time (`new Date().toISOString()`) instead of
+    the router's own injectable clock (`this.now()`) in my first pass, and a `sinceMs`-filtering test caught it
+    immediately rather than it lurking as a latent bug.** Every other piece of time-sensitive router state (cache TTL,
+    circuit-breaker cooldown, budget periods) already threads through the constructor's injectable `now: () =>
+    number` specifically so tests can drive time deterministically without real sleeping (see round 2's friction #5)
+    — the audit record was the one place I reached for `Date.now()`'s real-time convenience out of habit instead of
+    following that established convention, and a test asserting "records before a fake-clock cutoff are excluded"
+    failed immediately and unambiguously (all 3 records came back instead of 2) the moment real timestamps and a
+    fake-clock-relative filter got compared against each other. The fix was one line; the lesson is that this
+    class of bug is easy to introduce by habit and easy to miss by inspection, but a test that actually exercises the
+    feature's real behavior (not just "does the function return without throwing") catches it for free.
