@@ -37,6 +37,7 @@ export interface OutboundWebhookDeliveryStatus {
 const DELIVERABLE_EVENT_TYPES: ReadonlySet<PorchPassEvent["type"]> = new Set([
   "pass_issued",
   "visit_checkin",
+  "visit_checkout",
   "pass_revoked",
   "pass_expired",
 ]);

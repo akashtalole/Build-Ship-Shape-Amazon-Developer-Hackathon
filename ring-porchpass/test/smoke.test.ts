@@ -6,9 +6,11 @@
  * exercise expiry, revocation, and single-use enforcement — followed by a
  * second round covering the advanced features: idempotent issuance,
  * recurring passes, webhook signature verification, the real-time SSE
- * event stream, quiet-hours enforcement, and check-in rate limiting — and a
+ * event stream, quiet-hours enforcement, and check-in rate limiting — a
  * third round covering multi-device support, outbound webhook notifications,
- * bulk/template pass issuance, and the grace-period extension flow.
+ * bulk/template pass issuance, and the grace-period extension flow — and a
+ * fourth round covering visit duration tracking, the traffic/analytics
+ * report, household member roles, and encrypted-at-rest visitor PII.
  * Run with `npm test`.
  */
 import assert from "node:assert/strict";
@@ -18,6 +20,8 @@ import { createApp } from "../src/server.js";
 import { SimulatedRingClient } from "../src/ringClient.js";
 import { LoggingNotifier } from "../src/notify.js";
 import { getWebhookSecret, signPayload } from "../src/webhookAuth.js";
+import { getPassById } from "../src/store.js";
+import { decryptField } from "../src/crypto.js";
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -659,6 +663,211 @@ async function main() {
   const doubleApproveRes = await fetch(`${base}/passes/${justExpiredPass.id}/extension/approve`, { method: "POST" });
   assert.equal(doubleApproveRes.status, 409, "approving an extension that's already been decided is rejected");
   console.log("✓ POST /passes/:id/extension/approve rejects a request that isn't pending");
+
+  // =========================================================================
+  // Round 4: visit duration tracking, traffic/analytics report, household
+  // member roles, encrypted-at-rest visitor PII
+  // =========================================================================
+
+  // --- 1. Visit duration tracking (arrival + departure) ---
+  const durationPassUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const durationPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Duration Tester", visitorPhone: "+15550003333", validUntil: durationPassUntil }),
+    })
+  ).json();
+
+  const arrivalRes = await (
+    await fetch(`${base}/checkin/${durationPass.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(arrivalRes.ok, true);
+  const durationVisitId = arrivalRes.visit.id;
+
+  const visitsWhileOnSite = await (await fetch(`${base}/visits`)).json();
+  const onSiteVisit = visitsWhileOnSite.find((v: { id: string }) => v.id === durationVisitId);
+  assert.ok(onSiteVisit, "the new visit shows up in GET /visits immediately after arrival");
+  assert.equal(onSiteVisit.status, "on_site", "a visit with only an arrival shows as still on-site");
+  assert.equal(onSiteVisit.checkedOutAt, undefined, "an on-site visit has no checkedOutAt yet");
+  assert.equal(typeof onSiteVisit.onSiteForMs, "number", "an on-site visit reports how long it's been going so far");
+  console.log("✓ GET /visits shows a visit with only an arrival as still on-site");
+
+  // A small real delay so the computed duration is meaningfully > 0, not just non-negative by luck.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const checkoutRes = await fetch(`${base}/checkin/${durationPass.checkinToken}/checkout`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  assert.equal(checkoutRes.status, 200);
+  const checkoutResult = await checkoutRes.json();
+  assert.equal(checkoutResult.ok, true);
+  assert.equal(checkoutResult.visit.id, durationVisitId, "checkout closes the same visit the arrival opened");
+  assert.ok(checkoutResult.visit.durationMs >= 20, "a checkout computes a real, non-trivial visit duration");
+  console.log("✓ POST /checkin/:token/checkout closes out a visit and computes its duration");
+
+  const visitsAfterCheckout = await (await fetch(`${base}/visits`)).json();
+  const completedVisit = visitsAfterCheckout.find((v: { id: string }) => v.id === durationVisitId);
+  assert.equal(completedVisit.status, "completed", "GET /visits reflects the departure once it happens");
+  assert.equal(completedVisit.durationMs, checkoutResult.visit.durationMs);
+  console.log("✓ GET /visits shows a completed visit's status and computed duration after checkout");
+
+  // Edge case: a departure with no matching open visit (already checked out, or never checked in at all) is a clean rejection.
+  const doubleCheckoutRes = await (
+    await fetch(`${base}/checkin/${durationPass.checkinToken}/checkout`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(doubleCheckoutRes.ok, false, "a second checkout with no new arrival in between is rejected");
+  assert.match(doubleCheckoutRes.reason, /no active visit/i);
+
+  const neverArrivedPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Never Arrived", visitorPhone: "+15550003334", validUntil: durationPassUntil }),
+    })
+  ).json();
+  const noArrivalCheckoutRes = await (
+    await fetch(`${base}/checkin/${neverArrivedPass.checkinToken}/checkout`, { method: "POST", headers: { Accept: "application/json" } })
+  ).json();
+  assert.equal(noArrivalCheckoutRes.ok, false, "a departure with no matching arrival at all is rejected, not a crash");
+  console.log("✓ a checkout with no matching open visit (already checked out, or never checked in) is rejected cleanly");
+
+  // --- 2. Traffic/analytics report ---
+  const analyticsBefore = await (await fetch(`${base}/analytics`)).json();
+
+  async function issueCheckinCheckout(visitorName: string, phone: string, note: string) {
+    const p = await (
+      await fetch(`${base}/passes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visitorName, visitorPhone: phone, validUntil: durationPassUntil, note }),
+      })
+    ).json();
+    await fetch(`${base}/checkin/${p.checkinToken}`, { method: "POST", headers: { Accept: "application/json" } });
+    await fetch(`${base}/checkin/${p.checkinToken}/checkout`, { method: "POST", headers: { Accept: "application/json" } });
+    return p;
+  }
+  await issueCheckinCheckout("Analytics Dog Walker A", "+15550004001", "dog walker");
+  await issueCheckinCheckout("Analytics Dog Walker B", "+15550004002", "dog walker");
+  await issueCheckinCheckout("Analytics Delivery A", "+15550004003", "delivery");
+
+  const analyticsAfter = await (await fetch(`${base}/analytics`)).json();
+  function categoryCount(report: { visitsByCategory: Array<{ category: string; count: number }> }, category: string): number {
+    return report.visitsByCategory.find((c) => c.category === category)?.count ?? 0;
+  }
+
+  assert.equal(analyticsAfter.totalVisits - analyticsBefore.totalVisits, 3, "analytics totalVisits reflects the real, freshly-recorded visit count");
+  assert.equal(categoryCount(analyticsAfter, "dog walker") - categoryCount(analyticsBefore, "dog walker"), 2, "analytics tallies visits per note-category (dog walker)");
+  assert.equal(categoryCount(analyticsAfter, "delivery") - categoryCount(analyticsBefore, "delivery"), 1, "analytics tallies visits per note-category (delivery)");
+  assert.equal(typeof analyticsAfter.averageVisitDurationMs, "number", "average visit duration is a real computed number once completed visits exist");
+  assert.ok(analyticsAfter.busiestDay, "analytics surfaces a busiest day");
+  const expectedDayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  assert.equal(
+    analyticsAfter.busiestDay.day,
+    expectedDayNames[new Date().getUTCDay()],
+    "the busiest day reflects when the test's visits actually happened (all of them, today)"
+  );
+  assert.ok(
+    analyticsAfter.insights.some((s: string) => /busiest/i.test(s)) && analyticsAfter.insights.some((s: string) => /average/i.test(s)),
+    "analytics includes plain-language insight strings, not just raw numbers"
+  );
+  console.log("✓ GET /analytics aggregates real visit history into busiest-day/hour, average duration, and per-visitor/category counts");
+
+  const trafficAlias = await (await fetch(`${base}/reports/traffic`)).json();
+  assert.equal(trafficAlias.totalVisits, analyticsAfter.totalVisits, "GET /reports/traffic is an alias for the same report as GET /analytics");
+  console.log("✓ GET /reports/traffic returns the same traffic report as GET /analytics");
+
+  // --- 3. Household member roles ---
+  const membersBefore = await (await fetch(`${base}/household/members`)).json();
+  assert.ok(
+    membersBefore.some((m: { id: string; role: string }) => m.id === "owner" && m.role === "owner"),
+    "a default 'owner' household member is pre-seeded, for zero-setup backward compatibility"
+  );
+  console.log("✓ GET /household/members lists the pre-seeded default owner");
+
+  const addMemberRes = await fetch(`${base}/household/members`, {
+    // No X-PorchPass-Member header — defaults to the owner, per household.ts, so this succeeds.
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "helper1", name: "Helper One", role: "member" }),
+  });
+  assert.equal(addMemberRes.status, 201);
+  const addedMember = await addMemberRes.json();
+  assert.equal(addedMember.role, "member");
+  console.log("✓ POST /household/members (as the default owner) adds a member-role household member");
+
+  const roleTestUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const roleTestPass = await (
+    await fetch(`${base}/passes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitorName: "Role Test Visitor", visitorPhone: "+15550002222", validUntil: roleTestUntil }),
+    })
+  ).json();
+
+  const memberRevokeRes = await fetch(`${base}/passes/${roleTestPass.id}`, {
+    method: "DELETE",
+    headers: { "X-PorchPass-Member": "helper1" },
+  });
+  assert.equal(memberRevokeRes.status, 403, "a member-role caller cannot revoke a pass");
+  console.log("✓ DELETE /passes/:id rejects a member-role caller with 403");
+
+  const ownerRevokeRes = await fetch(`${base}/passes/${roleTestPass.id}`, {
+    method: "DELETE",
+    headers: { "X-PorchPass-Member": "owner" },
+  });
+  assert.equal(ownerRevokeRes.status, 200, "an owner-role caller can revoke a pass");
+  console.log("✓ DELETE /passes/:id succeeds for an owner-role caller");
+
+  const memberSettingsRes = await fetch(`${base}/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-PorchPass-Member": "helper1" },
+    body: JSON.stringify({ quietHours: { start: "01:00", end: "02:00" } }),
+  });
+  assert.equal(memberSettingsRes.status, 403, "a member-role caller cannot change household settings");
+  const ownerSettingsRes = await fetch(`${base}/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-PorchPass-Member": "owner" },
+    body: JSON.stringify({ quietHours: null }),
+  });
+  assert.equal(ownerSettingsRes.status, 200, "an owner-role caller can change household settings");
+  console.log("✓ POST /settings enforces the owner role, rejecting a member-role caller with 403 while an owner succeeds");
+
+  const unknownCallerRes = await fetch(`${base}/settings/webhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-PorchPass-Member": "totally-unknown-id" },
+    body: JSON.stringify({ url: "http://127.0.0.1:1/nowhere" }),
+  });
+  assert.equal(unknownCallerRes.status, 401, "an unrecognized member id is rejected outright, not silently downgraded");
+  console.log("✓ an unrecognized X-PorchPass-Member id is rejected with 401 rather than falling back to a default role");
+
+  // --- 4. Encrypted-at-rest visitor PII ---
+  const piiPhone = "+15559998888";
+  const piiPassRes = await fetch(`${base}/passes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visitorName: "PII Test Visitor", visitorPhone: piiPhone, validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+  });
+  const piiPass = await piiPassRes.json();
+
+  assert.ok(!JSON.stringify(piiPass).includes(piiPhone), "the API response never echoes the visitor's plaintext phone number");
+  assert.ok(
+    typeof piiPass.visitorPhone === "string" && piiPass.visitorPhone.endsWith("8888") && piiPass.visitorPhone !== piiPhone,
+    "the API instead shows a masked phone number (last 4 digits visible)"
+  );
+  console.log("✓ POST /passes response never contains the visitor's plaintext phone number, only a masked version");
+
+  const rawStoredPass = getPassById(piiPass.id);
+  assert.ok(rawStoredPass, "the pass exists in the in-memory store");
+  assert.ok(!JSON.stringify(rawStoredPass).includes(piiPhone), "the raw in-memory record does not contain the plaintext phone number anywhere");
+  assert.ok(rawStoredPass!.visitorPhoneEnc?.ciphertext, "the phone number is stored as an AES-256-GCM-encrypted field, not a plain string");
+  assert.equal(decryptField(rawStoredPass!.visitorPhoneEnc), piiPhone, "the encrypted field decrypts back to the exact original phone number");
+  console.log("✓ the visitor's phone number is stored encrypted at rest — confirmed against the raw in-memory record, not just the API's response shape");
+
+  const piiNotification = notifier.history().find((n) => n.to === "visitor" && n.recipient === piiPhone);
+  assert.ok(piiNotification, "the notifier still 'sends' the visitor's SMS to the real, decrypted phone number");
+  console.log("✓ the visitor-facing notification is still sent to the real decrypted phone number, despite encrypted-at-rest storage");
 
   httpServer.close();
   console.log("\nAll PorchPass smoke tests passed.");

@@ -29,26 +29,31 @@ integration point isolated to a single file (`src/ringClient.ts`) — see [Swapp
 
 ```
 src/
-  types.ts            Pass, Visit, RingEvent, Notification, RecurrenceRule, Device, PassExtension data model
+  types.ts            Pass, Visit, RingEvent, Notification, RecurrenceRule, Device, PassExtension, EncryptedField data model
   store.ts            In-memory pass/visit storage + idempotency-key cache
   devices.ts          Ring device registry: implicit + explicit device registration (multi-device support)
   ringClient.ts        RingClient interface + SimulatedRingClient (the Ring integration seam)
   notify.ts            Notifier interface + LoggingNotifier (the SMS/push integration seam)
-  passService.ts       Core access-control logic: issue, check in, expire, revoke, grace-period extensions
+  passService.ts       Core access-control logic: issue, check in, check out, expire, revoke, grace-period extensions
   recurrence.ts        Recurring-pass rule evaluation (daysOfWeek + time-of-day window)
   settings.ts          Household settings: quiet hours
+  household.ts         Household member directory + owner/member role checks (round 4)
+  crypto.ts             AES-256-GCM field encryption for visitor PII at rest (round 4)
+  analytics.ts          Traffic/analytics report built from real visit history (round 4)
+  format.ts             Shared duration/day/hour formatting helpers (round 4)
   webhookAuth.ts        HMAC-SHA256 signing/verification for the *inbound* Ring webhook ingress
   outboundWebhooks.ts   HMAC-signed *outbound* webhook delivery (retry+backoff) to a homeowner's own callback URL
-  rateLimiter.ts        In-memory sliding-window rate limiter for check-in attempts
+  rateLimiter.ts        In-memory sliding-window rate limiter for check-in/checkout attempts
   eventBus.ts          Pub/sub used to push live events to SSE dashboard clients and outbound webhooks
-  server.ts            Express app: homeowner API, visitor check-in flow, Ring event ingress, SSE stream
+  server.ts            Express app: homeowner API, visitor check-in/checkout flow, Ring event ingress, SSE stream
   index.ts             Entry point
 test/
   smoke.test.ts    End-to-end test over real HTTP: issue → doorbell event → check-in → audit trail →
                    single-use enforcement → multi-use enforcement → revocation → expiry → idempotent
                    issuance → recurring passes → webhook signature verification → live SSE stream →
                    quiet hours → check-in rate limiting → multi-device correlation → outbound webhook
-                   delivery → bulk/template issuance → grace-period extension approval/denial
+                   delivery → bulk/template issuance → grace-period extension approval/denial → visit
+                   duration tracking → traffic analytics → household member roles → encrypted-at-rest PII
 ```
 
 ## Running it
@@ -69,6 +74,7 @@ Or for local iteration: `npm run dev`
 | `PORT`                                | `4444`                                                | HTTP port                                    |
 | `RING_WEBHOOK_SECRET`                 | a clearly-marked **local-dev-only** default           | HMAC secret for `POST /ring/events` (see [§3](#3-webhook-signature-verification)) |
 | `QUIET_HOURS_START` / `QUIET_HOURS_END` | unset (no quiet hours)                              | Initial quiet-hours window (`"HH:MM"`, UTC) — can also be set at runtime via `POST /settings` |
+| `PORCHPASS_ENCRYPTION_KEY`             | a clearly-marked **local-dev-only** default          | Key material for AES-256-GCM encryption of visitor PII at rest (see [§4 of Round 4 additions](#4-encrypted-at-rest-visitor-pii)) |
 
 ### Try it by hand
 
@@ -106,9 +112,12 @@ Starts the server on an ephemeral port and drives the full lifecycle over real H
 a (simulated) SMS with a check-in link; a simulated doorbell event plus a visitor check-in produces a correlated
 visit with a snapshot URL and a homeowner notification; a single-use pass rejects a second check-in; a `maxUses: 2`
 pass allows exactly two; a revoked pass and an expired pass both correctly deny access — then a second round covers
-every feature in [Advanced features](#advanced-features), and a third round covers every feature in
-[Round 3 additions](#round-3-additions) below, including spinning up a real local HTTP listener in the test process
-to receive and verify an outbound webhook delivery. No external services required.
+every feature in [Advanced features](#advanced-features), a third round covers every feature in
+[Round 3 additions](#round-3-additions), and a fourth round covers every feature in
+[Round 4 additions](#round-4-additions) below — including spinning up a real local HTTP listener in the test process
+to receive and verify an outbound webhook delivery, and reaching directly into the in-memory store (`store.ts`) to
+confirm a visitor's phone number is never present in plaintext anywhere in the raw stored record, not just absent
+from the API's response shape. No external services required.
 
 ## Advanced features
 
@@ -351,6 +360,128 @@ curl -X POST localhost:4444/passes/<passId>/extension/approve
 # -> visitor is SMS'd a link; the very next check-in within 15 minutes succeeds, then the extension is spent
 ```
 
+## Round 4 additions
+
+Four more additions: visit duration tracking, a traffic/analytics report, household member roles, and
+encrypted-at-rest visitor PII.
+
+### 1. Visit duration tracking
+
+A "visit" used to be a single instant — the moment a visitor tapped the check-in link. Now it's a pair: an arrival
+(the existing `POST /checkin/:token`, unchanged) and, once the visitor taps "I'm leaving," a departure
+(`POST /checkin/:token/checkout`). This is a **separate token action**, not a `direction` field folded into the
+existing check-in endpoint — arrival already carries meaning specific to arriving (correlating a Ring event,
+consuming a pass's use-count, enforcing quiet hours/recurrence/expiry) that a departure has no reason to re-run; a
+visitor leaving doesn't need to pass the same gauntlet of validity checks that let them in, they just need to mark
+that they left. Checkout finds the most recently opened visit for that pass that hasn't already been checked out of
+and closes it, computing `durationMs` once at that moment. `GET /visits` now shows a `status` of `"on_site"` (with a
+live `onSiteForMs`) for a visit with only an arrival, or `"completed"` (with the final `durationMs`) once a
+departure closes it. A checkout with nothing open to close — no matching arrival at all, or a repeat call after
+already checking out — is rejected with a clear reason instead of silently doing nothing or crashing (see
+[`FRICTION_LOG.md`](./FRICTION_LOG.md) for that edge case).
+
+```bash
+# Visitor arrives (as before)
+curl -X POST localhost:4444/checkin/<token> -H "Accept: application/json"
+# -> { "ok": true, "visit": { "id": "...", "checkedInAt": "...", ... } }
+
+# ...later, visitor leaves
+curl -X POST localhost:4444/checkin/<token>/checkout -H "Accept: application/json"
+# -> { "ok": true, "visit": { "checkedOutAt": "...", "durationMs": 734000, ... } }
+
+curl localhost:4444/visits
+# -> each visit now carries "status": "on_site" | "completed", and a completed one carries "durationMs"
+```
+
+### 2. Traffic/analytics report
+
+`GET /analytics` (aliased at `GET /reports/traffic` — both return the identical report) aggregates real visit
+history into plain-language insights, in the same spirit as the "StoreWatch" idea documented in
+[`hackathon-ideas/ring.md`](../hackathon-ideas/ring.md) ("Tuesdays 2–4pm are your busiest window" rather than a raw
+event log) — folded directly into PorchPass's own visit data instead of a separate project. It reports the busiest
+day and hour (by arrival time, UTC), the average duration of completed visits, a count of visits per visitor and
+per pass `note` category (e.g. "dog walker" vs. "delivery" — joined from each visit's pass), how many visitors are
+currently on-site, and an `insights` array of ready-to-display sentences built from those same numbers. There's no
+separate analytics data store to keep in sync — every number comes straight from `store.ts`'s existing `Visit`
+records, so the report is always as current as the last check-in or checkout.
+
+```bash
+curl localhost:4444/analytics
+# -> {
+#   "totalVisits": 12, "completedVisits": 9, "onSiteNow": 3,
+#   "busiestDay": { "day": "Tuesday", "count": 5 },
+#   "busiestHour": { "hourUtc": 14, "label": "2 PM", "count": 4 },
+#   "averageVisitDurationMs": 1080000,
+#   "visitsByVisitor": [ { "visitorName": "Alex the Dog Walker", "count": 4 }, ... ],
+#   "visitsByCategory": [ { "category": "dog walker", "count": 5 }, { "category": "delivery", "count": 3 }, ... ],
+#   "insights": [
+#     "Tuesday is your busiest day (5 visits).",
+#     "Most visits happen around 2 PM UTC (4 visits).",
+#     "The average completed visit lasts 18 minutes.",
+#     "\"dog walker\" is your most common visit type (5 visits).",
+#     "3 visitors are currently on-site."
+#   ]
+# }
+```
+
+### 3. Household member roles
+
+More than one homeowner/admin can now exist per household, with different permission levels: `owner` can revoke
+passes, approve/deny grace-period extensions, and manage household settings/webhooks; `member` can issue and view
+passes but not any of those owner-scoped actions. This is deliberately the simplest thing that demonstrates real
+authorization scoping without inventing a full auth system: there's no login, password, or session — a caller
+identifies themselves with a plain `X-PorchPass-Member` header (or `?member=`, so a browser/curl GET can supply one
+too) naming a registered member id in the household directory (`household.ts`). **This is illustrative
+authorization, not real authentication** — a caller-supplied header proves nothing about who's actually holding the
+phone that sent it; a real deployment needs actual authenticated sessions (each member signs in; the server reads
+their identity off a verified session/JWT, never a client-supplied header). See `household.ts`'s doc comment and
+[`FRICTION_LOG.md`](./FRICTION_LOG.md) for the honest version of this tradeoff.
+
+A caller who supplies **no** member header at all resolves to a pre-seeded default `"owner"` — which is what keeps
+every endpoint and every test from every earlier round working completely unchanged, since nothing before this
+round had any notion of a "caller" to begin with. An unrecognized member id is a hard `401`, not a silent fallback
+to the lowest privilege; a recognized id with the wrong role is a `403`.
+
+```bash
+# See the household's members (starts with just the pre-seeded owner)
+curl localhost:4444/household/members
+
+# The default owner adds a member-role household member (no header needed — no header = owner)
+curl -X POST localhost:4444/household/members -H "Content-Type: application/json" \
+  -d '{"id": "jamie", "name": "Jamie", "role": "member"}'
+
+# Jamie (a member) tries to revoke a pass -> 403
+curl -X DELETE localhost:4444/passes/<passId> -H "X-PorchPass-Member: jamie"
+
+# The owner revokes it instead -> 200
+curl -X DELETE localhost:4444/passes/<passId> -H "X-PorchPass-Member: owner"
+```
+
+### 4. Encrypted-at-rest visitor PII
+
+A visitor's phone number is now encrypted at rest (AES-256-GCM, `crypto.ts`) — the in-memory `Pass` record stores an
+`EncryptedField` (`{ iv, authTag, ciphertext }`, all hex), never the plaintext number, and it's decrypted only at
+the one moment it's actually needed: sending the visitor's SMS (on issuance, and on an approved grace-period
+extension). The API itself never re-exposes the full number either — `POST /passes`/`GET /passes` return a masked
+`visitorPhone` (e.g. `"••••••••1234"`) so a homeowner can still recognize which visitor a pass belongs to without
+the wire response carrying the plaintext value back out. **This is illustrative, not production key management**:
+the encryption key is derived (via `scrypt`, meant for passwords, not real key derivation) from
+`PORCHPASS_ENCRYPTION_KEY`, or a clearly-marked local-dev default if unset — good enough that the demo and test
+suite encrypt/decrypt correctly with zero configuration, and nowhere near what a real deployment should do. A real
+deployment must pull its data-encryption key from a proper KMS (AWS KMS, etc.), ideally via envelope encryption —
+see [`FRICTION_LOG.md`](./FRICTION_LOG.md) for what that gap actually costs a from-scratch hackathon build.
+
+```bash
+# Issue a pass — the response's visitorPhone is masked, not the plaintext you sent.
+curl -X POST localhost:4444/passes -H "Content-Type: application/json" -d '{
+  "visitorName": "Alex the Dog Walker", "visitorPhone": "+15551234567",
+  "validUntil": "2026-12-01T00:00:00Z"
+}'
+# -> { ..., "visitorPhone": "••••••••4567", ... }
+# Meanwhile the console log for the (simulated) SMS send still shows the real
+# number — decrypted right there, at the point of actually sending it.
+```
+
 ## Swapping in the real Ring API
 
 Everything in `src/passService.ts` and `src/server.ts` is Ring-agnostic — it only depends on the `RingClient`
@@ -376,7 +507,9 @@ was the point of isolating Ring behind an interface from the start.
   idempotency-safe write path, a real-time SSE push layer, and a rate limiter guarding the one intentionally
   unauthenticated endpoint. Round 3 adds the symmetric *outbound* half of that webhook story (signed, retried,
   non-blocking delivery) and generalizes the whole system from one hardcoded device to a real multi-device
-  correlation model.
+  correlation model. Round 4 adds authorization scoping (owner vs. member roles) and encryption-at-rest for
+  visitor PII — the two production concerns a real access-control service can't ship without, alongside turning
+  raw visit history into an actual analytics report instead of just a log.
 - **Design:** A genuine "two-tap" flow — the homeowner issues a pass in one call, the visitor confirms with one tap
   and no app, account, or login. Passes fail closed (expired/revoked/used-up all deny access) rather than open, and
   now compose multiple independent policy layers cleanly (base validity → recurrence window → quiet hours →
@@ -387,13 +520,19 @@ was the point of isolating Ring behind an interface from the start.
   that today gets solved insecurely (a shared permanent code) or not at all (no delegated access at all).
   Recurring passes remove the friction of re-issuing a pass every week for a standing visitor; bulk/template
   issuance removes the friction of doing that by hand one pass at a time, which is what would actually make this
-  usable for a household managing several standing visitors rather than just one.
+  usable for a household managing several standing visitors rather than just one. The traffic/analytics report
+  turns a household's own visit history into the kind of operational insight the "StoreWatch" idea in
+  `hackathon-ideas/ring.md` proposes for small businesses — real value for a household with several standing
+  visitors, not just a security log nobody reads.
 - **Quality of Idea:** Goes beyond a notification app by adding a genuine access-delegation layer — time-boxing,
   use-limits, revocation, and an audit trail — on top of Ring's event stream, one of the five explicitly
   prioritized Ring categories ("access control"). Multi-device support and outbound webhooks both point at the
   same underlying idea: a household's real security setup usually has more than one camera and more than one
   place it wants to be told about events, and both features generalize a single-instance assumption baked into
-  earlier rounds rather than bolting on something unrelated.
+  earlier rounds rather than bolting on something unrelated. A real household also usually has more than one
+  adult with access-control authority (round 4's owner/member roles) and cares that a visitor's phone number isn't
+  sitting in plaintext in whatever store PorchPass runs on (round 4's encryption-at-rest) — both are the kind of
+  detail a demo can skip and a real deployment can't.
 
 ## Friction log
 

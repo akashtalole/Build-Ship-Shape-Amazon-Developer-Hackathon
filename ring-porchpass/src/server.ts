@@ -1,6 +1,16 @@
 import express, { type Express } from "express";
-import { checkIn, decideExtension, issuePass, listPasses, listVisits, requestExtension, revokePass } from "./passService.js";
-import type { IssuePassInput } from "./passService.js";
+import {
+  checkIn,
+  checkOut,
+  decideExtension,
+  issuePass,
+  listPasses,
+  listVisitsWithStatus,
+  requestExtension,
+  revokePass,
+  serializePass,
+} from "./passService.js";
+import type { IssuePassInput, PassView } from "./passService.js";
 import type { Pass, RecurrenceRule } from "./types.js";
 import type { RingClient } from "./ringClient.js";
 import type { Notifier } from "./notify.js";
@@ -10,6 +20,9 @@ import { eventBus, type PorchPassEvent } from "./eventBus.js";
 import { listDevices, registerDevice } from "./devices.js";
 import { getOutboundWebhook, getOutboundWebhookStatus, registerOutboundWebhook } from "./outboundWebhooks.js";
 import { getPassIdByIdempotencyKey } from "./store.js";
+import { buildTrafficReport } from "./analytics.js";
+import { addOrUpdateMember, listMembers, removeMember, requireRole } from "./household.js";
+import type { CallerError } from "./household.js";
 
 // Augment Express's Request with the raw body bytes captured by the
 // `express.json({ verify })` hook below — HMAC signature verification needs
@@ -48,6 +61,23 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/** Where a caller identifies themselves for `household.ts`'s role checks — an `X-PorchPass-Member` header, or `?member=` so a plain browser GET/curl can supply one too. See household.ts's doc comment for what this deliberately isn't (real auth). */
+function callerIdFromRequest(req: express.Request): string | undefined {
+  const header = req.get("X-PorchPass-Member");
+  if (header) return header;
+  const query = req.query.member;
+  return typeof query === "string" ? query : undefined;
+}
+
+function sendCallerError(res: express.Response, error: CallerError): void {
+  res.status(error.status).json({ error: error.message });
+}
+
+/** Applies `serializePass` (mask the visitor phone, drop the encrypted field) to every `pass` a result object carries, leaving everything else about the result untouched. */
+function withSerializedPass<T extends { pass?: Pass }>(result: T): Omit<T, "pass"> & { pass?: PassView } {
+  return result.pass ? { ...result, pass: serializePass(result.pass) } : (result as Omit<T, "pass"> & { pass?: PassView });
 }
 
 /**
@@ -94,7 +124,7 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
     // under the same idempotency key — the caller's request "succeeded"
     // either way, and the response body (the pass) tells them which pass
     // that is either way.
-    res.status(201).json(pass);
+    res.status(201).json(serializePass(pass));
   });
 
   // --- Bulk/template issuance: one call issues many passes, reusing the same
@@ -113,7 +143,7 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
     }
 
     const baseUrl = `${req.protocol}://${req.get("host")}`;
-    const results: Array<{ index: number; status: "created" | "replayed" | "error"; pass?: Pass; error?: string }> = [];
+    const results: Array<{ index: number; status: "created" | "replayed" | "error"; pass?: PassView; error?: string }> = [];
 
     for (let i = 0; i < variations.length; i++) {
       const variation = variations[i];
@@ -156,7 +186,7 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
           { visitorName, visitorPhone, validFrom, validUntil, maxUses, note, recurrence, allowQuietHours, deviceIds, idempotencyKey, baseUrl } as IssuePassInput,
           notifier
         );
-        results.push({ index: i, status: isReplay ? "replayed" : "created", pass });
+        results.push({ index: i, status: isReplay ? "replayed" : "created", pass: serializePass(pass) });
       } catch (err) {
         results.push({ index: i, status: "error", error: err instanceof Error ? err.message : "Unknown error issuing this pass." });
       }
@@ -167,34 +197,53 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
   });
 
   app.get("/passes", (_req, res) => {
-    res.json(listPasses());
+    res.json(listPasses().map(serializePass));
   });
 
+  // Revocation is owner-only: a member can issue and view passes but
+  // shouldn't be able to unilaterally cut off a visitor's access someone
+  // else on the household granted — see household.ts.
   app.delete("/passes/:id", (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
     const pass = revokePass(req.params.id);
     if (!pass) {
       res.status(404).json({ error: "No pass with that ID." });
       return;
     }
-    res.json(pass);
+    res.json(serializePass(pass));
   });
 
   app.get("/visits", (_req, res) => {
-    res.json(listVisits());
+    res.json(listVisitsWithStatus());
   });
 
   // --- Grace-period extension: the homeowner's side of the decision. The
-  // visitor's side (requesting one) lives in the check-in flow below. ---
+  // visitor's side (requesting one) lives in the check-in flow below.
+  // Deciding an extension is owner-only, same reasoning as revocation. ---
 
   app.post("/passes/:id/extension/approve", async (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
     const baseUrl = `${req.protocol}://${req.get("host")}`;
     const result = await decideExtension(req.params.id, true, notifier, baseUrl);
-    res.status(result.ok ? 200 : result.pass ? 409 : 404).json(result);
+    res.status(result.ok ? 200 : result.pass ? 409 : 404).json(withSerializedPass(result));
   });
 
   app.post("/passes/:id/extension/deny", async (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
     const result = await decideExtension(req.params.id, false, notifier);
-    res.status(result.ok ? 200 : result.pass ? 409 : 404).json(result);
+    res.status(result.ok ? 200 : result.pass ? 409 : 404).json(withSerializedPass(result));
   });
 
   // --- Ring device registry ---
@@ -217,13 +266,20 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
     res.status(201).json(device);
   });
 
-  // --- Household settings (quiet hours, etc.) ---
+  // --- Household settings (quiet hours, etc.). Changing them is owner-only
+  // — see household.ts; reading them stays open to any caller, same as
+  // GET /passes and GET /visits. ---
 
   app.get("/settings", (_req, res) => {
     res.json(getSettings());
   });
 
   app.post("/settings", (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
     const { quietHours } = req.body ?? {};
     if (quietHours !== null && quietHours !== undefined) {
       if (typeof quietHours.start !== "string" || typeof quietHours.end !== "string") {
@@ -235,9 +291,15 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
     res.json(updated);
   });
 
-  // --- Outbound webhook: the push counterpart to GET /events/stream ---
+  // --- Outbound webhook: the push counterpart to GET /events/stream.
+  // Registering one is owner-only — same reasoning as /settings. ---
 
   app.post("/settings/webhook", (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
     const { url } = req.body ?? {};
     if (typeof url !== "string" || url.length === 0) {
       res.status(400).json({ error: "url is required." });
@@ -314,7 +376,7 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
     const status = result.rateLimited ? 429 : result.ok ? 200 : 409;
     const wantsJson = req.accepts(["html", "json"]) === "json";
     if (wantsJson) {
-      res.status(status).json(result);
+      res.status(status).json(withSerializedPass(result));
       return;
     }
     // A pass that just expired, and hasn't asked before, gets an extra
@@ -325,11 +387,39 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
     <button type="submit" style="font-size: 1rem; padding: 0.6rem 1.2rem;">Request a few more minutes</button>
   </form>`
       : "";
+    // A successful arrival also offers the paired "I'm leaving" action right
+    // there — see visit-duration tracking, `POST /checkin/:token/checkout`.
+    const checkoutForm = result.ok
+      ? `<form method="POST" action="/checkin/${escapeHtml(req.params.token)}/checkout" style="margin-top: 1rem;">
+    <button type="submit" style="font-size: 1rem; padding: 0.6rem 1.2rem;">I'm leaving</button>
+  </form>`
+      : "";
     res.status(status).type("html").send(`<!doctype html>
 <html><body style="font-family: sans-serif; max-width: 420px; margin: 3rem auto; text-align: center;">
   <h1>${result.ok ? "Thanks, you're all set!" : "Hmm, that didn't work"}</h1>
   <p>${escapeHtml(result.ok ? "The household has been notified you're here." : result.reason ?? "Please contact the household directly.")}</p>
   ${extensionForm}
+  ${checkoutForm}
+</body></html>`);
+  });
+
+  // --- Visit duration tracking: the visitor's "I'm leaving" tap, closing
+  // out the visit their arrival opened. See passService.checkOut for the
+  // state machine (and its edge cases: a departure with no matching
+  // arrival, checking out twice, ...). ---
+
+  app.post("/checkin/:token/checkout", async (req, res) => {
+    const result = await checkOut(req.params.token, notifier);
+    const status = result.rateLimited ? 429 : result.ok ? 200 : 409;
+    const wantsJson = req.accepts(["html", "json"]) === "json";
+    if (wantsJson) {
+      res.status(status).json(result);
+      return;
+    }
+    res.status(status).type("html").send(`<!doctype html>
+<html><body style="font-family: sans-serif; max-width: 420px; margin: 3rem auto; text-align: center;">
+  <h1>${result.ok ? "See you next time!" : "Couldn't check you out"}</h1>
+  <p>${escapeHtml(result.ok ? "The household has been notified you've left." : result.reason ?? "Please contact the household directly.")}</p>
 </body></html>`);
   });
 
@@ -340,7 +430,7 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
     const status = result.ok ? 201 : 409;
     const wantsJson = req.accepts(["html", "json"]) === "json";
     if (wantsJson) {
-      res.status(status).json(result);
+      res.status(status).json(withSerializedPass(result));
       return;
     }
     res.status(status).type("html").send(`<!doctype html>
@@ -348,6 +438,65 @@ export function createApp(ringClient: RingClient, notifier: Notifier): Express {
   <h1>${result.ok ? "Request sent" : "Couldn't request an extension"}</h1>
   <p>${escapeHtml(result.ok ? "The household has been notified and will approve or deny your request shortly." : result.reason ?? "Please contact the household directly.")}</p>
 </body></html>`);
+  });
+
+  // --- Traffic/analytics report: plain-language insights aggregated from
+  // real visit history (busiest day/hour, average visit duration, visits
+  // per visitor/category) — see analytics.ts. Mounted at both paths so
+  // either naming convention works; both return the exact same report. ---
+
+  app.get("/analytics", (_req, res) => {
+    res.json(buildTrafficReport());
+  });
+
+  app.get("/reports/traffic", (_req, res) => {
+    res.json(buildTrafficReport());
+  });
+
+  // --- Household member roles. Listing members stays open (same as
+  // GET /passes/GET /visits); adding, updating, or removing one is
+  // owner-only — see household.ts for the caller-identification model this
+  // deliberately simplifies (no real login/session). ---
+
+  app.get("/household/members", (_req, res) => {
+    res.json(listMembers());
+  });
+
+  app.post("/household/members", (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
+    const { id, name, role } = req.body ?? {};
+    if (typeof id !== "string" || id.length === 0) {
+      res.status(400).json({ error: "id is required." });
+      return;
+    }
+    if (role !== "owner" && role !== "member") {
+      res.status(400).json({ error: "role must be 'owner' or 'member'." });
+      return;
+    }
+    if (name !== undefined && typeof name !== "string") {
+      res.status(400).json({ error: "name must be a string if provided." });
+      return;
+    }
+    const member = addOrUpdateMember(id, { name, role });
+    res.status(201).json(member);
+  });
+
+  app.delete("/household/members/:id", (req, res) => {
+    const auth = requireRole(callerIdFromRequest(req), "owner");
+    if (auth.error) {
+      sendCallerError(res, auth.error);
+      return;
+    }
+    const removed = removeMember(req.params.id);
+    if (!removed) {
+      res.status(404).json({ error: "No such member (or it's the default owner, which can't be removed in this demo)." });
+      return;
+    }
+    res.status(204).end();
   });
 
   // --- Ring event ingress. A real deployment replaces this handler's body

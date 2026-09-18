@@ -20,11 +20,29 @@ export interface RecurrenceRule {
   endTime: string; // "HH:MM", UTC, 24h clock
 }
 
+/**
+ * The at-rest representation of an AES-256-GCM-encrypted string field — see
+ * `crypto.ts`. `iv` and `authTag` are per-encryption values (a fresh random
+ * IV every time `encryptField` runs) required to decrypt `ciphertext`; none
+ * of the three alone (nor all three together, without the server's key)
+ * reveals the plaintext.
+ */
+export interface EncryptedField {
+  iv: string; // hex, 12 random bytes (96-bit GCM-standard IV)
+  authTag: string; // hex, GCM authentication tag
+  ciphertext: string; // hex
+}
+
 export interface Pass {
   id: string;
   checkinToken: string; // opaque token embedded in the visitor's magic link
   visitorName: string;
-  visitorPhone: string;
+  // Encrypted at rest (AES-256-GCM) — see crypto.ts. Never held as plaintext
+  // on the Pass object; decrypted only at the point it's actually needed
+  // (sending the visitor's SMS) via `passService.decryptVisitorPhone`. API
+  // responses expose a masked `visitorPhone` (see `passService.serializePass`)
+  // rather than this field directly.
+  visitorPhoneEnc: EncryptedField;
   issuedAt: string; // ISO timestamp
   validFrom: string; // ISO timestamp
   validUntil: string; // ISO timestamp
@@ -78,12 +96,23 @@ export interface RingEvent {
   snapshotUrl: string;
 }
 
+/**
+ * A single arrival, and (once the visitor taps "I'm leaving") its paired
+ * departure. `checkedOutAt`/`durationMs` are both unset from the moment of
+ * arrival until `POST /checkin/:token/checkout` closes this visit out — see
+ * `passService.checkOut`. A visit with `checkedOutAt` unset is "still
+ * on-site" (see `passService.listVisitsWithStatus`); `durationMs` is
+ * computed once, at checkout time, from `checkedOutAt - checkedInAt`, rather
+ * than being recomputed live on every read.
+ */
 export interface Visit {
   id: string;
   passId: string;
   visitorName: string;
-  checkedInAt: string; // ISO timestamp
+  checkedInAt: string; // ISO timestamp — the arrival
   matchedEvent?: RingEvent; // the Ring event correlated with this check-in, if any
+  checkedOutAt?: string; // ISO timestamp — the departure, once it happens
+  durationMs?: number; // checkedOutAt - checkedInAt, computed once at checkout
 }
 
 export interface Notification {
@@ -92,4 +121,11 @@ export interface Notification {
   channel: "sms" | "push";
   message: string;
   sentAt: string;
+  // The real destination address (e.g. a decrypted phone number) this send
+  // actually went to, when one applies — see `crypto.ts`'s framing on
+  // "decrypted only when actually needed": this is that one moment for an
+  // SMS to a visitor. Absent for sends that don't target a specific address
+  // (e.g. "homeowner" push notifications in this demo, which have no
+  // registered device token to speak of).
+  recipient?: string;
 }

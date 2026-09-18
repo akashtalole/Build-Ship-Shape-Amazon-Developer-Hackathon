@@ -9,6 +9,7 @@ import type { Pass, Visit } from "./types.js";
 export type PorchPassEvent =
   | { type: "pass_issued"; at: string; pass: Pass }
   | { type: "visit_checkin"; at: string; pass: Pass; visit: Visit }
+  | { type: "visit_checkout"; at: string; pass: Pass; visit: Visit }
   | { type: "pass_revoked"; at: string; pass: Pass }
   | { type: "pass_expired"; at: string; pass: Pass };
 
