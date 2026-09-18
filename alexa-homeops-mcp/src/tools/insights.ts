@@ -124,4 +124,99 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
       };
     }
   );
+
+  server.registerTool(
+    "export_household_digest",
+    {
+      description:
+        "Export one combined household digest report — upcoming tasks, budget status, and low-stock items — " +
+        "as a single text report a household member can read at a glance, or save/share/print. Reuses the " +
+        "same sampling-backed narrative as generate_weekly_narrative for the summary paragraph (falling back " +
+        "to a templated one if the client doesn't support MCP sampling), rather than duplicating that logic.",
+      inputSchema: {
+        withinDays: z
+          .number()
+          .int()
+          .min(1)
+          .max(30)
+          .default(7)
+          .describe("Task window to include in the digest, in days (default 7)."),
+      },
+      outputSchema: {
+        generatedAt: z.string(),
+        narrative: z.string(),
+        tasks: z.array(
+          z.object({ id: z.string(), title: z.string(), dueDate: z.string(), assignee: z.string().optional(), done: z.boolean() })
+        ),
+        budgets: z.array(
+          z.object({
+            category: z.string(),
+            budget: z.number(),
+            spentThisWeek: z.number(),
+            remaining: z.number(),
+            overBudget: z.boolean(),
+          })
+        ),
+        lowStockItems: z.array(
+          z.object({ id: z.string(), name: z.string(), quantityOnHand: z.number(), reorderThreshold: z.number() })
+        ),
+      },
+      annotations: { title: "Export household digest", readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ withinDays }) => {
+      const generatedAt = new Date().toISOString();
+      const tasks = listUpcomingTasks(householdId, withinDays);
+      const budgets = getBudgetStatus(householdId);
+      const lowStock = itemsRunningLow(householdId);
+      const overBudget = budgets.filter((b) => b.overBudget);
+
+      const narrated = await sampleNarrative(
+        server,
+        "Write a short 2-3 sentence household digest summary covering tasks due, low-stock items, and budget " +
+          "status. Only state facts present in the data below, no invented details.",
+        { tasks, budgets, lowStock }
+      );
+      const narrative =
+        narrated ??
+        `${tasks.length} task(s) due in the next ${withinDays} day(s), ${lowStock.length} item(s) running low, ` +
+          `${overBudget.length} categor${overBudget.length === 1 ? "y" : "ies"} over budget. ` +
+          `(Templated summary — client has no sampling support.)`;
+
+      const reportLines = [
+        `HOUSEHOLD DIGEST — generated ${generatedAt}`,
+        "=".repeat(48),
+        "",
+        "SUMMARY",
+        narrative,
+        "",
+        `TASKS DUE (next ${withinDays} day(s))`,
+        tasks.length
+          ? tasks
+              .map((t) => `  - [${t.dueDate}] ${t.title}${t.assignee ? ` (${t.assignee})` : ""}${t.done ? " [done]" : ""}`)
+              .join("\n")
+          : "  Nothing due.",
+        "",
+        "BUDGET STATUS",
+        budgets.length
+          ? budgets
+              .map(
+                (b) =>
+                  `  - ${b.category}: ${b.spentThisWeek.toFixed(2)} / ${b.budget.toFixed(2)}` +
+                  (b.overBudget ? " (OVER BUDGET)" : "")
+              )
+              .join("\n")
+          : "  No budgets set.",
+        "",
+        "LOW STOCK",
+        lowStock.length
+          ? lowStock.map((i) => `  - ${i.name} (${i.quantityOnHand} on hand, reorder threshold ${i.reorderThreshold})`).join("\n")
+          : "  Everything is well stocked.",
+      ];
+
+      return {
+        content: [{ type: "text", text: reportLines.join("\n") }],
+        structuredContent: { generatedAt, narrative, tasks, budgets, lowStockItems: lowStock },
+      };
+    }
+  );
 }

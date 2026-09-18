@@ -3,12 +3,15 @@
  * port, connects a real MCP client over Streamable HTTP, and exercises
  * every capability — tools, resources (+ subscribe/notify), prompts,
  * elicitation, sampling, bearer-token multi-tenancy, structured logging,
- * file-backed persistence across a simulated restart, and bulk task import.
- * Run with `npm test`.
+ * file-backed persistence across a simulated restart, bulk task import,
+ * role-based access control, outbound alert webhooks (HMAC-signed, against
+ * a real local HTTP listener), recurring tasks, and the household digest
+ * export. Run with `npm test`.
  */
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
@@ -25,7 +28,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { createHomeOpsServer } from "../src/server.js";
 import { InMemoryEventStore } from "../src/eventStore.js";
-import { extractBearerToken, resolveHouseholdId } from "../src/auth.js";
+import { extractBearerToken, resolveAccess } from "../src/auth.js";
 
 // Isolate this test run's persisted household data from real usage and from
 // any previous test run, and confirm it before any server/store code (which
@@ -78,20 +81,50 @@ function startServer(): { httpServer: HttpServer; baseUrl: URL } {
     }
 
     const token = extractBearerToken(req);
-    const householdId = resolveHouseholdId(token);
+    const { householdId, role } = resolveAccess(token);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       eventStore,
       onsessioninitialized: (id) => transports.set(id, transport),
     });
-    await createHomeOpsServer(householdId).connect(transport);
+    await createHomeOpsServer(householdId, role).connect(transport);
     await transport.handleRequest(req, res, req.body);
   });
 
   const httpServer = app.listen(0);
   const { port } = httpServer.address() as AddressInfo;
   return { httpServer, baseUrl: new URL(`http://127.0.0.1:${port}/mcp`) };
+}
+
+/**
+ * A tiny plain-`http` local listener standing in for a household's
+ * registered alert-webhook endpoint — captures the raw body (needed to
+ * independently recompute the HMAC signature) and headers of every POST it
+ * receives, and always answers 200 so delivery succeeds on the first try.
+ */
+async function startWebhookListener(): Promise<{
+  url: string;
+  close: () => void;
+  received: () => { body: string; headers: http.IncomingHttpHeaders }[];
+}> {
+  const received: { body: string; headers: http.IncomingHttpHeaders }[] = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      received.push({ body: Buffer.concat(chunks).toString("utf-8"), headers: req.headers });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/webhook`,
+    close: () => server.close(),
+    received: () => received,
+  };
 }
 
 /** Connects an MCP client (with elicitation/sampling stubs wired in), optionally under a bearer token. */
@@ -144,14 +177,19 @@ async function main() {
   const toolNames = tools.tools.map((t) => t.name).sort();
   assert.deepEqual(toolNames, [
     "add_expense",
+    "add_recurring_task",
     "add_task",
+    "export_household_digest",
     "generate_weekly_narrative",
+    "get_alert_webhook_status",
     "get_budget_status",
     "get_weekly_summary",
     "import_tasks",
+    "issue_household_token",
     "list_low_stock_items",
     "list_upcoming_tasks",
     "mark_task_done",
+    "register_alert_webhook",
     "reorder_item",
     "run_morning_briefing",
     "set_budget",
@@ -162,7 +200,7 @@ async function main() {
   assert.equal(listTasksTool.annotations?.readOnlyHint, true);
   const addTaskTool = tools.tools.find((t) => t.name === "add_task")!;
   assert.equal(addTaskTool.annotations?.readOnlyHint, false);
-  console.log("✓ all 14 HomeOps tools discoverable, with read/write annotations");
+  console.log(`✓ all ${toolNames.length} HomeOps tools discoverable, with read/write annotations`);
 
   // --- Resources (static + a completable template) ---
   const resources = await client.listResources();
@@ -326,6 +364,120 @@ async function main() {
   const narrativeText = (narrative.content as any)[0].text as string;
   assert.equal(narrativeText, "Mock digest: everything looks under control this week.");
   console.log("✓ generate_weekly_narrative uses MCP sampling against the client's model");
+
+  // --- Recurring/template tasks ---
+  // Anchor the recurrence on *today's* weekday so a 14-day window is
+  // guaranteed to contain occurrences in both this week and next week —
+  // exercising materialization "across multiple weeks" regardless of which
+  // day this test happens to run on.
+  const recurringWeekday = new Date().getDay();
+  const recurring = await client.callTool({
+    name: "add_recurring_task",
+    arguments: { title: "Take out the compost", daysOfWeek: [recurringWeekday] },
+  });
+  assert.match((recurring.content as any)[0].text, /Added recurring task "Take out the compost"/);
+
+  const twoWeekWindow = await client.callTool({ name: "list_upcoming_tasks", arguments: { withinDays: 14 } });
+  const compostOccurrences = ((twoWeekWindow.structuredContent as any).tasks as any[])
+    .filter((t: any) => t.title === "Take out the compost")
+    .sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
+  // Today + 7 days + 14 days, all landing on recurringWeekday, all <= the 14-day cutoff.
+  assert.equal(compostOccurrences.length, 3, `expected 3 occurrences over 14 days, got ${compostOccurrences.length}`);
+  const occurrenceIds = new Set(compostOccurrences.map((t: any) => t.id));
+  assert.equal(occurrenceIds.size, 3, "expected a distinct synthetic ID per occurrence, not one shared row");
+  for (let i = 1; i < compostOccurrences.length; i++) {
+    const gapDays =
+      (new Date(compostOccurrences[i].dueDate).getTime() - new Date(compostOccurrences[i - 1].dueDate).getTime()) /
+      (24 * 60 * 60 * 1000);
+    assert.equal(gapDays, 7, "consecutive occurrences should be exactly one week apart");
+  }
+  assert.ok(compostOccurrences.every((t: any) => t.done === false));
+  console.log("✓ add_recurring_task materializes weekly occurrences across multiple weeks in list_upcoming_tasks");
+
+  // --- Household digest export ---
+  const digest = await client.callTool({ name: "export_household_digest", arguments: { withinDays: 7 } });
+  const digestText = (digest.content as any)[0].text as string;
+  assert.match(digestText, /HOUSEHOLD DIGEST/);
+  assert.match(digestText, /TASKS DUE/);
+  assert.match(digestText, /BUDGET STATUS/);
+  assert.match(digestText, /LOW STOCK/);
+  const digestData = digest.structuredContent as any;
+  assert.equal(digestData.narrative, "Mock digest: everything looks under control this week.");
+  assert.ok(Array.isArray(digestData.tasks) && digestData.tasks.length > 0);
+  assert.ok(
+    digestData.budgets.some((b: any) => b.category === "pets" && b.overBudget === true),
+    "expected the digest's budget section to reflect the actual over-budget pets category"
+  );
+  const lowStockCheck = await client.callTool({ name: "list_low_stock_items", arguments: {} });
+  const lowStockNames = ((lowStockCheck.structuredContent as any).items as any[]).map((i: any) => i.name).sort();
+  assert.deepEqual(
+    digestData.lowStockItems.map((i: any) => i.name).sort(),
+    lowStockNames,
+    "expected the digest's low-stock section to match list_low_stock_items exactly"
+  );
+  console.log("✓ export_household_digest combines accurate task, budget, and low-stock data into one report");
+
+  // --- Role-based access control ---
+  const roTokenResult = await client.callTool({ name: "issue_household_token", arguments: { role: "read-only" } });
+  const roTokenData = roTokenResult.structuredContent as any;
+  assert.equal(roTokenData.role, "read-only");
+  const readOnlyToken = roTokenData.token as string;
+
+  const { client: readOnlyClient } = await connectClient(baseUrl, readOnlyToken);
+  const roList = await readOnlyClient.callTool({ name: "list_upcoming_tasks", arguments: { withinDays: 30 } });
+  const roTitles = ((roList.structuredContent as any).tasks as any[]).map((t: any) => t.title);
+  assert.ok(roTitles.includes("Water the plants"), "read-only token should see the same household's existing data");
+  console.log("✓ a read-only token can call read tools and sees the issuing household's real data");
+
+  const roWriteAttempt = await readOnlyClient.callTool({
+    name: "add_task",
+    arguments: { title: "Should never be added", dueDate: "2026-09-20" },
+  });
+  assert.equal(roWriteAttempt.isError, true);
+  assert.match((roWriteAttempt.content as any)[0].text, /read-only/i);
+  const afterRoAttempt = await client.callTool({ name: "list_upcoming_tasks", arguments: { withinDays: 30 } });
+  const afterRoTitles = ((afterRoAttempt.structuredContent as any).tasks as any[]).map((t: any) => t.title);
+  assert.ok(!afterRoTitles.includes("Should never be added"), "the rejected write must not have actually happened");
+  await readOnlyClient.close();
+  console.log('✓ a read-only token is rejected with a clear error on add_task, and the write did not silently succeed');
+
+  // --- Outbound household-alert webhooks ---
+  const webhookListener = await startWebhookListener();
+  const webhookReg = await client.callTool({ name: "register_alert_webhook", arguments: { url: webhookListener.url } });
+  const webhookRegData = webhookReg.structuredContent as any;
+  assert.ok(typeof webhookRegData.secret === "string" && webhookRegData.secret.length > 0);
+
+  // A fresh category (not the already-over-budget "pets" from earlier) so this
+  // alert is unambiguously the one triggered by *this* over-budget expense.
+  await client.callTool({ name: "set_budget", arguments: { category: "groceries", amount: 10 } });
+  await client.callTool({ name: "add_expense", arguments: { description: "Grocery run", amount: 25, category: "groceries" } });
+  await new Promise((resolve) => setTimeout(resolve, 300)); // let the fire-and-forget delivery land
+
+  const budgetDeliveries = webhookListener
+    .received()
+    .map((d) => ({ ...d, parsed: JSON.parse(d.body) }))
+    .filter((d) => d.parsed.type === "budget_exceeded");
+  assert.ok(budgetDeliveries.length > 0, "expected at least one budget_exceeded webhook delivery");
+  const budgetDelivery = budgetDeliveries[budgetDeliveries.length - 1];
+  const expectedSignature = createHmac("sha256", webhookRegData.secret).update(budgetDelivery.body).digest("hex");
+  assert.equal(budgetDelivery.headers["x-homeops-signature"], expectedSignature);
+  assert.equal(budgetDelivery.headers["x-homeops-alert-type"], "budget_exceeded");
+  assert.equal(budgetDelivery.parsed.data.category, "groceries");
+  assert.equal(typeof budgetDelivery.parsed.householdId, "string");
+  console.log("✓ register_alert_webhook delivers a correctly HMAC-SHA256-signed budget_exceeded alert to a local listener");
+
+  await client.callTool({ name: "add_task", arguments: { title: "Way overdue chore", dueDate: "2020-01-01" } });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const overdueDelivery = webhookListener.received().find((d) => JSON.parse(d.body).type === "task_overdue");
+  assert.ok(overdueDelivery, "expected a task_overdue webhook delivery");
+  const overduePayload = JSON.parse(overdueDelivery!.body);
+  assert.ok(overduePayload.data.tasks.some((t: any) => t.title === "Way overdue chore"));
+  console.log("✓ adding an already-overdue task also fires a signed task_overdue webhook alert");
+
+  const webhookStatus = await client.callTool({ name: "get_alert_webhook_status", arguments: {} });
+  assert.match((webhookStatus.content as any)[0].text, /Last success/);
+  webhookListener.close();
+  console.log("✓ get_alert_webhook_status reports the most recent successful delivery");
 
   // --- Progress notifications on a long-running tool ---
   const progressUpdates: number[] = [];
