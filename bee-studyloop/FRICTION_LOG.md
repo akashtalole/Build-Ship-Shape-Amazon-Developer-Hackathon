@@ -98,3 +98,68 @@ ingestion, portable export).
    (embedded quotes, embedded newlines). Tab-separated sidesteps that almost entirely since a literal tab is far
    rarer in prose, at the cost of very rare tab characters getting silently stripped instead of escaped — an
    acceptable simplification for a hackathon-scope export, called out in the README rather than hidden.
+
+## Round 3: quiz mode, shared decks, reminders, adaptive generation bias
+
+Notes from the third pass (quiz/practice-test mode, shared study-group decks, due-card reminder digest, adaptive
+new-card generation bias).
+
+### What worked well
+
+- Designing shared decks around a completely separate `PersonalReviewState` keyed by `(studentId, cardId)` —
+  rather than trying to retrofit multi-student state onto the `Flashcard` record itself — meant every existing
+  endpoint, test, and piece of scheduling/leech/priority logic kept working completely unmodified for the
+  student-less "default reviewer" path. The new per-student path reuses `scheduleReview`/`updateLeechState`
+  verbatim on a differently-shaped state object; nothing in `scheduler.ts` or `leech.ts` needed to change or even
+  know multi-student review state exists.
+- Quiz sampling and the reminder digest both turned out to be thin composition on top of logic that already
+  existed (`isDue`, `priorityScore`/the new shared `sortByPriority` helper, and the per-student due/leech queries
+  built for shared decks) rather than new algorithms in their own right — a good sign that the underlying
+  abstractions (a pool of due-checkable, priority-scorable cards) were already the right shape, not that these
+  features were trivial.
+
+### Friction encountered
+
+1. **"Independent progress on shared content" is a real modeling decision with more than one defensible answer.**
+   The chosen design — a card's own embedded state represents the student-less "default reviewer," and every
+   named `studentId` (including, in principle, the original ingesting student, if they ever review with their own
+   `studentId`) gets an entirely separate, lazily-created `PersonalReviewState` — means there's no built-in notion
+   of "the session's owner" gating who else's progress starts from what baseline. A different reasonable design
+   would treat the ingesting student as having implicit day-one ownership of the embedded state and make everyone
+   else's "independent" state start as a *copy* of it rather than fresh at `interval: 0`. I chose fresh-and-
+   independent for every named student uniformly (simpler, more predictable, and matches "no auth, just a
+   studentId string" — there's no reliable way to know who the "real" owner even is without auth), but a
+   production version with real accounts would probably want the copy-on-join semantics instead.
+2. **Quiz grading: exact match vs. fuzzy match is a real tradeoff, not a settled question.** Case-insensitive/
+   trimmed exact matching is trivial to implement and impossible to game accidentally with whitespace or
+   capitalization, but it's brittle against anything else: a student who answers "it produces ATP through
+   respiration" for a card whose back is "The mitochondria produces ATP through respiration" is graded wrong for
+   omitting the subject, even though the substance is right. A looser match (word-overlap scoring, a Levenshtein-
+   distance threshold, or routing through an LLM-as-judge once the generator is swapped for a real model — see
+   "Swapping in a real LLM-backed generator") would mark that correct, at the cost of also creeping in false
+   positives on shorter or more generic backs. Exact match was chosen because it's the only grading rule whose
+   behavior a student can predict and rely on without a model in the loop, and because it never needs tuning
+   thresholds nobody has real usage data to calibrate against (the same "arbitrary weights" problem the round-2
+   priority formula ran into) — documented as a known limitation in the README rather than dressed up as smarter
+   than it is.
+3. **The adaptive generation-bias heuristic's "more cards" choice, and its real limitations.** The spec allows
+   "more cards, or simpler cards" as the bias; I chose "more cards" (extra cloze-deletion cards from the newly
+   appended segments alone, on top of whatever the normal tiers produced) because it's the more directly
+   observable and testable signal — a card count strictly increasing is easy to assert on, where "simpler" has no
+   agreed-upon heuristic definition without real reading-difficulty scoring. Real limitations, called out rather
+   than hidden: (a) a topic's "weakness" is computed from the *session-level* tags every card in that session
+   shares, not a true per-card topic classification, so a multi-topic session can flag a topic weak based on a
+   different card entirely (documented directly in `computeWeakTopics`'s doc comment); (b) it's cold-start blind —
+   a student's very first exposure to a topic can never be "weak" yet, since weakness requires at least one prior
+   review, so the very session that introduces a hard topic gets no extra help, only the next one that touches it
+   again; (c) the ease/leech threshold (`2.0`, chosen as "meaningfully below the 2.5 baseline") and the extra-card
+   cap (3) are picked the same way round 2's priority-formula weights were — reasoned about, not tuned against
+   real review data, because none exists in a hackathon-scope build.
+4. **Testing the bias heuristic required picking transcript sentences with real care around the definition-tier
+   regex's backtracking.** An early version of the "new segments" test transcript used a sentence with a
+   standalone " is " buried in the middle ("...when oxygen is limited"), which the definition-pattern regex's lazy
+   term-group quantifier happily backtracked into, matching an unintended (and slightly absurd) definition card
+   from it — silently making the "the control should generate zero new cards" assumption false. The fix was
+   picking sentences with no bare "is"/"are"/"means"/"refers to" token anywhere in them, not just at the start,
+   which is an easy trap to fall into when hand-writing test fixtures for a regex-driven, non-LLM generator: the
+   pattern's reach is the whole sentence, not just its beginning.

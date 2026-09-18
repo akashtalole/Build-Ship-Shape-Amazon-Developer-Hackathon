@@ -57,25 +57,30 @@ export — each described in detail in **Advanced features** below.
 
 ```
 src/
-  types.ts               TranscriptSegment, StudySession, Flashcard, RecallGrade data model
-  store.ts                In-memory session/flashcard storage, plus the idempotency-key index
-  flashcardGenerator.ts    FlashcardGenerator interface (LLM-shaped) + TemplateFlashcardGenerator heuristic impl
+  types.ts               TranscriptSegment, StudySession, Flashcard, RecallGrade, PersonalReviewState,
+                           PersonalFlashcardView, Quiz data model
+  store.ts                In-memory session/flashcard storage, the idempotency-key index, per-student
+                           review-state storage, and quiz storage
+  flashcardGenerator.ts    FlashcardGenerator interface (LLM-shaped) + TemplateFlashcardGenerator heuristic
+                           impl, incl. the exported generateClozeCards used by both tier 3 and the
+                           adaptive generation-bias heuristic
   scheduler.ts             Spaced-repetition (simplified SM-2) logic, as pure functions
   leech.ts                 Leech-detection state machine (consecutive-failure tracking), as pure functions
   priority.ts              Adaptive review-ordering priority-score formula, as a pure function
   topics.ts                Heuristic topic-tag extraction (word-frequency, not real NLP)
   export.ts                Portable TSV export formatting (Anki-importable)
-  studyService.ts          Business logic: ingestion (incl. idempotent + incremental), due/leech/search
-                           queries, record review
-  server.ts                Express app factory — see "How it works" and "Advanced features" for the full
-                           route list
+  studyService.ts          Business logic: ingestion (incl. idempotent + incremental + adaptive bias),
+                           due/leech/search queries, record review, shared-deck join, quiz sampling/
+                           grading/results, reminder digest
+  server.ts                Express app factory — see "How it works", "Advanced features", and "Round 3"
+                           for the full route list
   index.ts                 Entry point
 test/
   smoke.test.ts            End-to-end test over real HTTP covering the base lifecycle (ingest -> summary/
                            flashcards -> due queue -> good/again review rescheduling -> 404s -> invalid
                            grade -> empty transcript -> raw-text transcript) plus every feature in
-                           "Advanced features" below, and direct unit checks of scheduler.ts, leech.ts,
-                           priority.ts, and topics.ts
+                           "Advanced features" and "Round 3" below, and direct unit checks of scheduler.ts,
+                           leech.ts, priority.ts, and topics.ts
 ```
 
 ## Running it
@@ -127,9 +132,9 @@ resets the streak and shortens the interval back down instead of continuing to g
 id or fetching an unknown session id returns a clean 404; an invalid grade returns a 400; an empty/whitespace-only
 transcript still returns a sensible response (a fallback summary, zero flashcards) instead of crashing; and a raw
 text-block transcript (not pre-segmented) is ingested successfully too. A couple of direct unit-style checks of
-`scheduler.ts`'s interval/ease-factor math round it out. Every feature in **Advanced features** below has its own
-passing HTTP-level check plus, where the logic is pure, a direct unit-style check — see the "Advanced features"
-tests in `test/smoke.test.ts`.
+`scheduler.ts`'s interval/ease-factor math round it out. Every feature in **Advanced features** and **Round 3**
+below has its own passing HTTP-level check plus, where the logic is pure, a direct unit-style check — see the
+"Feature N" tests in `test/smoke.test.ts`.
 
 ## Advanced features
 
@@ -292,6 +297,129 @@ behind an interface from the start.
 - **Quality of Idea:** Goes beyond a transcript viewer or generic summarizer by closing the loop into an active
   learning system — extraction feeding a real scheduling algorithm that adapts to how well material was recalled,
   which is what makes it a study *coach* rather than a note-taking tool.
+
+## Round 3: quiz mode, shared decks, reminders, adaptive generation bias
+
+A third pass added four more features, each independently tested in `test/smoke.test.ts` (search for
+"Feature 7" through "Feature 10").
+
+### 7. Shared study-group decks
+
+`POST /sessions` accepts an optional `shared: true`, marking the resulting session as a shared study-group deck.
+Another student — identified by nothing more than a caller-supplied `studentId` string, no auth for this demo —
+can then call `POST /decks/:sessionId/join` to pull that session's flashcards into their own personal review
+queue. Critically, the flashcard *content* (front/back/tags) is **never copied or regenerated**: only a fresh,
+independent review-state row (interval, ease factor, repetitions, due date, leech tracking) is created per
+(studentId, card) pair. Two students who join the same deck and review the same card end up with completely
+independent ease factors, due dates, and leech flags — one can leech a card while the other aces it, and neither
+touches the card's own embedded (student-less) state, which is what every original, `studentId`-less endpoint
+still reads and writes. `GET /review/due`, `GET /review/leeches`, and `POST /review/:cardId` all accept an
+optional `studentId` (query param for the GETs, body field for the POST) to operate on that student's own state
+instead of the shared default.
+
+```bash
+# Ingest a shared deck
+curl -X POST localhost:4466/sessions -H "Content-Type: application/json" -d '{
+  "title": "Bio 101 study group", "shared": true,
+  "transcript": "Meiosis is the process of cell division that produces gametes."
+}'
+# -> note the session id
+
+# Two different students join the same deck
+curl -X POST localhost:4466/decks/<sessionId>/join -H "Content-Type: application/json" -d '{"studentId": "alice"}'
+curl -X POST localhost:4466/decks/<sessionId>/join -H "Content-Type: application/json" -d '{"studentId": "bob"}'
+
+# They review the same card independently
+curl -X POST localhost:4466/review/<cardId> -H "Content-Type: application/json" -d '{"grade": "easy", "studentId": "alice"}'
+curl -X POST localhost:4466/review/<cardId> -H "Content-Type: application/json" -d '{"grade": "again", "studentId": "bob"}'
+# -> alice's and bob's responses show different easeFactor/dueAt/isLeech on the *same* cardId
+
+curl "localhost:4466/review/due?studentId=alice"   # alice's own due queue
+curl "localhost:4466/review/leeches?studentId=bob" # bob's own leeches
+```
+
+### 8. Quiz/practice-test mode
+
+`POST /quiz/start { count, studentId? }` samples up to `count` cards into a new timed quiz. Sampling reuses the
+exact same due-filtering (`isDue`) and priority-ranking (`priorityScore`/`sortByPriority`) logic `GET /review/due`
+is built on — due cards come first, worst-priority (leeches, overdue, historically-hard cards) first, then, if
+`count` isn't filled, padded out with not-yet-due cards in the same priority order — rather than a separate,
+duplicated sampling algorithm. An optional `studentId` samples from that student's own personal deck (joined
+shared decks + directly-reviewed cards, see Feature 7) instead of the shared default pool. The response exposes
+each sampled card's `front` only — `back` is withheld until it's graded.
+
+`POST /quiz/:id/answer { cardId, answer }` grades the response. **Grading approach: a simple case-insensitive,
+whitespace-trimmed exact match** against the card's `back` text (both sides lowercased, trimmed, and
+whitespace-collapsed before comparing) — no fuzzy matching, synonym handling, or partial credit. This is
+deliberately the simplest thing that could work; see FRICTION_LOG.md for the tradeoff.
+
+`GET /quiz/:id/results` returns a score summary — usable mid-quiz (a partial score) or once every sampled card has
+been answered (`complete: true`) — including exactly which cards were missed, with their prompt/answer, so a
+student can review what they got wrong right after finishing.
+
+```bash
+curl -X POST localhost:4466/quiz/start -H "Content-Type: application/json" -d '{"count": 5, "studentId": "alice"}'
+# -> { "id": "...", "cards": [ { "cardId": "...", "front": "What is meiosis?" }, ... ] }
+
+curl -X POST localhost:4466/quiz/<quizId>/answer -H "Content-Type: application/json" -d '{
+  "cardId": "<cardId>", "answer": "a process of cell division that produces gametes"
+}'
+# -> { "correct": true } or { "correct": false }
+
+curl localhost:4466/quiz/<quizId>/results
+# -> { "total": 5, "answered": 3, "correct": 2, "complete": false, "missed": [ {"cardId": "...", "front": "...", "back": "...", "submittedAnswer": "..."} ] }
+```
+
+### 9. Due-card reminder digest
+
+`GET /reminders/digest?studentId=` returns a compact, single-paragraph summary of that student's own due queue —
+built from the exact same per-student due/leech logic Features 7 and 8 use, so it can't drift out of sync with
+what the student would actually see — designed to be easy for another service or a voice assistant to read aloud
+directly, e.g. `"You have 5 cards due today, including 2 leeches."` The response also includes the structured
+counts the sentence is built from (`due`, `dueLeeches`, `totalLeeches`, `totalCards`), for a caller that wants to
+render its own UI instead of just reading the sentence.
+
+```bash
+curl "localhost:4466/reminders/digest?studentId=alice"
+# -> {
+#      "studentId": "alice",
+#      "summary": "You have 5 cards due today, including 2 leeches.",
+#      "counts": { "due": 5, "dueLeeches": 2, "totalLeeches": 3, "totalCards": 12 }
+#    }
+```
+
+### 10. Adaptive new-card generation bias
+
+`PATCH /sessions/:id/segments` now accepts an optional `studentId`. When given, appending new material biases
+flashcard generation toward topics that student has historically struggled with. **The exact heuristic:**
+
+1. A topic (one of a card's heuristic `tags`, see Feature 3 in the previous round) counts as **weak** for a
+   student if, across every card of theirs (joined or directly reviewed) carrying that tag, the *average ease
+   factor* is below `2.0` (meaningfully under `scheduler.ts`'s `2.5` baseline) — **or** at least one of those
+   cards is currently flagged a leech. A leech alone is enough regardless of average ease, since three failures in
+   a row is a stronger signal than a merely-below-average ease factor (the same priority `priority.ts` already
+   gives leeches over ease elsewhere).
+2. The topics of just the *newly appended* segments (not the full transcript) are extracted the same way any
+   other ingest does (`topics.ts`).
+3. If any of those overlap the student's weak topics, up to 3 extra simple **cloze-deletion** cards (fill-in-the-
+   blank, blanking the longest word in each new sentence) are generated from the new segments alone and added on
+   top of whatever the generator's normal Q&A/definition/cloze tiers already produced for the full transcript —
+   so a weak topic visibly yields *more* review material than a topic the student is already acing, which produces
+   nothing extra.
+
+```bash
+# alice previously failed several "photosynthesis"-tagged cards -> that topic is now "weak" for her
+curl -X PATCH localhost:4466/sessions/<sessionId>/segments -H "Content-Type: application/json" -d '{
+  "studentId": "alice",
+  "segments": "Photosynthesis also depends on chlorophyll concentration in the leaf."
+}'
+# -> "newFlashcards" includes both whatever the normal tiers found AND a few extra
+#    "Fill in the blank: ..." cards from just this new sentence, because photosynthesis is weak for alice.
+# The same PATCH with no studentId (or a studentId with no weak topics) yields only the normal-tier cards.
+```
+
+See FRICTION_LOG.md for this heuristic's real limitations (topic granularity, cold-start behavior, and why "more
+cards" rather than "simpler cards" was the chosen bias).
 
 ## Friction log
 
