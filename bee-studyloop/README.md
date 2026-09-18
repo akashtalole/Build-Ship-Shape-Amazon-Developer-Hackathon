@@ -421,6 +421,105 @@ curl -X PATCH localhost:4466/sessions/<sessionId>/segments -H "Content-Type: app
 See FRICTION_LOG.md for this heuristic's real limitations (topic granularity, cold-start behavior, and why "more
 cards" rather than "simpler cards" was the chosen bias).
 
+## Round 4: streaks & gamification, session planner, import round-trip, regenerate-a-card
+
+A fourth pass added four more features, each independently tested in `test/smoke.test.ts` (search for "Feature 11"
+through "Feature 14").
+
+### 11. Study streaks & gamification
+
+Every review submitted with a `studentId` (`POST /review/:cardId { grade, studentId }`) now also folds into that
+student's daily streak (see `streak.ts`). A "streak day" is any UTC calendar day on which the student completed at
+least one review — reviewing ten cards in one sitting only counts once. Consecutive streak days grow
+`currentStreak`; a day with **zero** reviews breaks it: the next review resets `currentStreak` back to `1` (the
+day it happens on still counts), but `longestStreak` only ever grows, never shrinks. Milestone badges
+(`3-day-streak`, `7-day-streak`, `30-day-streak`) are earned based on `longestStreak`, so once earned a badge is
+never revoked just because the current streak later resets — the same "permanent achievement" model most habit
+trackers use.
+
+`GET /students/:studentId/streak` returns the current state; a student who has never reviewed anything gets a
+valid all-zero response rather than a 404 (asking about a streak that hasn't started isn't an error).
+
+```bash
+curl localhost:4466/students/alice/streak
+# -> { "studentId": "alice", "currentStreak": 4, "longestStreak": 12, "badges": ["3-day-streak", "7-day-streak"], "lastActiveDate": "2026-03-04" }
+```
+
+Note: since streaks are keyed off a `studentId`, only reviews submitted through the shared-decks `studentId` path
+count toward one — the original, student-less "default reviewer" endpoint (`POST /review/:cardId` with no
+`studentId`) has no single student to credit and never touches streak state.
+
+### 12. Global daily review session planner
+
+`GET /review/session?studentId=&maxCards=<n>` builds one bounded "here's your review for today" session across
+**every** deck a student has — their own directly-reviewed cards and every shared deck they've joined (Feature 7)
+— in the exact same adaptive priority order `GET /review/due` already uses (`priorityScore`/`sortByPriority`), then
+caps the result at `maxCards`. This is deliberately a thin wrapper around the existing per-student due-card query,
+not a new ranking algorithm: the planner's job is the cap and the "how many are left for later" count (`totalDue`),
+not a different ordering. A leech or badly-overdue card from one deck still outranks a merely-due card from
+another, so capping never means silently dropping the most urgent material.
+
+```bash
+curl "localhost:4466/review/session?studentId=alice&maxCards=15"
+# -> {
+#      "studentId": "alice", "maxCards": 15, "totalDue": 42,
+#      "cards": [ /* up to 15 PersonalFlashcardView objects, worst-priority first, across every deck alice has */ ]
+#    }
+```
+
+### 13. Import round-trip
+
+`POST /import { tsv, sessionId?, title? }` is the inverse of `GET /export`/`GET /sessions/:id/export`: it parses a
+TSV in that exact format (`front`, `back`, `tags`, header optional — see `fromPortableTsv` in `export.ts`) and
+creates flashcards from it, so a student can back up a deck and restore it later, or migrate cards between
+environments (a local dev instance and a deployed one, say). Pass `sessionId` to import into an existing session;
+omit it to create a fresh one (the "restore a full backup" shape).
+
+**Deduplication, exactly as documented:** a row is skipped (counted in `skippedDuplicates`, not created) if its
+trimmed, lowercased `front` text matches either (a) a flashcard the target session already has, or (b) an earlier
+row already accepted from this same import batch. That second half matters even for a brand-new session: a TSV
+with an accidental duplicate row still only produces one card. Imported cards always start with fresh
+scheduling/leech state (`interval: 0`, no leech history) — a TSV export carries no review history to restore, only
+front/back/tags survive the round trip (see FRICTION_LOG.md).
+
+```bash
+# Back up a deck
+curl localhost:4466/sessions/<sessionId>/export -o backup.tsv
+
+# ...later, or in a different environment: restore it into a brand-new session
+# (jq builds the JSON body so the TSV's tabs/newlines are escaped correctly)
+jq -Rs '{tsv: .}' backup.tsv | curl -X POST localhost:4466/import -H "Content-Type: application/json" -d @-
+# -> { "session": {...}, "imported": [ ...new Flashcard objects... ], "skippedDuplicates": 0 }
+
+# Re-importing the same backup into the same session is a safe no-op
+jq -Rs --arg sid "<sessionId>" '{tsv: ., sessionId: $sid}' backup.tsv | curl -X POST localhost:4466/import -H "Content-Type: application/json" -d @-
+# -> "imported": [], "skippedDuplicates": <row count>
+```
+
+### 14. Regenerate-a-card
+
+`POST /flashcards/:cardId/regenerate` re-runs flashcard generation to produce an alternative phrasing for one
+existing card, replacing its `front`/`back` in place. Everything else — `id`, `tags`, and every bit of
+spaced-repetition/leech state (`interval`, `easeFactor`, `repetitions`, `dueAt`, `consecutiveFailures`, `isLeech`)
+— is carried over untouched, so regenerating a confusingly-worded card doesn't cost a student their progress on it.
+
+It **reuses the same injected `FlashcardGenerator`** every other ingestion path uses — no separate regeneration
+logic. The only new piece is recovering *which part* of the session's transcript the card came from
+(`findUnderlyingSegments` in `studyService.ts`), so regeneration runs the generator over just that material instead
+of the whole session (which would just reproduce the same card set the original ingest already did). This exploits
+how each generator tier builds a card's text: a Q&A card's front/back are the two source segments' text verbatim,
+so an exact match recovers them exactly; a cloze card's blanked word can be substituted back in to reconstruct the
+original sentence and locate it; a definition card only has "the segment mentioning the term" as a fallback signal,
+since its front is reworded rather than verbatim. If the generator's normal tiers produce nothing different for
+that material (a real possibility for terse source text), regeneration falls back to `generateClozeCards` — the
+same exported helper Feature 10's adaptive bias already reuses — for a guaranteed-different fill-in-the-blank
+phrasing, rather than writing a second cloze generator.
+
+```bash
+curl -X POST localhost:4466/flashcards/<cardId>/regenerate
+# -> the same card id, with a fresh front/back and identical interval/easeFactor/dueAt/isLeech
+```
+
 ## Friction log
 
 See [`FRICTION_LOG.md`](./FRICTION_LOG.md) for notes captured while building this (eligible for the hackathon's

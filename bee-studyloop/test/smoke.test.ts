@@ -15,7 +15,7 @@ import { initialSchedulerState, scheduleReview } from "../src/scheduler.js";
 import { initialLeechState, LEECH_THRESHOLD, updateLeechState } from "../src/leech.js";
 import { priorityScore } from "../src/priority.js";
 import { extractTopics } from "../src/topics.js";
-import { getReminderDigest, listDueCards } from "../src/studyService.js";
+import { getReminderDigest, listDueCards, recordReviewForStudent } from "../src/studyService.js";
 
 async function main() {
   const generator = new TemplateFlashcardGenerator();
@@ -775,6 +775,248 @@ async function main() {
   console.log(
     `✓ PATCH /sessions/:id/segments with a studentId weak on the touched topic generates ${biasedPatchBody.newFlashcards.length} extra card(s) vs. ${controlPatchBody.newFlashcards.length} for the control`
   );
+
+  // --- Feature 11: study streaks & gamification ---
+  // Join a shared deck for a dedicated streak-test student, then simulate reviews on
+  // three consecutive days (2026-01-01 through 2026-01-03) by calling
+  // recordReviewForStudent directly with an injected "now" — the same documented
+  // pattern used above for the priority-ordering and reminder-digest tests, since
+  // POST /review/:cardId has no way to backdate a review over HTTP.
+  const streakSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Streak test deck",
+        shared: true,
+        transcript: [
+          { text: "What is osmosis?" },
+          { text: "Osmosis is the diffusion of water across a semi-permeable membrane." },
+        ],
+      }),
+    })
+  ).json();
+  const streakStudent = "streak-student-1";
+  const streakJoinBody = await (
+    await fetch(`${base}/decks/${streakSessionRes.session.id}/join`, { method: "POST", headers, body: JSON.stringify({ studentId: streakStudent }) })
+  ).json();
+  const streakCardId = streakJoinBody.cards[0].id;
+
+  const day1 = new Date("2026-01-01T09:00:00.000Z");
+  const day2 = new Date("2026-01-02T09:00:00.000Z");
+  const day3 = new Date("2026-01-03T09:00:00.000Z");
+  const day3Again = new Date("2026-01-03T20:00:00.000Z"); // same UTC day, later — must not double-count
+  const day5 = new Date("2026-01-05T09:00:00.000Z"); // day 4 is skipped
+
+  recordReviewForStudent(streakStudent, streakCardId, "good", day1);
+  const afterDay1 = await (await fetch(`${base}/students/${streakStudent}/streak`)).json();
+  assert.equal(afterDay1.currentStreak, 1, "one review on day one starts a 1-day streak");
+  assert.equal(afterDay1.longestStreak, 1);
+  assert.deepEqual(afterDay1.badges, [], "no milestone badge yet after a single day");
+  console.log("✓ GET /students/:studentId/streak reports a 1-day streak after the first day's review");
+
+  recordReviewForStudent(streakStudent, streakCardId, "good", day2);
+  const afterDay2 = await (await fetch(`${base}/students/${streakStudent}/streak`)).json();
+  assert.equal(afterDay2.currentStreak, 2, "a review on the very next day extends the streak");
+  assert.equal(afterDay2.longestStreak, 2);
+
+  recordReviewForStudent(streakStudent, streakCardId, "good", day3);
+  recordReviewForStudent(streakStudent, streakCardId, "easy", day3Again); // same calendar day: must not double-count
+  const afterDay3 = await (await fetch(`${base}/students/${streakStudent}/streak`)).json();
+  assert.equal(afterDay3.currentStreak, 3, "three consecutive days of review produce a 3-day streak (a second same-day review doesn't inflate it)");
+  assert.equal(afterDay3.longestStreak, 3);
+  assert.deepEqual(afterDay3.badges, ["3-day-streak"], "reaching a 3-day streak earns exactly the 3-day badge");
+  console.log(`✓ a scripted sequence of reviews across 3 simulated consecutive days produces currentStreak=3 and the "3-day-streak" badge`);
+
+  recordReviewForStudent(streakStudent, streakCardId, "good", day5);
+  const afterMissedDay = await (await fetch(`${base}/students/${streakStudent}/streak`)).json();
+  assert.equal(afterMissedDay.currentStreak, 1, "a missed day (day 4) resets the current streak back to 1");
+  assert.equal(afterMissedDay.longestStreak, 3, "the longest-streak record survives a reset");
+  assert.deepEqual(afterMissedDay.badges, ["3-day-streak"], "an already-earned badge is never revoked after the streak resets");
+  console.log("✓ a missed day resets the current streak but leaves the longest-streak record and earned badges intact");
+
+  const freshStreak = await (await fetch(`${base}/students/never-reviewed-student/streak`)).json();
+  assert.equal(freshStreak.currentStreak, 0, "a student with no review history has a zero streak rather than an error");
+  assert.deepEqual(freshStreak.badges, []);
+  console.log("✓ GET /students/:studentId/streak for a student with no history returns a valid zero-streak summary, not an error");
+
+  // --- Feature 12: global daily review session planner ---
+  // Two separate shared decks, both joined by the same student, so their due cards
+  // must be pooled together and capped rather than served deck-by-deck.
+  const plannerDeckARes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Planner deck A",
+        shared: true,
+        transcript: [
+          { text: "What is diffusion?" },
+          { text: "Diffusion is the net movement of molecules from high to low concentration." },
+          { text: "What is entropy?" },
+          { text: "Entropy is a measure of disorder in a thermodynamic system." },
+        ],
+      }),
+    })
+  ).json();
+  const plannerDeckBRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Planner deck B",
+        shared: true,
+        transcript: [
+          { text: "What is inertia?" },
+          { text: "Inertia is the tendency of an object to resist a change in motion." },
+          { text: "What is velocity?" },
+          { text: "Velocity is the speed of an object in a given direction." },
+        ],
+      }),
+    })
+  ).json();
+  assert.ok(plannerDeckARes.flashcards.length >= 2 && plannerDeckBRes.flashcards.length >= 2, "both planner decks yield at least two cards each");
+
+  const plannerStudent = "planner-student-1";
+  await fetch(`${base}/decks/${plannerDeckARes.session.id}/join`, { method: "POST", headers, body: JSON.stringify({ studentId: plannerStudent }) });
+  await fetch(`${base}/decks/${plannerDeckBRes.session.id}/join`, { method: "POST", headers, body: JSON.stringify({ studentId: plannerStudent }) });
+
+  const totalAcrossBothDecks = plannerDeckARes.flashcards.length + plannerDeckBRes.flashcards.length;
+  const sessionCap = 3;
+  const sessionPlanRes = await fetch(`${base}/review/session?studentId=${plannerStudent}&maxCards=${sessionCap}`);
+  assert.equal(sessionPlanRes.status, 200);
+  const sessionPlan = await sessionPlanRes.json();
+  assert.equal(sessionPlan.cards.length, sessionCap, "GET /review/session caps the returned cards at maxCards");
+  assert.equal(sessionPlan.totalDue, totalAcrossBothDecks, "totalDue reports every due card across every joined deck, uncapped");
+  assert.ok(sessionPlan.totalDue > sessionPlan.cards.length, "there are more due cards overall than fit in this capped session");
+  const distinctSessionIds = new Set(sessionPlan.cards.map((c: { sessionId: string }) => c.sessionId));
+  assert.ok(distinctSessionIds.size >= 2, "the capped session pulls cards from multiple decks, not just the first one joined");
+  console.log(`✓ GET /review/session pools due cards across ${distinctSessionIds.size} joined decks and caps them at maxCards=${sessionCap} (of ${sessionPlan.totalDue} total due)`);
+
+  const sessionPlanFull = await (await fetch(`${base}/review/session?studentId=${plannerStudent}&maxCards=1000`)).json();
+  assert.equal(sessionPlanFull.cards.length, totalAcrossBothDecks, "a maxCards larger than what's due simply returns everything due, uncapped in practice");
+  console.log("✓ GET /review/session returns every due card when maxCards exceeds the total due");
+
+  const missingStudentSessionRes = await fetch(`${base}/review/session?maxCards=5`);
+  assert.equal(missingStudentSessionRes.status, 400, "GET /review/session without a studentId returns a clean 400");
+  const missingMaxCardsRes = await fetch(`${base}/review/session?studentId=${plannerStudent}`);
+  assert.equal(missingMaxCardsRes.status, 400, "GET /review/session without maxCards returns a clean 400");
+  console.log("✓ GET /review/session validates that both studentId and maxCards are required");
+
+  // --- Feature 13: import round-trip (the inverse of GET /export) ---
+  // Use a dedicated, freshly-ingested session (rather than the accumulated global
+  // /export, whose rows can legitimately repeat front-text across unrelated earlier
+  // test sections) so the exact row count is known and the round-trip is deterministic.
+  const importSourceRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Import round-trip source",
+        transcript: [
+          { text: "What is homeostasis?" },
+          { text: "Homeostasis is the maintenance of a stable internal environment." },
+          { text: "What is a neuron?" },
+          { text: "A neuron is a specialized cell that transmits electrical signals." },
+        ],
+      }),
+    })
+  ).json();
+  assert.ok(importSourceRes.flashcards.length >= 2, "the import-source session yields at least two flashcards");
+
+  const exportedTsv = await (await fetch(`${base}/sessions/${importSourceRes.session.id}/export`)).text();
+  const exportedRowCount = exportedTsv.trim().split("\n").length - 1; // minus the header row
+  assert.equal(exportedRowCount, importSourceRes.flashcards.length, "the exported TSV has exactly one row per flashcard in this session");
+
+  const importRes = await fetch(`${base}/import`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ tsv: exportedTsv, title: "Restored from backup" }),
+  });
+  assert.equal(importRes.status, 201);
+  const importBody = await importRes.json();
+  assert.equal(importBody.imported.length, exportedRowCount, "importing a fresh export into a brand-new session creates exactly one flashcard per exported row");
+  assert.equal(importBody.skippedDuplicates, 0, "nothing is a duplicate yet in a brand-new session");
+  assert.ok(
+    importBody.imported.every((c: { interval: number; repetitions: number }) => c.interval === 0 && c.repetitions === 0),
+    "imported cards start with fresh scheduling state (a TSV export carries no review history)"
+  );
+  console.log(`✓ POST /import creates ${importBody.imported.length} flashcard(s) from a TSV in the exact format GET /export produces`);
+
+  // Re-importing the very same TSV into the same session must not duplicate any cards.
+  const reImportRes = await fetch(`${base}/import`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ tsv: exportedTsv, sessionId: importBody.session.id }),
+  });
+  assert.equal(reImportRes.status, 201);
+  const reImportBody = await reImportRes.json();
+  assert.equal(reImportBody.imported.length, 0, "re-importing an already-imported export creates zero new cards");
+  assert.equal(reImportBody.skippedDuplicates, exportedRowCount, "every row is recognized as a front-text duplicate of an existing card");
+  console.log("✓ POST /import deduplicates by front-text against a session's existing cards, so re-importing the same export is a safe no-op");
+
+  // A single import batch with an internal duplicate row also collapses to one card —
+  // dedup applies within the batch itself, not just against a session's pre-existing cards.
+  const duplicateRowTsv = "front\tback\ttags\nWhat is ATP?\tAdenosine triphosphate.\tbiology\nWhat is ATP?\tAdenosine triphosphate.\tbiology\nWhat is DNA?\tDeoxyribonucleic acid.\tbiology\n";
+  const batchDedupeRes = await fetch(`${base}/import`, { method: "POST", headers, body: JSON.stringify({ tsv: duplicateRowTsv }) });
+  assert.equal(batchDedupeRes.status, 201);
+  const batchDedupeBody = await batchDedupeRes.json();
+  assert.equal(batchDedupeBody.imported.length, 2, "two distinct front-texts in the batch produce two cards");
+  assert.equal(batchDedupeBody.skippedDuplicates, 1, "a repeated front-text row within the same import batch is skipped as a duplicate");
+  console.log("✓ POST /import also deduplicates by front-text within a single import batch, not only against a session's pre-existing cards");
+
+  const importMissingSessionRes = await fetch(`${base}/import`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ tsv: exportedTsv, sessionId: "not-a-real-session-id" }),
+  });
+  assert.equal(importMissingSessionRes.status, 404, "importing into an unknown sessionId returns a clean 404");
+  const importMissingTsvRes = await fetch(`${base}/import`, { method: "POST", headers, body: JSON.stringify({}) });
+  assert.equal(importMissingTsvRes.status, 400, "importing without a tsv body returns a clean 400");
+  console.log("✓ POST /import returns clean errors for an unknown sessionId and a missing tsv body");
+
+  // --- Feature 14: regenerate-a-card ---
+  const regenSessionRes = await (
+    await fetch(`${base}/sessions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Regenerate test deck",
+        transcript: [
+          { speaker: "Alice", text: "What is the powerhouse of the cell?" },
+          { speaker: "Bob", text: "The mitochondria is the powerhouse of the cell." },
+        ],
+      }),
+    })
+  ).json();
+  const regenCard = regenSessionRes.flashcards.find((c: { front: string }) => c.front === "What is the powerhouse of the cell?");
+  assert.ok(regenCard, "the Q&A tier generated the expected original card");
+
+  // Put the card through a real review first, so it has non-default scheduling/leech
+  // state to verify survives regeneration untouched.
+  const regenAfterReviewBody = await (
+    await fetch(`${base}/review/${regenCard.id}`, { method: "POST", headers, body: JSON.stringify({ grade: "good" }) })
+  ).json();
+  assert.ok(regenAfterReviewBody.interval > 0 && regenAfterReviewBody.repetitions === 1, "the card has real (non-default) review state before regenerating it");
+
+  const regenerateRes = await fetch(`${base}/flashcards/${regenCard.id}/regenerate`, { method: "POST" });
+  assert.equal(regenerateRes.status, 200);
+  const regenerated = await regenerateRes.json();
+  assert.equal(regenerated.id, regenCard.id, "regeneration replaces the card in place rather than creating a new one");
+  assert.notEqual(regenerated.front, regenAfterReviewBody.front, "regeneration produces a different front (alternative phrasing)");
+  assert.notEqual(regenerated.back, regenAfterReviewBody.back, "regeneration produces a different back to match the new front");
+  assert.equal(regenerated.interval, regenAfterReviewBody.interval, "regeneration leaves the card's interval untouched");
+  assert.equal(regenerated.easeFactor, regenAfterReviewBody.easeFactor, "regeneration leaves the card's ease factor untouched");
+  assert.equal(regenerated.dueAt, regenAfterReviewBody.dueAt, "regeneration leaves the card's due date untouched");
+  assert.equal(regenerated.repetitions, regenAfterReviewBody.repetitions, "regeneration leaves the card's repetition count untouched");
+  assert.equal(regenerated.isLeech, regenAfterReviewBody.isLeech, "regeneration leaves the card's leech status untouched");
+  console.log(
+    `✓ POST /flashcards/:cardId/regenerate rewrote "${regenAfterReviewBody.front}" -> "${regenerated.front}" while leaving review-state (interval, easeFactor, dueAt) untouched`
+  );
+
+  const regenMissingCardRes = await fetch(`${base}/flashcards/not-a-real-card-id/regenerate`, { method: "POST" });
+  assert.equal(regenMissingCardRes.status, 404, "regenerating an unknown card id returns a clean 404");
+  console.log("✓ POST /flashcards/:cardId/regenerate for an unknown card id returns a clean 404");
 
   httpServer.close();
   console.log("\nAll StudyLoop smoke tests passed.");

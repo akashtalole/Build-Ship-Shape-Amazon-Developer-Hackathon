@@ -1,4 +1,5 @@
 import type { Flashcard, PersonalReviewState, Quiz, StudySession } from "./types.js";
+import type { StreakState } from "./streak.js";
 
 const sessions = new Map<string, StudySession>();
 const flashcards = new Map<string, Flashcard>();
@@ -14,6 +15,11 @@ const reviewStates = new Map<string, PersonalReviewState>();
 const reviewStateCardIdsByStudent = new Map<string, Set<string>>();
 
 const quizzes = new Map<string, Quiz>();
+
+// Per-student study-streak state (see streak.ts), keyed directly by
+// studentId — unlike review state there's exactly one streak record per
+// student, not one per (student, card) pair.
+const streakStates = new Map<string, StreakState>();
 
 function reviewStateKey(studentId: string, cardId: string): string {
   return `${studentId}\0${cardId}`;
@@ -91,4 +97,12 @@ export function saveQuiz(quiz: Quiz): void {
 
 export function getQuiz(id: string): Quiz | undefined {
   return quizzes.get(id);
+}
+
+export function getStreakState(studentId: string): StreakState | undefined {
+  return streakStates.get(studentId);
+}
+
+export function saveStreakState(state: StreakState): void {
+  streakStates.set(state.studentId, state);
 }

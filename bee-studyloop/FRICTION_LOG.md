@@ -163,3 +163,66 @@ new-card generation bias).
    picking sentences with no bare "is"/"are"/"means"/"refers to" token anywhere in them, not just at the start,
    which is an easy trap to fall into when hand-writing test fixtures for a regex-driven, non-LLM generator: the
    pattern's reach is the whole sentence, not just its beginning.
+
+## Round 4: streaks & gamification, session planner, import round-trip, regenerate-a-card
+
+Notes from the fourth pass (study streaks/badges, the global daily review session planner, TSV import round-trip,
+regenerate-a-card).
+
+### What worked well
+
+- Streak bookkeeping turned out to want its own tiny state machine (`streak.ts`) rather than living inline in
+  `studyService.ts` — exactly the same shape as `scheduler.ts`/`leech.ts`: a pure `(state, event) -> state`
+  function, unit-testable with no HTTP or storage involved, called from one place (`recordReviewForStudent`). That
+  consistency made the design decision easy: "what's a streak day, when does it reset" is a self-contained question
+  with the same answer regardless of which endpoint eventually triggers it.
+- The session planner (Feature 12) needed zero new ranking logic — `buildReviewSession` is a three-line function
+  that calls the existing `listDueCardsForStudent` and slices the result. That it came out this thin is a good sign
+  the underlying "pool of priority-scorable, student-scoped due cards" abstraction from round 3 was already the
+  right shape; a "bounded session" and an "unbounded due-list" are the same data at two different cutoffs, not two
+  different features.
+- The regenerate endpoint's requirement to "reuse the existing FlashcardGenerator, don't duplicate its logic" led
+  to a genuinely pleasant discovery: because `TemplateFlashcardGenerator` already runs three independent
+  pattern-matching tiers over whatever segments it's given, re-running it over just a card's two source segments
+  frequently surfaces a *second* tier's candidate for the same material for free (a Q&A pair's answer sentence
+  often also matches the definition pattern) — a real "alternative phrasing," not a synthetic one, with no
+  cloze-fallback needed in the common case. See the smoke test's mitochondria example.
+
+### Friction encountered
+
+1. **"Which segments did this card come from?" has no stored answer — it has to be reverse-engineered.** Nothing in
+   the `Flashcard` record links back to the specific transcript segment(s) that produced it (only `sessionId`, the
+   whole session). Regeneration therefore leans on `findUnderlyingSegments`, a heuristic that exploits each
+   generator tier's own text-construction rules in reverse (Q&A cards carry verbatim segment text; cloze cards can
+   have their blank filled back in; definition cards can only be traced to "the segment that mentions the term").
+   This works well for the `TemplateFlashcardGenerator`'s own output, but it is coupled to that generator's exact
+   conventions — swapping in a real LLM-backed generator (see "Swapping in a real LLM-backed generator") would
+   break the exact-match and reconstruction heuristics entirely, since an LLM's phrasing wouldn't carry verbatim
+   segment text or a literal "____" placeholder. The honest fix, out of scope for a hackathon-scope build, is
+   storing a `sourceSegmentIndices: number[]` on `Flashcard` at generation time so regeneration (and, likely, a
+   future "explain this card" feature) never has to guess. Falling back to the whole session's transcript when
+   nothing more specific is found keeps regeneration from ever hard-failing in the meantime.
+2. **Badges-as-permanent-achievements vs. badges-as-live-status is a real modeling choice, not an obvious one.** I
+   chose to base badges on `longestStreak` (once earned, never revoked) rather than `currentStreak` (which would
+   make a badge disappear the moment a streak resets). The permanent-achievement model is how most habit-tracking
+   apps actually behave and avoids the discouraging feel of "losing" a badge you already earned, but it does mean
+   `GET /students/:studentId/streak`'s `badges` array can't be used, by itself, to answer "is this student
+   currently on at least a 3-day streak" — a caller wanting that has to compare `currentStreak` against
+   `STREAK_MILESTONES` directly. Documented in `streak.ts`'s doc comment rather than left implicit.
+3. **Import's dedup key (front-text only) inherits the same limitation `appendSessionSegments`'s dedup already
+   has, and for the same reason.** Two cards with identical fronts but different backs (a hand-edited TSV row, or a
+   card whose answer was corrected after export) collide under `fromPortableTsv`'s dedup and the second is silently
+   dropped rather than merged or flagged as a conflict. This mirrors the existing incremental-ingestion tradeoff
+   (documented in round 2's friction log) of "simple and predictable" over "correct in every edge case," and was
+   deliberately kept consistent with it rather than inventing a different, one-off conflict-resolution rule just
+   for import.
+4. **The exact TSV row count from `GET /export` isn't a safe test fixture for import once earlier test sections
+   have already run.** An early version of the import test computed its expected imported-card count from the
+   *global* `/export`, which by that point in the smoke test's own run had accumulated many earlier sessions —
+   several of which legitimately share front-text (e.g. more than one "What is meiosis?"-style card minted across
+   different fixture transcripts in earlier feature sections). That's exactly the documented within-batch dedup
+   behavior working correctly, not a bug — but it made the test's "one card per exported row" assumption false and
+   the assertion failed. The fix was giving the import test its own dedicated, freshly-ingested session with known
+   content and exporting *that* (`GET /sessions/:id/export`) rather than the ever-growing global export, plus a
+   second, explicitly-crafted small TSV with a deliberate duplicate row to test the within-batch dedup behavior
+   directly instead of hoping the accumulated global state would happen to exercise it.

@@ -3,12 +3,15 @@ import type { FlashcardGenerator } from "./flashcardGenerator.js";
 import type { RecallGrade } from "./types.js";
 import {
   appendSessionSegments,
+  buildReviewSession,
   exportAllFlashcards,
   exportSessionFlashcards,
   getQuizPrompts,
   getQuizResults,
   getReminderDigest,
   getSessionWithCards,
+  getStreakForStudent,
+  importFlashcards,
   ingestSession,
   joinSharedDeck,
   listDueCards,
@@ -17,6 +20,7 @@ import {
   listLeechCardsForStudent,
   recordReview,
   recordReviewForStudent,
+  regenerateFlashcard,
   searchFlashcardsByTopic,
   startQuiz,
   submitQuizAnswer,
@@ -273,6 +277,85 @@ export function createApp(generator: FlashcardGenerator): Express {
       return;
     }
     res.json(getReminderDigest(studentId.trim()));
+  });
+
+  // Study streaks & gamification: current/longest consecutive-day review
+  // streak plus earned milestone badges for one student. See README "Study
+  // streaks & gamification".
+  app.get("/students/:studentId/streak", (req, res) => {
+    const studentId = req.params.studentId;
+    if (!studentId.trim()) {
+      res.status(400).json({ error: "studentId is required." });
+      return;
+    }
+    res.json(getStreakForStudent(studentId.trim()));
+  });
+
+  // Global daily review session planner: a bounded "here's your review for
+  // today" pull across every deck a student has (own + joined shared decks),
+  // in the existing adaptive priority order, capped at maxCards. See README
+  // "Global daily review session planner".
+  app.get("/review/session", (req, res) => {
+    const { studentId, maxCards } = req.query;
+    if (typeof studentId !== "string" || !studentId.trim()) {
+      res.status(400).json({ error: "studentId query parameter is required, e.g. /review/session?studentId=alice&maxCards=20" });
+      return;
+    }
+    const parsedMax = typeof maxCards === "string" ? Number(maxCards) : NaN;
+    if (!Number.isFinite(parsedMax) || parsedMax <= 0) {
+      res.status(400).json({ error: "maxCards query parameter is required and must be a positive number, e.g. ?maxCards=20" });
+      return;
+    }
+    res.json(buildReviewSession(studentId.trim(), parsedMax));
+  });
+
+  // Import round-trip: creates flashcards from a TSV in the same format
+  // GET /export produces, deduplicating by front-text against both the
+  // target session's existing cards and the rest of the batch being
+  // imported. Omit sessionId to restore into a brand-new session. See
+  // README "Import round-trip".
+  app.post("/import", (req, res) => {
+    const { tsv, sessionId, title } = req.body ?? {};
+    if (typeof tsv !== "string" || !tsv.trim()) {
+      res.status(400).json({ error: "tsv is required — the same format GET /export produces." });
+      return;
+    }
+    if (sessionId !== undefined && (typeof sessionId !== "string" || !sessionId.trim())) {
+      res.status(400).json({ error: "sessionId, if provided, must be a non-empty string." });
+      return;
+    }
+
+    const result = importFlashcards({
+      tsv,
+      sessionId: typeof sessionId === "string" ? sessionId.trim() : undefined,
+      title: typeof title === "string" ? title : undefined,
+    });
+    if (!result.ok) {
+      res.status(404).json({ error: "No study session with that ID to import into." });
+      return;
+    }
+    res.status(201).json({ session: result.session, imported: result.imported, skippedDuplicates: result.skippedDuplicates });
+  });
+
+  // Regenerate-a-card: re-runs generation against just this card's
+  // underlying transcript material for an alternative phrasing, replacing
+  // front/back while leaving scheduling and leech state untouched. See
+  // README "Regenerate-a-card".
+  app.post("/flashcards/:cardId/regenerate", async (req, res) => {
+    const result = await regenerateFlashcard(generator, req.params.cardId);
+    if (!result.ok) {
+      if (result.reason === "card_not_found") {
+        res.status(404).json({ error: "No flashcard with that ID." });
+        return;
+      }
+      if (result.reason === "session_not_found") {
+        res.status(404).json({ error: "This flashcard's parent session no longer exists." });
+        return;
+      }
+      res.status(422).json({ error: "Could not generate an alternative phrasing for this card from its underlying transcript material." });
+      return;
+    }
+    res.json(result.card);
   });
 
   app.get("/healthz", (_req, res) => {
