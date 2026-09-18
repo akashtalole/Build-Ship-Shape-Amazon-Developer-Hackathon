@@ -1069,6 +1069,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#round-5-fantasy-plays-live-predictions-watch-parties-localized-commentary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 5: fantasy plays, live predictions, watch parties, localized commentary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round 5: fantasy plays, live predictions, watch parties, localized commentary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-fantasy-relevant-play-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Fantasy-relevant play detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-live-predictiontrivia-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Live prediction/trivia mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-shared-watch-party-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Shared watch-party session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-localized-commentary-packs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Localized commentary packs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#project-layout" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1575,6 +1636,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#round-5-fantasy-plays-live-predictions-watch-parties-localized-commentary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 5: fantasy plays, live predictions, watch parties, localized commentary
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round 5: fantasy plays, live predictions, watch parties, localized commentary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-fantasy-relevant-play-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Fantasy-relevant play detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-live-predictiontrivia-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Live prediction/trivia mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-shared-watch-party-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Shared watch-party session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-localized-commentary-packs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Localized commentary packs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#project-layout" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1688,6 +1810,16 @@ a paired play-by-play data API) would POST detected plays to <code>POST /games/:
 input both wire into the same <code>POST /games/:id/ask</code> — pressing a "Ask CourtSide" remote button or a wake-word-driven
 voice query both just collect a question string and hit that one endpoint, so the front end doesn't need two
 separate answer paths for the two input modalities.</p>
+<p><strong>What round 5's frontend integration would look like:</strong> a fantasy roster is a short settings-style form (search a
+player, add to a short list) surfaced from the same overlay panel, with fantasy plays rendered as a visually distinct
+"your player" badge on top of the regular caption strip rather than a separate screen. A posed prediction renders as
+a lightweight, dismissible D-pad-selectable prompt (yes/no or two team logos) overlaid for a short window, the same
+"never block the play" placement discipline as the commentary panel already follows, with the viewer's running
+accuracy surfaced as a small persistent badge. A watch party is the natural extension of Fire TV's existing
+Watch Party / group-watching affordances — joining one is a remote-friendly "enter a room code" or a deep link shared
+from a companion app, and shared Q&amp;A renders as a lightweight chat rail alongside the video rather than a modal that
+blocks it. A locale is a one-time setting (an existing Fire TV profile/language setting, or a first-run prompt) that
+the app threads into every <code>?locale=</code>/<code>locale</code> it sends, rather than a setting a viewer manages per session.</p>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>A game starts tracking</strong> (<code>POST /games</code>) — team names, sport (default basketball), and initial clock/period.</li>
@@ -1911,25 +2043,125 @@ ones without colliding, and re-registering the exact same <code>(callbackUrl, pl
 <span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"callbackUrl": "https://example.com/curry-alerts", "playerName": "Curry"}'</span>
 <span class="c1"># -&gt; only fires for a notable event with "player": "Curry" — a flagrant foul on a different player is silent</span>
 </code></pre></div>
+<h2 id="round-5-fantasy-plays-live-predictions-watch-parties-localized-commentary">Round 5: fantasy plays, live predictions, watch parties, localized commentary<a class="headerlink" href="#round-5-fantasy-plays-live-predictions-watch-parties-localized-commentary" title="Permanent link">&para;</a></h2>
+<p>Four genuinely new <em>product</em> features rather than more production hardening — each one a different way a viewer
+could actually engage with the same live event stream, not a new event type or infrastructure concern.</p>
+<h3 id="1-fantasy-relevant-play-detection">1. Fantasy-relevant play detection<a class="headerlink" href="#1-fantasy-relevant-play-detection" title="Permanent link">&para;</a></h3>
+<p><code>POST /games/:id/fantasy/:viewerId { "players": ["Giannis", "Tatum"] }</code> registers a small fantasy roster for a
+viewer, on top of the exact same event stream every other feature reads — no new event vocabulary, since
+<code>IncomingGameEvent.player</code> already carries player attribution wherever a real feed would report it. The instant this
+is registered, <code>src/gameService.ts</code>'s <code>setFantasyRoster</code> backfills a highlight reel from every event already
+ingested for this game that names a rostered player (so registering mid-game doesn't lose earlier plays), and from
+then on <code>ingestEvent</code> tags any new event naming a rostered player onto that viewer's reel live — independent of
+whether the play was "notable" by broadcast standards (see <code>isNotableEvent</code>), since a garbage-time bucket by your
+fantasy pick still matters to you even when it doesn't move the broadcast needle. <code>GET /games/:id/fantasy/:viewerId</code>
+retrieves it, newest first — a genuinely different lens on the same plays, not a second copy of the commentary feed.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4455/games/&lt;id&gt;/fantasy/v1<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"players": ["Giannis", "Tatum"]}'</span>
+<span class="c1"># -&gt; { "gameId": "...", "viewerId": "v1", "roster": ["Giannis", "Tatum"],</span>
+<span class="c1">#      "highlights": [...] }   // backfilled from events already ingested</span>
+
+curl<span class="w"> </span>localhost:4455/games/&lt;id&gt;/fantasy/v1
+<span class="c1"># -&gt; newest-first plays naming either rostered player, updated live as new events come in</span>
+</code></pre></div>
+<h3 id="2-live-predictiontrivia-mode">2. Live prediction/trivia mode<a class="headerlink" href="#2-live-predictiontrivia-mode" title="Permanent link">&para;</a></h3>
+<p><code>POST /games/:id/predictions { "type"?: "next_possession_score" | "next_team_to_score" }</code> poses a prediction tied
+to the game's <em>actual</em>, still-unfolding state — <code>"next_possession_score"</code> (the default) asks a yes/no "will the next
+possession end in a score?"; <code>"next_team_to_score"</code> asks a multiple-choice "which team scores next: home or away?".
+Neither is canned or pre-scored: <code>POST /games/:id/predictions/:predictionId/answer { "viewerId", "answer" }</code> records
+a viewer's guess while the prediction is still <code>"open"</code>, and <code>resolveOpenPredictions</code> in <code>src/gameService.ts</code> — run
+against every subsequent ingested event — actually inspects each new event to decide whether it resolves the
+question (a <code>score</code> resolves <code>"next_possession_score"</code> as <code>"yes"</code>; a <code>turnover</code> resolves it <code>"no"</code>; anything else,
+like a routine rebound or foul, leaves it open for a later event to decide). The moment a prediction resolves, every
+submitted answer is scored against the real outcome and folded into that viewer's running accuracy
+(<code>GET /viewers/:viewerId/predictions/accuracy</code>). A prediction still open when the game ends is <code>"voided"</code> — no event
+could ever resolve it, so it's retired without counting for or against anyone.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4455/games/&lt;id&gt;/predictions<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{}'</span>
+<span class="c1"># -&gt; { "id": "...", "type": "next_possession_score", "question": "Will the next possession end in a score?",</span>
+<span class="c1">#      "options": ["yes", "no"], "status": "open", ... }</span>
+
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4455/games/&lt;id&gt;/predictions/&lt;predictionId&gt;/answer<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"viewerId": "v1", "answer": "yes"}'</span>
+
+<span class="c1"># ...a "turnover" event ingested next actually resolves it "no" — v1's answer is scored incorrect...</span>
+
+curl<span class="w"> </span>localhost:4455/viewers/v1/predictions/accuracy
+<span class="c1"># -&gt; { "viewerId": "v1", "correct": 0, "total": 1, "accuracy": 0 }</span>
+</code></pre></div>
+<h3 id="3-shared-watch-party-session">3. Shared watch-party session<a class="headerlink" href="#3-shared-watch-party-session" title="Permanent link">&para;</a></h3>
+<p><code>POST /games/:id/parties { "name": "Living Room", "viewerId"?: "v1" }</code> creates (or, idempotently by
+case-insensitive name, joins) a named watch-party session for a game — modeling the "watching together, remotely"
+use case Fire TV increasingly supports. <code>POST /games/:id/parties/:partyId/join { "viewerId" }</code> adds another viewer.
+The real payoff: <code>POST /games/:id/ask</code> now accepts an optional <code>partyId</code> alongside its existing <code>question</code>/<code>viewerId</code>
+body — when given, the question and CourtSide's answer are no longer private to the asker. They're recorded into
+that party's durable history (<code>GET /games/:id/parties/:partyId/qa</code>) <em>and</em> pushed live to every viewer already
+connected to that game's <code>GET /games/:id/stream</code> (the exact same SSE pipe commentary already rides), tagged
+<code>"type": "party_qa"</code> and the <code>partyId</code> so a client can filter it into a shared party-chat view distinct from the
+narration feed. Asking into a party doubles as joining it. A question asked with no <code>partyId</code> behaves exactly as
+before — private to the asker, nothing pushed anywhere.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4455/games/&lt;id&gt;/parties<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"name": "Living Room", "viewerId": "v1"}'</span>
+<span class="c1"># -&gt; 201 { "party": { "id": "...", "name": "Living Room", "members": ["v1"], ... }, "duplicate": false }</span>
+
+<span class="c1"># In one terminal: watch the shared stream</span>
+curl<span class="w"> </span>-N<span class="w"> </span>localhost:4455/games/&lt;id&gt;/stream
+
+<span class="c1"># In another: ask into the party — every connected party member's stream gets the Q&amp;A instantly</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4455/games/&lt;id&gt;/ask<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"question": "whats the score", "viewerId": "v2", "partyId": "&lt;partyId&gt;"}'</span>
+<span class="c1"># -&gt; the first terminal prints: data: {"type":"party_qa","partyQnA":{"partyId":"...","viewerId":"v2",...}}</span>
+</code></pre></div>
+<h3 id="4-localized-commentary-packs">4. Localized commentary packs<a class="headerlink" href="#4-localized-commentary-packs" title="Permanent link">&para;</a></h3>
+<p><code>CommentaryProvider</code> now supports a <code>locale</code> parameter (<code>GET .../commentary?locale=</code>, <code>POST .../ask</code> body <code>locale</code>,
+<code>GET .../recap?locale=</code>, or a stored per-viewer <code>locale</code> preference via <code>POST .../viewers/:viewerId/preferences</code>),
+backed by genuinely distinct template packs in <code>src/commentaryProvider.ts</code> — not a translated swap of the same
+English strings. <code>"en-broadcast"</code> (the default, byte-for-byte the original round 1-4 wording) is a standard
+play-by-play voice; <code>"en-casual"</code> is a hype-friend-on-the-couch voice with its own sentence rhythm ("Ohhh we love to
+see it — Bridges scores!" instead of "Bridges scores!"); <code>"es-broadcast"</code> is a formal Spanish-language broadcast
+voice written natively in Spanish ("¡Anota Bridges!"), not run through a translator. Because commentary is generated
+once per event and shared across every viewer (see <code>personalizeText</code>'s doc comment — the same reasoning applies
+here), a non-default locale is produced by regenerating each line fresh from its underlying event via the exact
+commentary-generation path (<code>fast</code>/<code>escalated</code>) it originally took (<code>CommentaryLine.path</code>, new this round) — the
+default-locale read stays exactly as cheap as it always was, and only a genuinely non-default request pays for
+regeneration.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span><span class="s2">"localhost:4455/games/&lt;id&gt;/commentary?locale=en-casual"</span>
+<span class="c1"># -&gt; "Ohhh we love to see it — Bridges scores! Nets 2 - 0 Wizards."</span>
+
+curl<span class="w"> </span><span class="s2">"localhost:4455/games/&lt;id&gt;/commentary?locale=es-broadcast"</span>
+<span class="c1"># -&gt; "¡Anota Bridges! Nets 2 - 0 Wizards."</span>
+
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4455/games/&lt;id&gt;/viewers/v1/preferences<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"locale": "es-broadcast"}'</span>
+curl<span class="w"> </span><span class="s2">"localhost:4455/games/&lt;id&gt;/commentary?viewerId=v1"</span>
+<span class="c1"># -&gt; applies v1's stored locale automatically, no explicit ?locale= needed</span>
+</code></pre></div>
 <h2 id="project-layout">Project layout<a class="headerlink" href="#project-layout" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>src/
   types.ts               Game/event/commentary data model, valid event-type vocabulary, preferences/metrics types,
                           NotableEventRecord (highlights), Subscription (webhook, now with an optional playerName
-                          filter), and EntityStats (season-long team/player aggregation) types
+                          filter), EntityStats (season-long team/player aggregation), and — new this round —
+                          FantasyRosterResult/FantasyHighlightsResult, Prediction/PredictionAnswer/PredictionAccuracy,
+                          WatchParty/PartyQnA, and CommentaryLocale types
   store.ts                In-memory game/commentary storage, idempotency ledger, metrics, viewer preferences,
                            per-game highlight reel, per-game subscriptions (now keyed by callbackUrl+playerName),
-                           viewer&lt;-&gt;game interaction tracking, an uncapped per-game event log (recap), and
-                           season-long team/player stats accumulators
-  commentaryProvider.ts    CommentaryProvider interface (the Bedrock/LLM seam, now including generateRecap) +
-                           TemplateCommentaryProvider fallback + personalizeText (per-viewer preference decorator)
-                           + per-sport phrase tables and the serious-foul vocabulary isNotableEvent uses per sport
+                           viewer&lt;-&gt;game interaction tracking, an uncapped per-game event log (recap), season-long
+                           team/player stats accumulators, and — new this round — per-viewer fantasy
+                           rosters/highlights, predictions + answers + per-viewer accuracy, and watch
+                           parties + shared Q&amp;A history
+  commentaryProvider.ts    CommentaryProvider interface (the Bedrock/LLM seam, now including a `locale` parameter on
+                           every method) + TemplateCommentaryProvider fallback + personalizeText (per-viewer
+                           preference decorator) + per-sport phrase tables + per-locale phrase packs
+                           (en-broadcast/en-casual/es-broadcast)
   gameService.ts           Core logic: start a game, ingest + validate + de-duplicate events, confidence-gated
                            commentary routing (isNotableEvent, now sport-aware), generate commentary, answer
                            questions, highlights, subscription registration (game- or player-scoped), cross-game
-                           watchlist aggregation, season-long stats lookups, and the catch-up recap
+                           watchlist aggregation, season-long stats lookups, catch-up recap, and — new this round —
+                           fantasy roster registration + backfill, prediction posing/answering/resolution
+                           (resolveOpenPredictions, driven by real ingested events), watch-party
+                           creation/joining/shared-Q&amp;A, and locale resolution (resolveLocale)
   webhooks.ts             Outbound score-alert delivery: HMAC-SHA256 signing, retry with exponential backoff,
                            per-subscription rate capping, and player-name filtering before fan-out
-  pubsub.ts               Per-game EventEmitter registry powering the SSE stream
+  pubsub.ts               Per-game EventEmitter registry powering the SSE stream (now also carrying "party_qa" pushes)
   rateLimiter.ts           Fixed-window rate limiter shared by POST /ask and outbound webhook delivery
   server.ts                Express app factory: the HTTP API a Fire TV overlay would poll and stream
   index.ts                 Entry point
@@ -1940,7 +2172,11 @@ test/
                             resumable feed → /ask rate limiting → highlights → signed webhook delivery →
                             idempotent subscriptions → per-subscription rate cap → multi-game watchlist →
                             season-long team/player stats → windowed catch-up recaps → sport-aware commentary
-                            and notable-event heuristic → player-scoped alert subscriptions
+                            and notable-event heuristic → player-scoped alert subscriptions → fantasy roster
+                            registration + backfill + live tagging → prediction posing/answering/event-driven
+                            resolution/voiding + per-viewer accuracy → watch-party creation/joining + shared
+                            Q&amp;A over SSE and its durable history → locale-parameterized commentary/Q&amp;A + stored
+                            per-viewer locale preference
 </code></pre></div>
 <h2 id="running-it">Running it<a class="headerlink" href="#running-it" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>npm<span class="w"> </span>install
@@ -2010,16 +2246,34 @@ a game with no sport specified is confirmed to keep basketball's original <code>
 player-scoped subscription (<code>playerName: "Curry"</code>) is shown firing for a notable event naming that player but
 staying silent for another player's notable event in the same game, with the same <code>callbackUrl</code> registering as a
 distinct subscription per player.</p>
+<p>Finally, it covers all four round-5 features: registering a fantasy roster backfills highlights from events already
+ingested and then tags new matching plays live, while excluding plays naming a non-rostered player, and a viewer with
+no registered roster gets an empty (not error) result; a posed prediction is shown staying <code>"open"</code> through an
+unrelated event (a rebound) and only actually resolving off a real subsequent score/turnover event, with each
+viewer's submitted answer scored correctly or incorrectly against the real outcome and folded into
+<code>GET /viewers/:viewerId/predictions/accuracy</code>, a duplicate or post-resolution answer rejected with 400, an
+out-of-options answer rejected with 400, and a prediction still open at <code>game_end</code> shown transitioning to
+<code>"voided"</code> without affecting anyone's accuracy; a watch party is created and idempotently re-joined by a
+case-insensitive duplicate name, a question asked with that party's id is asserted to arrive over the game's
+<code>GET /games/:id/stream</code> tagged <code>"party_qa"</code> and to appear in <code>GET /games/:id/parties/:partyId/qa</code>'s durable history,
+while a question asked with no <code>partyId</code> is confirmed to stay private and never appear in any party's history, and
+both a missing <code>viewerId</code> and an unknown <code>partyId</code> are rejected cleanly; and localized commentary is shown producing
+genuinely different text per locale (<code>en-casual</code> and <code>es-broadcast</code> each asserted to differ from the default
+<code>en-broadcast</code> text, with the Spanish pack asserted to contain real Spanish words), an unsupported locale rejected
+with 400, omitting <code>locale</code> confirmed to leave the original <code>en-broadcast</code> text byte-for-byte unchanged, and a
+viewer's stored <code>locale</code> preference shown applying automatically with no explicit <code>?locale=</code> on the request.</p>
 <h2 id="swapping-in-a-real-bedrock-backed-provider">Swapping in a real Bedrock-backed provider<a class="headerlink" href="#swapping-in-a-real-bedrock-backed-provider" title="Permanent link">&para;</a></h2>
 <p>Everything in <code>gameService.ts</code> and <code>server.ts</code> depends only on the <code>CommentaryProvider</code> interface in
-<code>src/commentaryProvider.ts</code> (<code>narrateEvent(game, event)</code> and <code>answerQuestion(game, question)</code>) — not on
-<code>TemplateCommentaryProvider</code> directly. To go from template fallback to a real LLM:</p>
+<code>src/commentaryProvider.ts</code> (<code>narrateEvent(game, event, locale?)</code> and <code>answerQuestion(game, question, locale?)</code>) —
+not on <code>TemplateCommentaryProvider</code> directly. To go from template fallback to a real LLM:</p>
 <ol>
 <li>Write a <code>BedrockCommentaryProvider implements CommentaryProvider</code> that builds the same <code>CommentaryPrompt</code> shape
-   the template provider builds internally (<code>buildEventPrompt</code> / <code>buildQuestionPrompt</code>, already exported) — a
-   <code>system</code> persona, an <code>instruction</code>, and serialized <code>context</code> — and forwards <code>system</code> + <code>instruction</code> + <code>context</code>
-   into a <code>bedrock-runtime</code> <code>ConverseCommand</code> (e.g. against an Anthropic Claude or Amazon Nova model on Bedrock),
-   returning the model's text response.</li>
+   the template provider builds internally (<code>buildEventPrompt</code> / <code>buildQuestionPrompt</code>, already exported, both
+   locale-aware via <code>localeSystemPersona</code>) — a <code>system</code> persona, an <code>instruction</code>, and serialized <code>context</code> — and
+   forwards <code>system</code> + <code>instruction</code> + <code>context</code> into a <code>bedrock-runtime</code> <code>ConverseCommand</code> (e.g. against an
+   Anthropic Claude or Amazon Nova model on Bedrock), returning the model's text response. A real LLM can honor
+   <code>locale</code> directly from its (already locale-aware) <code>system</code> persona instead of needing a hand-written template
+   pack per locale the way <code>TemplateCommentaryProvider</code> does.</li>
 <li>Swap the one line in <code>src/index.ts</code> that constructs <code>new TemplateCommentaryProvider()</code> for
    <code>new BedrockCommentaryProvider(bedrockClient, modelId)</code>. Nothing in <code>gameService.ts</code>, <code>server.ts</code>, or the test
    suite needs to change, since both only ever call the interface.</li>
@@ -2044,11 +2298,15 @@ one new file and one line in <code>index.ts</code>.</p>
 <li><strong>Potential Impact:</strong> Commentary generation and Q&amp;A are entirely event/data-driven and sport-agnostic (the event
   vocabulary and <code>sport</code>/<code>periodLabel</code> fields aren't basketball-specific), so the same service could sit behind any
   live-sports overlay across leagues — matching the idea's "big-tent, cross-league companion layer" pitch — without
-  a new backend per sport.</li>
+  a new backend per sport. Round 5's shared watch-party session and localized commentary packs directly widen who
+  the service reaches: co-viewing is exactly how Fire TV increasingly gets watched, and a real non-English broadcast
+  voice (not a translated placeholder) is table stakes for reaching non-English-speaking households.</li>
 <li><strong>Quality of Idea:</strong> This backend is the concrete, buildable slice of a pitch that stacks three prioritized Fire
   TV categories (AI-enhanced viewing, sports, multi-modal UX) and pairs naturally with the AWS Builder mini-challenge
   (Bedrock for commentary generation) with genuinely near-zero added scope, since the seam this submission built is
-  exactly where that Bedrock integration plugs in.</li>
+  exactly where that Bedrock integration plugs in. Round 5 pushes past production hardening into product
+  differentiation: fantasy-relevant play detection and live prediction/trivia are engagement mechanics a viewer
+  would actually seek CourtSide out for, not just infrastructure a judge would expect any production service to have.</li>
 </ul>
 
 
