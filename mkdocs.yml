@@ -1,0 +1,64 @@
+site_name: Build, Ship, Shape — Amazon Developer Hackathon
+site_description: Six category implementations for the Build, Ship, Shape Amazon Developer Hackathon.
+site_url: https://akashtalole.github.io/Build-Ship-Shape-Amazon-Developer-Hackathon/
+repo_url: https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+repo_name: akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+edit_uri: ""
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Winning Ideas:
+      - Overview: ideas/index.md
+      - Fire TV: ideas/fire-tv.md
+      - Alexa+: ideas/alexa-plus.md
+      - Bee: ideas/bee.md
+      - Ring: ideas/ring.md
+      - AWS Builder: ideas/aws-builder.md
+      - Open Source: ideas/open-source.md
+  - Projects:
+      - HomeOps (Alexa+): projects/homeops.md
+      - PorchPass (Ring): projects/porchpass.md
+      - CourtSide (Fire TV): projects/courtside.md
+      - StudyLoop (Bee): projects/studyloop.md
+      - Model Router (AWS Builder): projects/model-router.md
+      - friction-log-toolkit (Open Source): projects/friction-log-toolkit.md
+  - Deployment: deploy.md
+  - Demo Video: demo.md
+  - Devpost Submission: devpost-submission.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight
+
+plugins:
+  - search
