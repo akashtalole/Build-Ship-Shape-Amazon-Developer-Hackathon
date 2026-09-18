@@ -120,6 +120,57 @@ Notes captured while building the Fire TV CourtSide submission, for the hackatho
    `rateLimiter.ts` itself — a small confirmation that keeping that module's interface generic instead of hardcoding
    the `/ask` constants into its logic paid for itself a round later.
 
+## Round 4: season stats, recaps, multi-sport, player alerts
+
+1. **"Aggregate across every game" quietly needed a new uncapped store, twice.** Season-long stats and the recap
+   endpoint both ran into the same shape of gap round 3's highlights feature already hit once:
+   `GameState.recentEvents` is capped at 15 and scoped to one game, so neither "how many total points has this
+   player scored across the season" nor "what happened in the last 10 minutes" could be answered from it once a
+   game ran long or a viewer asked about a team across games. The fix for stats was an accumulator keyed by
+   trimmed/lowercased name (not by game), folded in once per non-duplicate event right where `isNotableEvent` is
+   already computed; the fix for recap was a second uncapped per-game event log alongside the existing uncapped
+   commentary log, since a recap needs the raw events (for a structured, sport-neutral template) not just the
+   rendered commentary text. Worth flagging as a pattern now: any "across time" or "across games" feature in this
+   codebase should assume the capped, per-game `recentEvents` list isn't the right source, before reaching for it.
+2. **Recap's window semantics had to pick a tiebreak between `since` and `sinceMinutes`, and pick it explicitly.**
+   Both are legitimate ways to ask "what did I miss" — a client that persisted a last-seen commentary id wants exact
+   resumption, one that only knows "it's been about 10 minutes" wants a rolling window — so rather than reject a
+   request with both query params, `since` simply wins if present (matching `GET .../commentary?since=`'s existing
+   precedent of accepting either an id or a timestamp under the same param without erroring). The one thing that
+   needed to be resisted was reusing `getCommentary`'s cursor logic by importing it directly — the recap needs the
+   underlying *events* in the window too (for the sport-neutral template), not just filtered commentary lines, so
+   the id/timestamp cutoff-resolution logic got duplicated in `getRecap` against `listFullEvents` rather than
+   threading commentary-derived cutoffs back through a second data source. A small amount of duplication beat a
+   forced dependency between two independent stores.
+3. **"Don't hardcode basketball language" is a real audit, not just adding an if-branch on `sport`.** It's easy to
+   add a `sport` field, thread it into `isNotableEvent`, and call it done while every phrase template still says
+   "grabs the rebound" or "finds the basket" regardless of sport — the field would exist but do nothing observable.
+   Actually satisfying the requirement meant going template-by-template (`score`, `foul`, `turnover`, `rebound`,
+   `steal`, `block`, `game_end`) and asking "does this specific phrase assume basketball," which turned out to be
+   yes for most of them (a "rebound" and a "block" are basketball-specific enough that even the *event type name*
+   carries baggage, addressed by giving non-basketball sports their own generic phrasing — "recovers the loose ball"
+   instead of "cleans up the boards" — without renaming the shared event-type vocabulary itself, since that's the
+   contract every existing test and integration already depends on). The one template intentionally left alone was
+   `templateAnswerQuestion` and `describeEvent` — neither one actually contains a basketball-specific word to begin
+   with, so branching them per sport would have been unnecessary work invented to look thorough rather than because
+   the audit found anything to fix.
+4. **The serious-foul heuristic couldn't just reuse basketball's keyword list with a shrug.** The tempting shortcut
+   was "keep the same regex, sports are basically the same" — but a real soccer feed describing a "reaching-in foul"
+   (a basketball phrase a lazily-ported feed might reuse) would never say "flagrant" or "technical," so every soccer
+   foul would silently stay on the fast path forever, and a genuine red card wouldn't escalate either. Had to
+   actually research what "serious foul" means in each sport's own vocabulary (soccer: red/second-yellow cards,
+   violent conduct; football: flagrant/targeting/unnecessary-roughness/unsportsmanlike) rather than pattern-matching
+   basketball's words onto a different sport's incidents.
+5. **Extending subscription idempotency to include a new dimension (`playerName`) meant re-deriving the key, not
+   just adding a field to compare.** The existing `getOrCreateSubscription` was keyed by `callbackUrl` alone inside
+   a per-game map; naively adding `playerName` as a second equality check on lookup would have been fine for reads
+   but wrong for the map's actual key space — two different players subscribing through the same `callbackUrl` need
+   to land in *different* map entries, not one that gets silently overwritten or returned as a false "duplicate" for
+   the second registration. Landed on folding `callbackUrl` and (when present) a normalized `playerName` into one
+   composite string key computed by a single `subscriptionKey` helper, so there's exactly one place that decides
+   what "the same subscription" means, and a subscription with no `playerName` still keys identically to before
+   (pure `callbackUrl`) — the round-3 idempotency test needed zero changes to keep passing.
+
 ## Feature requests
 
 - A minimal, published schema for a "generic play-by-play event" (type, team/player, timestamp, description) that

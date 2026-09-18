@@ -143,6 +143,31 @@ export interface Subscription {
   callbackUrl: string;
   /** Optional viewer this subscription is registered on behalf of. Purely informational — does not affect delivery. */
   viewerId?: string;
+  /**
+   * Optional player filter: when set, only a notable event whose `player`
+   * field matches this name (case-insensitively) triggers a delivery to this
+   * subscription — everything else about the game is ignored. Absent means
+   * "every notable event in the game," the original round-3 behavior.
+   */
+  playerName?: string;
   secret: string;
   createdAt: string;
+}
+
+/**
+ * Cumulative stats for one team or player, aggregated across every game
+ * ingested this process has seen (not just one game) — see
+ * `GET /stats/team/:teamName` and `GET /stats/player/:playerName`.
+ * `eventCounts` is keyed by the same `EventType` vocabulary used for
+ * ingestion, so it automatically covers whatever event types a sport uses.
+ */
+export interface EntityStats {
+  name: string;
+  /** Number of distinct games this team/player has had at least one event recorded in. */
+  gamesPlayed: number;
+  /** Sum of `points` across every "score" event attributed to this team/player. */
+  points: number;
+  eventCounts: Partial<Record<EventType, number>>;
+  /** How many of this team/player's events were notable (see `isNotableEvent`). */
+  notableEvents: number;
 }

@@ -19,4 +19,8 @@ app.listen(PORT, () => {
   console.log(`Game highlights:     GET  http://localhost:${PORT}/games/:id/highlights`);
   console.log(`Subscribe to alerts: POST http://localhost:${PORT}/games/:id/subscriptions  { "callbackUrl": "https://..." }`);
   console.log(`Multi-game watchlist GET  http://localhost:${PORT}/watchlist?viewerId=...`);
+  console.log(`Team stats:          GET  http://localhost:${PORT}/stats/team/:teamName`);
+  console.log(`Player stats:        GET  http://localhost:${PORT}/stats/player/:playerName`);
+  console.log(`Catch-up recap:      GET  http://localhost:${PORT}/games/:id/recap  (?sinceMinutes=10 or ?since=...)`);
+  console.log(`Player-level alert:  POST http://localhost:${PORT}/games/:id/subscriptions  { "callbackUrl": "https://...", "playerName": "Trae" }`);
 });

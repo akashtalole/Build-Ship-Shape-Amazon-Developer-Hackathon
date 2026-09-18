@@ -5,7 +5,10 @@ import {
   getCommentary,
   getGameMetrics,
   getHighlights,
+  getPlayerStats,
   getPreferences,
+  getRecap,
+  getTeamStats,
   getWatchlist,
   ingestEvent,
   requireGame,
@@ -202,6 +205,51 @@ export function createApp(provider: CommentaryProvider): Express {
     try {
       const viewerId = typeof req.query.viewerId === "string" ? req.query.viewerId : "";
       res.json(getWatchlist(viewerId));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Season-long cumulative stats for a team or player, aggregated across
+  // every game this process has ingested events for — not just one game.
+  // Zeroed (not a 404) for a name that's never appeared in an event, since
+  // there's no separate "team"/"player" resource that could be missing.
+  app.get("/stats/team/:teamName", (req, res) => {
+    try {
+      res.json(getTeamStats(req.params.teamName));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.get("/stats/player/:playerName", (req, res) => {
+    try {
+      res.json(getPlayerStats(req.params.playerName));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // "Catch-up" recap: a natural-language summary (via the same
+  // CommentaryProvider used for narration/Q&A) of everything that happened
+  // in a window, rather than the raw commentary lines `GET .../commentary`
+  // returns. `?sinceMinutes=<n>` recaps a rolling time window; `?since=<id
+  // or timestamp>` recaps everything after that cursor, same style as
+  // `GET /games/:id/commentary?since=`. Neither given recaps the whole game.
+  app.get("/games/:id/recap", async (req, res) => {
+    try {
+      const since = typeof req.query.since === "string" ? req.query.since : undefined;
+      let sinceMinutes: number | undefined;
+      if (typeof req.query.sinceMinutes === "string") {
+        const parsed = Number(req.query.sinceMinutes);
+        if (Number.isNaN(parsed)) {
+          res.status(400).json({ error: '"sinceMinutes" must be a number.' });
+          return;
+        }
+        sinceMinutes = parsed;
+      }
+      const result = await getRecap(req.params.id, { sinceMinutes, since }, provider);
+      res.json(result);
     } catch (err) {
       handleError(res, err);
     }

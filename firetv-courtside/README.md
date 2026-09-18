@@ -218,21 +218,120 @@ curl -X POST localhost:4455/games/<id>/subscriptions -H "Content-Type: applicati
 # -> 200 { "subscription": { ...same id and secret as the first registration... }, "duplicate": true }
 ```
 
+## Round 4: season stats, catch-up recaps, multi-sport, player alerts
+
+Four more additions: aggregating stats beyond a single game, a natural-language "what did I miss" recap for a
+window instead of raw commentary lines, generalizing the event vocabulary/templates to more than basketball, and
+narrowing the round-3 webhook subscription down to a single favorite player.
+
+### 1. Season-long stats aggregation
+
+`GET /stats/team/:teamName` and `GET /stats/player/:playerName` return cumulative totals — `points`, an
+`eventCounts` breakdown per event type, `notableEvents`, and `gamesPlayed` — aggregated across **every game this
+process has ingested events for**, not just one. Every non-duplicate event folds into whichever team/player it
+names the instant `ingestEvent` processes it (`recordTeamStat`/`recordPlayerStat` in `src/gameService.ts`), keyed by
+a trimmed, case-insensitive name so "Lakers" ingested as the home team in one game and the away team in another
+still accumulates under one entry. A name that's never appeared in an event returns a zeroed result (`200`), not a
+404 — there's no separate "team" or "player" resource to have gone missing.
+
+```bash
+curl localhost:4455/stats/team/Lakers
+# -> { "name": "Lakers", "gamesPlayed": 2, "points": 13, "eventCounts": { "score": 2, "foul": 1 }, "notableEvents": 1 }
+
+curl localhost:4455/stats/player/James
+# -> { "name": "James", "gamesPlayed": 2, "points": 13, "eventCounts": { "score": 2, "foul": 1 }, "notableEvents": 1 }
+```
+
+### 2. "Catch-up" recap endpoint
+
+`GET /games/:id/recap` generates a natural-language summary of a window of the game — via the exact same
+`CommentaryProvider` seam that narrates events and answers questions (a real Bedrock provider would summarize it;
+`TemplateCommentaryProvider`'s new `generateRecap` gives a deterministic fallback) — instead of just handing back
+the raw commentary lines the way `GET /games/:id/commentary` does. The window is expressed either as
+`?sinceMinutes=<n>` (a rolling time window ending now) or `?since=<commentary-id-or-ISO-timestamp>` (the same cursor
+style `GET /games/:id/commentary?since=` already uses — an id resolved by position, exact; a timestamp as a
+best-effort fallback); `since` wins if both are given, and omitting both recaps the whole game so far. Building this
+required giving each game its own uncapped, chronological event log (`allEventsByGame` in `src/store.ts`) alongside
+the capped `recentEvents` the live overlay uses — the same "capped list isn't an archive" lesson round 3's
+highlights feature already ran into, applied to raw events instead of just notable ones.
+
+```bash
+curl "localhost:4455/games/<id>/recap?sinceMinutes=10"
+# -> { "gameId": "...", "windowLabel": "in the last 10 minutes", "eventCount": 4,
+#      "summary": "Catching you up on what happened in the last 10 minutes: ...", "generatedAt": "..." }
+
+curl "localhost:4455/games/<id>/recap?since=<last-seen-commentary-id>"
+```
+
+### 3. Multi-sport event vocabulary
+
+A game can declare `"sport": "basketball" | "football" | "soccer"` at `POST /games` (any other value, or none, keeps
+basketball's exact original behavior — the default sport was already basketball since round 1). Two things now
+adapt per sport instead of hardcoding basketball's vocabulary:
+
+- **Commentary phrasing** (`src/commentaryProvider.ts`): each event type (`score`, `foul`, `turnover`, `rebound`,
+  `steal`, `block`, `game_end`) has its own per-sport phrase set — a soccer score says "GOAL! ... finds the back of
+  the net" instead of "Bucket for ...", a football foul says "Penalty on ..." instead of "Foul called on ...", and a
+  soccer game ends with "That's full-time!" instead of "That's the final!". A game's default `periodLabel` is now
+  sport-aware too — `"half"` for soccer, `"quarter"` for basketball and football (basketball's original default,
+  unchanged).
+- **The `isNotableEvent` foul-escalation gate** (`src/gameService.ts`): basketball's serious-foul keywords
+  (flagrant/technical/ejection) don't mean anything in soccer or football. `isSeriousFoulDescription` now branches
+  per sport — soccer escalates on "red card"/"second yellow"/"violent conduct", football on
+  "flagrant"/"ejection"/"targeting"/"unnecessary roughness"/"unsportsmanlike" — so a soccer foul description that
+  happens to say "reaching-in foul" (a basketball phrase, e.g. from a feed that reuses descriptions loosely) doesn't
+  spuriously escalate, and a real red card does.
+
+`GET /games/:id/recap` reuses the sport-neutral `describeEvent` helper (already just `[type] who +points —
+description`, no sport-specific words), so recaps adapt to any sport for free without needing their own per-sport
+phrasing.
+
+```bash
+curl -X POST localhost:4455/games -H "Content-Type: application/json" \
+  -d '{"sport": "soccer", "homeTeam": "Barca", "awayTeam": "Real"}'
+# -> periodLabel defaults to "half" instead of "quarter"
+
+curl -X POST localhost:4455/games/<id>/events -H "Content-Type: application/json" \
+  -d '{"type": "score", "team": "home", "player": "Messi", "points": 1}'
+# -> "GOAL! Messi finds the back of the net! Barca 1 - 0 Real." (never "basket"/"bucket"/"free throw")
+```
+
+### 4. Player-level alert subscriptions
+
+`POST /games/:id/subscriptions` now accepts an optional `playerName` alongside `callbackUrl`. When set, that
+subscription only fires for a notable event whose `player` field matches (case-insensitively) — a fan who only
+cares about their favorite player's moments, not every notable event in the game. Omitting `playerName` keeps
+round 3's original behavior unchanged (every notable event in the game). The idempotency key
+(`getOrCreateSubscription` in `src/store.ts`) is now `(gameId, callbackUrl, playerName)` instead of just
+`(gameId, callbackUrl)`, so the same callback URL can hold both a game-wide subscription and separate per-player
+ones without colliding, and re-registering the exact same `(callbackUrl, playerName)` pair is still idempotent.
+
+```bash
+curl -X POST localhost:4455/games/<id>/subscriptions -H "Content-Type: application/json" \
+  -d '{"callbackUrl": "https://example.com/curry-alerts", "playerName": "Curry"}'
+# -> only fires for a notable event with "player": "Curry" — a flagrant foul on a different player is silent
+```
+
 ## Project layout
 
 ```
 src/
   types.ts               Game/event/commentary data model, valid event-type vocabulary, preferences/metrics types,
-                          NotableEventRecord (highlights) and Subscription (webhook) types
+                          NotableEventRecord (highlights), Subscription (webhook, now with an optional playerName
+                          filter), and EntityStats (season-long team/player aggregation) types
   store.ts                In-memory game/commentary storage, idempotency ledger, metrics, viewer preferences,
-                           per-game highlight reel, per-game subscriptions, viewer<->game interaction tracking
-  commentaryProvider.ts    CommentaryProvider interface (the Bedrock/LLM seam) + TemplateCommentaryProvider fallback
-                           + personalizeText (per-viewer preference decorator)
+                           per-game highlight reel, per-game subscriptions (now keyed by callbackUrl+playerName),
+                           viewer<->game interaction tracking, an uncapped per-game event log (recap), and
+                           season-long team/player stats accumulators
+  commentaryProvider.ts    CommentaryProvider interface (the Bedrock/LLM seam, now including generateRecap) +
+                           TemplateCommentaryProvider fallback + personalizeText (per-viewer preference decorator)
+                           + per-sport phrase tables and the serious-foul vocabulary isNotableEvent uses per sport
   gameService.ts           Core logic: start a game, ingest + validate + de-duplicate events, confidence-gated
-                           commentary routing (isNotableEvent), generate commentary, answer questions, highlights,
-                           subscription registration, cross-game watchlist aggregation
+                           commentary routing (isNotableEvent, now sport-aware), generate commentary, answer
+                           questions, highlights, subscription registration (game- or player-scoped), cross-game
+                           watchlist aggregation, season-long stats lookups, and the catch-up recap
   webhooks.ts             Outbound score-alert delivery: HMAC-SHA256 signing, retry with exponential backoff,
-                           per-subscription rate capping
+                           per-subscription rate capping, and player-name filtering before fan-out
   pubsub.ts               Per-game EventEmitter registry powering the SSE stream
   rateLimiter.ts           Fixed-window rate limiter shared by POST /ask and outbound webhook delivery
   server.ts                Express app factory: the HTTP API a Fire TV overlay would poll and stream
@@ -242,7 +341,9 @@ test/
                             Q&A → unknown-game 404s → invalid-event 400s → ordering guarantees → SSE push →
                             idempotent ingestion → fast/escalated routing → per-viewer personalization →
                             resumable feed → /ask rate limiting → highlights → signed webhook delivery →
-                            idempotent subscriptions → per-subscription rate cap → multi-game watchlist
+                            idempotent subscriptions → per-subscription rate cap → multi-game watchlist →
+                            season-long team/player stats → windowed catch-up recaps → sport-aware commentary
+                            and notable-event heuristic → player-scoped alert subscriptions
 ```
 
 ## Running it
@@ -314,6 +415,18 @@ of 8 notable events against one subscription results in exactly 5 deliveries (th
 while the full 8 still show up in that game's `/highlights`; and `GET /watchlist?viewerId=...` aggregates notable
 events across two different games one viewer interacted with (one via `/ask`, one via preferences), newest-first
 across games, with an empty (not error) result for a viewer with no interactions yet.
+
+Finally, it covers all four round-4 features: `GET /stats/team/:teamName` and `GET /stats/player/:playerName`
+correctly sum points/eventCounts/gamesPlayed for a team and player that appeared in two separate games (one as home,
+one as away), and return a zeroed result for a name never seen; `GET /games/:id/recap?since=<cursor>` summarizes
+only the event after the cursor (mentioning it by name) while never mentioning an earlier event outside the window,
+`?sinceMinutes=` and no-window-at-all are also exercised; a soccer game's generated commentary is asserted to avoid
+basketball-specific words ("basket"/"bucket"/"free throw"/"boards") and its notable-event heuristic is shown using
+soccer's own serious-foul vocabulary (a basketball-phrased description stays routine, a "red card" escalates), while
+a game with no sport specified is confirmed to keep basketball's original `periodLabel` default unchanged; and a
+player-scoped subscription (`playerName: "Curry"`) is shown firing for a notable event naming that player but
+staying silent for another player's notable event in the same game, with the same `callbackUrl` registering as a
+distinct subscription per player.
 
 ## Swapping in a real Bedrock-backed provider
 

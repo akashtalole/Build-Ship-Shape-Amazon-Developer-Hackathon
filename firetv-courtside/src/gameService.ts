@@ -1,20 +1,32 @@
 import { randomUUID } from "node:crypto";
-import { TemplateCommentaryProvider, personalizeText, type CommentaryProvider } from "./commentaryProvider.js";
+import {
+  defaultPeriodLabel,
+  isSeriousFoulDescription,
+  personalizeText,
+  TemplateCommentaryProvider,
+  type CommentaryProvider,
+} from "./commentaryProvider.js";
 import { publish } from "./pubsub.js";
 import {
   addCommentary,
+  addFullEvent,
   addNotableEvent,
   bumpMetric,
   getExternalEventRecord,
   getGame,
   getMetrics,
   getOrCreateSubscription,
+  getPlayerStats as getPlayerStatsRecord,
+  getTeamStats as getTeamStatsRecord,
   getViewerGames,
   getViewerPreferences,
   listCommentary,
+  listFullEvents,
   listNotableEvents,
   pushRecentEvent,
   recordExternalEvent,
+  recordPlayerStat,
+  recordTeamStat,
   recordViewerGame,
   saveGame,
   setViewerPreferences,
@@ -23,6 +35,7 @@ import {
   VALID_EVENT_TYPES,
   type AskQuestionResult,
   type CommentaryLine,
+  type EntityStats,
   type GameEvent,
   type GameMetrics,
   type GameState,
@@ -59,7 +72,7 @@ export function startGame(input: StartGameInput): GameState {
     homeScore: 0,
     awayScore: 0,
     period: 1,
-    periodLabel: input.periodLabel?.trim() || "quarter",
+    periodLabel: input.periodLabel?.trim() || defaultPeriodLabel(input.sport),
     clock: input.initialClock?.trim() || "12:00",
     status: "in_progress",
     recentEvents: [],
@@ -147,7 +160,7 @@ export function isNotableEvent(
   }
 
   if (event.type === "foul") {
-    return /flagrant|technical|ejection/i.test(event.description ?? "");
+    return isSeriousFoulDescription(game.sport, event.description);
   }
 
   return false;
@@ -195,9 +208,17 @@ export async function ingestEvent(
 
   applyEventToState(game, event);
   pushRecentEvent(game, event);
+  addFullEvent(gameId, event); // uncapped, unlike recentEvents — powers GET /games/:id/recap
   saveGame(game);
 
   const notable = isNotableEvent(event, priorHomeScore, priorAwayScore, game);
+
+  // Season-long stats aggregation (GET /stats/team/:teamName, GET /stats/player/:playerName):
+  // folds this event into whichever team/player it names, across every game ever ingested.
+  const eventTeamName = event.team === "home" ? game.homeTeam : event.team === "away" ? game.awayTeam : undefined;
+  const eventPoints = event.type === "score" ? event.points ?? 0 : 0;
+  if (eventTeamName) recordTeamStat(eventTeamName, gameId, event.type, eventPoints, notable);
+  if (event.player) recordPlayerStat(event.player, gameId, event.type, eventPoints, notable);
   const text = notable
     ? await provider.narrateEvent(game, event)
     : await fastPathProvider.narrateEvent(game, event);
@@ -364,13 +385,20 @@ export interface SubscribeResult {
 /**
  * Registers a webhook to be POSTed a signed alert whenever a notable event
  * happens in `gameId` (see `webhooks.ts`). Idempotent on (gameId,
- * callbackUrl) — registering the same callback twice for the same game
- * returns the original subscription (same id, same secret) rather than
- * creating a duplicate that would double-fire every alert.
+ * callbackUrl, playerName) — registering the same callback (with the same
+ * optional player filter) twice for the same game returns the original
+ * subscription (same id, same secret) rather than creating a duplicate that
+ * would double-fire every alert.
+ *
+ * An optional `playerName` scopes delivery to only notable events naming
+ * that player (see `notifySubscribers` in webhooks.ts) — e.g. a fan who only
+ * cares about their favorite player's moments, not every notable event in
+ * the game. Omitting it keeps the original round-3 behavior (every notable
+ * event in the game).
  */
 export function subscribeToGame(
   gameId: string,
-  input: { callbackUrl?: unknown; viewerId?: unknown }
+  input: { callbackUrl?: unknown; viewerId?: unknown; playerName?: unknown }
 ): SubscribeResult {
   requireGame(gameId);
 
@@ -389,12 +417,14 @@ export function subscribeToGame(
   }
 
   const viewerId = typeof input?.viewerId === "string" && input.viewerId.trim() ? input.viewerId.trim() : undefined;
+  const playerName = typeof input?.playerName === "string" && input.playerName.trim() ? input.playerName.trim() : undefined;
 
-  return getOrCreateSubscription(gameId, callbackUrl, () => ({
+  return getOrCreateSubscription(gameId, callbackUrl, playerName, () => ({
     id: randomUUID(),
     gameId,
     callbackUrl,
     viewerId,
+    playerName,
     secret: generateSecret(),
     createdAt: new Date().toISOString(),
   }));
@@ -440,4 +470,121 @@ export function getWatchlist(viewerId: string): WatchlistResult {
   highlights.sort((a, b) => b.event.occurredAt.localeCompare(a.event.occurredAt));
 
   return { viewerId: id, gameIds, highlights };
+}
+
+// --- Season-long stats aggregation -------------------------------------------
+
+/** A team's cumulative stats across every game ingested this process has seen. Zeroed (not a 404) for a team that's never appeared in an event — there's no separate "team" resource to have missed. */
+export function getTeamStats(teamName: string): EntityStats {
+  const name = typeof teamName === "string" ? teamName.trim() : "";
+  if (!name) {
+    throw new ValidationError("A non-empty team name is required.");
+  }
+  return getTeamStatsRecord(name);
+}
+
+/** A player's cumulative stats across every game ingested this process has seen. Zeroed (not a 404) for a player that's never appeared in an event. */
+export function getPlayerStats(playerName: string): EntityStats {
+  const name = typeof playerName === "string" ? playerName.trim() : "";
+  if (!name) {
+    throw new ValidationError("A non-empty player name is required.");
+  }
+  return getPlayerStatsRecord(name);
+}
+
+// --- "Catch-up" recap -------------------------------------------------------
+
+export interface RecapOptions {
+  /** Recap everything from this many minutes ago until now. Mutually exclusive with `since` (since is preferred if both are given). */
+  sinceMinutes?: number;
+  /** Recap everything strictly after this commentary-id or ISO-timestamp cursor — same style as `GET /games/:id/commentary?since=`. */
+  since?: string;
+}
+
+export interface RecapResult {
+  gameId: string;
+  /** Human-readable description of the window that was recapped. */
+  windowLabel: string;
+  sinceMinutes?: number;
+  since?: string;
+  /** How many events fell inside the window. */
+  eventCount: number;
+  /** The natural-language summary, generated by the same `CommentaryProvider` used for event narration/Q&A (template fallback included). */
+  summary: string;
+  generatedAt: string;
+}
+
+/**
+ * "Catch-up" recap: a natural-language summary of everything that happened
+ * in a window, generated via the same `CommentaryProvider` seam that
+ * narrates events and answers questions (so a real Bedrock-backed provider
+ * summarizes it; `TemplateCommentaryProvider` gives a deterministic
+ * fallback) — rather than just handing back the raw commentary lines.
+ *
+ * The window is expressed either as `sinceMinutes` (a rolling time window
+ * ending now) or `since` (a commentary-id or ISO-timestamp cursor, in the
+ * same style as `GET /games/:id/commentary?since=`); `since` wins if both
+ * are given. Neither given recaps the whole game so far.
+ */
+export async function getRecap(
+  gameId: string,
+  options: RecapOptions,
+  provider: CommentaryProvider
+): Promise<RecapResult> {
+  const game = requireGame(gameId);
+  const allEvents = listFullEvents(gameId); // newest first, uncapped
+  const allCommentary = listCommentary(gameId); // newest first
+
+  let windowEvents: GameEvent[];
+  let windowCommentary: CommentaryLine[];
+  let windowLabel: string;
+
+  if (options.since !== undefined) {
+    const since = options.since;
+    const idIndex = allCommentary.findIndex((c) => c.id === since);
+    let cutoffTime: number;
+    if (idIndex !== -1) {
+      windowCommentary = allCommentary.slice(0, idIndex); // everything newer than the matched entry
+      cutoffTime = new Date(allCommentary[idIndex].createdAt).getTime();
+    } else {
+      const parsed = Date.parse(since);
+      if (Number.isNaN(parsed)) {
+        throw new ValidationError('"since" must be a known commentary id or a valid ISO timestamp.');
+      }
+      cutoffTime = parsed;
+      windowCommentary = allCommentary.filter((c) => new Date(c.createdAt).getTime() > cutoffTime);
+    }
+    windowEvents = allEvents.filter((e) => new Date(e.occurredAt).getTime() > cutoffTime);
+    windowLabel = `since ${since}`;
+  } else if (options.sinceMinutes !== undefined) {
+    const minutes = options.sinceMinutes;
+    if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) {
+      throw new ValidationError('"sinceMinutes" must be a positive number.');
+    }
+    const cutoffTime = Date.now() - minutes * 60_000;
+    windowEvents = allEvents.filter((e) => new Date(e.occurredAt).getTime() >= cutoffTime);
+    windowCommentary = allCommentary.filter((c) => new Date(c.createdAt).getTime() >= cutoffTime);
+    windowLabel = `in the last ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  } else {
+    windowEvents = allEvents;
+    windowCommentary = allCommentary;
+    windowLabel = "so far this game";
+  }
+
+  // Provider input reads chronologically (oldest first) — a narrative recap,
+  // not the newest-first order the rest of the API uses for feeds.
+  const chronoEvents = [...windowEvents].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+  const chronoCommentary = [...windowCommentary].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  const summary = await provider.generateRecap(game, chronoEvents, chronoCommentary, windowLabel);
+
+  return {
+    gameId: game.id,
+    windowLabel,
+    sinceMinutes: options.sinceMinutes,
+    since: options.since,
+    eventCount: chronoEvents.length,
+    summary,
+    generatedAt: new Date().toISOString(),
+  };
 }
