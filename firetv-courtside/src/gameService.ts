@@ -3,14 +3,19 @@ import { TemplateCommentaryProvider, personalizeText, type CommentaryProvider } 
 import { publish } from "./pubsub.js";
 import {
   addCommentary,
+  addNotableEvent,
   bumpMetric,
   getExternalEventRecord,
   getGame,
   getMetrics,
+  getOrCreateSubscription,
+  getViewerGames,
   getViewerPreferences,
   listCommentary,
+  listNotableEvents,
   pushRecentEvent,
   recordExternalEvent,
+  recordViewerGame,
   saveGame,
   setViewerPreferences,
 } from "./store.js";
@@ -22,9 +27,12 @@ import {
   type GameMetrics,
   type GameState,
   type IncomingGameEvent,
+  type NotableEventRecord,
   type StartGameInput,
+  type Subscription,
   type ViewerPreferences,
 } from "./types.js";
+import { generateSecret, notifySubscribers } from "./webhooks.js";
 
 export class ValidationError extends Error {}
 export class NotFoundError extends Error {}
@@ -210,6 +218,16 @@ export async function ingestEvent(
 
   publish(gameId, { type: "commentary", commentary, state: game });
 
+  // Highlights + outbound score alerts both key off the same notability
+  // signal already computed above — see "Game archive & highlights" and
+  // "Outbound score-alert subscriptions" in the README. `notifySubscribers`
+  // is deliberately not awaited: delivery (and any retries) must never add
+  // latency to the request that ingested the play.
+  if (notable) {
+    addNotableEvent(gameId, { event, commentary });
+    notifySubscribers(gameId, event, commentary);
+  }
+
   return { game, event, commentary, path: notable ? "escalated" : "fast" };
 }
 
@@ -260,6 +278,9 @@ export async function askQuestion(
   if (!question?.trim()) {
     throw new ValidationError('A non-empty "question" field is required.');
   }
+  if (viewerId?.trim()) {
+    recordViewerGame(viewerId.trim(), gameId); // powers GET /watchlist — "games this viewer has interacted with"
+  }
   const rawAnswer = await provider.answerQuestion(game, question.trim());
   const prefs = viewerId ? getViewerPreferences(gameId, viewerId) : undefined;
   const answer = personalizeText(rawAnswer, game, prefs);
@@ -284,6 +305,7 @@ export function setPreferences(
     verbosity: input?.verbosity as ViewerPreferences["verbosity"],
   };
   setViewerPreferences(gameId, viewerId.trim(), prefs);
+  recordViewerGame(viewerId.trim(), gameId); // powers GET /watchlist — "games this viewer has interacted with"
   return prefs;
 }
 
@@ -296,4 +318,126 @@ export function getPreferences(gameId: string, viewerId: string): ViewerPreferen
 export function getGameMetrics(gameId: string): GameMetrics {
   requireGame(gameId);
   return getMetrics(gameId);
+}
+
+// --- Game archive & highlights ---------------------------------------------
+
+export interface HighlightsResult {
+  gameId: string;
+  homeTeam: string;
+  awayTeam: string;
+  status: GameState["status"];
+  homeScore: number;
+  awayScore: number;
+  /** Notable moments only (see `isNotableEvent`), newest first. Populated live — a game that hasn't ended yet still returns highlights-so-far. */
+  highlights: NotableEventRecord[];
+}
+
+/**
+ * A shareable recap of a game's notable moments — reuses the exact same
+ * `isNotableEvent` signal that drives confidence-gated commentary routing
+ * (see `ingestEvent`) rather than a second, separate notion of "highlight
+ * worthy". Works identically for an in-progress game (highlights-so-far) and
+ * a finished one (the full recap, since `game_end` always qualifies).
+ */
+export function getHighlights(gameId: string): HighlightsResult {
+  const game = requireGame(gameId);
+  return {
+    gameId: game.id,
+    homeTeam: game.homeTeam,
+    awayTeam: game.awayTeam,
+    status: game.status,
+    homeScore: game.homeScore,
+    awayScore: game.awayScore,
+    highlights: listNotableEvents(gameId), // already newest-first
+  };
+}
+
+// --- Outbound score-alert subscriptions -------------------------------------
+
+export interface SubscribeResult {
+  subscription: Subscription;
+  /** False when this call matched an existing (gameId, callbackUrl) registration instead of creating a new one. */
+  created: boolean;
+}
+
+/**
+ * Registers a webhook to be POSTed a signed alert whenever a notable event
+ * happens in `gameId` (see `webhooks.ts`). Idempotent on (gameId,
+ * callbackUrl) — registering the same callback twice for the same game
+ * returns the original subscription (same id, same secret) rather than
+ * creating a duplicate that would double-fire every alert.
+ */
+export function subscribeToGame(
+  gameId: string,
+  input: { callbackUrl?: unknown; viewerId?: unknown }
+): SubscribeResult {
+  requireGame(gameId);
+
+  const callbackUrl = typeof input?.callbackUrl === "string" ? input.callbackUrl.trim() : "";
+  if (!callbackUrl) {
+    throw new ValidationError('A non-empty "callbackUrl" field is required.');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(callbackUrl);
+  } catch {
+    throw new ValidationError('"callbackUrl" must be a valid URL.');
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ValidationError('"callbackUrl" must be an http:// or https:// URL.');
+  }
+
+  const viewerId = typeof input?.viewerId === "string" && input.viewerId.trim() ? input.viewerId.trim() : undefined;
+
+  return getOrCreateSubscription(gameId, callbackUrl, () => ({
+    id: randomUUID(),
+    gameId,
+    callbackUrl,
+    viewerId,
+    secret: generateSecret(),
+    createdAt: new Date().toISOString(),
+  }));
+}
+
+// --- Multi-game watchlist ----------------------------------------------------
+
+export interface WatchlistEntry extends NotableEventRecord {
+  gameId: string;
+  homeTeam: string;
+  awayTeam: string;
+}
+
+export interface WatchlistResult {
+  viewerId: string;
+  /** Every game this viewer has interacted with (asked a question on, or set preferences for). */
+  gameIds: string[];
+  /** Notable events across all of those games, newest first regardless of which game they happened in. */
+  highlights: WatchlistEntry[];
+}
+
+/**
+ * "What did I miss across all my games?" — aggregates notable events across
+ * every game a viewer has asked a question on or set preferences for (see
+ * `recordViewerGame` call sites in `askQuestion`/`setPreferences`), ordered
+ * newest-first across games rather than grouped per game.
+ */
+export function getWatchlist(viewerId: string): WatchlistResult {
+  if (!viewerId?.trim()) {
+    throw new ValidationError('A non-empty "viewerId" query parameter is required.');
+  }
+  const id = viewerId.trim();
+  const gameIds = getViewerGames(id);
+
+  const highlights: WatchlistEntry[] = [];
+  for (const gameId of gameIds) {
+    const game = getGame(gameId);
+    if (!game) continue; // defensive: shouldn't happen, games are never deleted
+    for (const record of listNotableEvents(gameId)) {
+      highlights.push({ gameId, homeTeam: game.homeTeam, awayTeam: game.awayTeam, ...record });
+    }
+  }
+  highlights.sort((a, b) => b.event.occurredAt.localeCompare(a.event.occurredAt));
+
+  return { viewerId: id, gameIds, highlights };
 }

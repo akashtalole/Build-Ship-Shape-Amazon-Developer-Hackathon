@@ -116,3 +116,33 @@ export interface GameMetrics {
   fastPathCount: number;
   escalatedCount: number;
 }
+
+/**
+ * A notable event paired with the commentary generated for it — the unit
+ * both `GET /games/:id/highlights` and `GET /watchlist` are built from. See
+ * `isNotableEvent` in gameService.ts for what qualifies. Stored uncapped
+ * (unlike `GameState.recentEvents`, which is capped for the live overlay),
+ * since a highlight reel needs the whole game's notable moments, not just
+ * the last few.
+ */
+export interface NotableEventRecord {
+  event: GameEvent;
+  commentary: CommentaryLine;
+}
+
+/**
+ * A webhook registration for `POST /games/:id/subscriptions`: notifies
+ * `callbackUrl` with a signed payload whenever a notable event happens in
+ * `gameId`. `secret` is generated server-side and returned once in the
+ * registration response — the receiver uses it to verify the
+ * `X-CourtSide-Signature` header on each delivery (see README).
+ */
+export interface Subscription {
+  id: string;
+  gameId: string;
+  callbackUrl: string;
+  /** Optional viewer this subscription is registered on behalf of. Purely informational — does not affect delivery. */
+  viewerId?: string;
+  secret: string;
+  createdAt: string;
+}

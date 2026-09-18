@@ -137,25 +137,112 @@ curl -X POST localhost:4455/games/<id>/ask -H "Content-Type: application/json" \
 # -> 429 { "error": "Too many questions for this game — limit is 10 per 60s. ...", "retryAfterMs": 4213 }
 ```
 
+## Round 3: archive, alerts, and a cross-game watchlist
+
+Four more additions, all building directly on top of the confidence-gating work from round 2 rather than
+duplicating it: a shareable highlight reel, outbound webhook alerts for notable moments, a multi-game "what did I
+miss" view, and the idempotency/rate-limiting discipline those alerts need to be safe to turn on.
+
+### 1. Game archive & highlights
+
+`GET /games/:id/highlights` returns a shareable recap of a game's notable moments — and reuses the *exact same*
+`isNotableEvent` heuristic from round 2's confidence-gated commentary routing (`src/gameService.ts`) rather than a
+second, separate notion of "highlight-worthy". Every notable event is now also appended to an uncapped per-game
+highlight reel (`src/store.ts`'s `notableEventsByGame`, distinct from the capped `recentEvents` used for the live
+overlay) the moment `ingestEvent` decides it's notable — so the endpoint works identically whether the game is still
+in progress (highlights-so-far) or has already received a `game_end` event (`game_end` is always notable, so it's
+always the top entry in a finished game's recap).
+
+```bash
+curl localhost:4455/games/<id>/highlights
+# -> { "gameId": "...", "status": "in_progress", "homeScore": 8, "awayScore": 6,
+#      "highlights": [ { "event": {...}, "commentary": {...} }, ... ] }  // newest first
+```
+
+### 2. Outbound score-alert subscriptions
+
+`POST /games/:id/subscriptions { "callbackUrl": "https://...", "viewerId"?: "..." }` registers a webhook that gets a
+signed `POST` the instant a *notable* event happens in that game — the same notability signal driving highlights
+above. The response includes a freshly generated per-subscription secret (`subscription.secret`), returned exactly
+once, that the receiver uses to verify each delivery.
+
+Delivery (`src/webhooks.ts`) is fire-and-forget from `ingestEvent`'s point of view — the ingestion request that
+triggered a notable event returns immediately regardless of how the webhook delivery goes. Each delivery is signed
+with `HMAC-SHA256` over the raw JSON body using the subscription's secret, sent as
+`X-CourtSide-Signature: sha256=<hex-digest>` (the same `algo=digest` convention GitHub/Stripe webhooks use). A
+failing delivery (non-2xx response or a network error) is retried up to 3 attempts total, with exponential backoff
+(150ms, then 300ms) between attempts, before being given up on and logged.
+
+```bash
+# Register a webhook (note the returned "secret" — you'll need it to verify deliveries)
+curl -X POST localhost:4455/games/<id>/subscriptions -H "Content-Type: application/json" \
+  -d '{"callbackUrl": "https://example.com/courtside-alerts"}'
+# -> 201 { "subscription": { "id": "...", "callbackUrl": "...", "secret": "a3f1...c9", "createdAt": "..." }, "duplicate": false }
+
+# Verify a delivery on the receiving end (Node example):
+#   const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+#   if (`sha256=${expected}` !== req.headers["x-courtside-signature"]) reject();
+```
+
+### 3. Multi-game watchlist
+
+`GET /watchlist?viewerId=<id>` answers "what did I miss across every game I'm following?" — it aggregates notable
+events across every game that viewer has interacted with (asked a question on via `POST /games/:id/ask`, or set
+preferences for via `POST /games/:id/viewers/:viewerId/preferences`), ordered newest-first *across* games rather
+than grouped per game. A viewer who hasn't interacted with any game yet gets an empty (not error) watchlist.
+
+```bash
+curl "localhost:4455/watchlist?viewerId=v1"
+# -> { "viewerId": "v1", "gameIds": ["game-a", "game-b"],
+#      "highlights": [ { "gameId": "game-b", "homeTeam": "...", "awayTeam": "...", "event": {...}, "commentary": {...} }, ... ] }
+```
+
+### 4. Idempotent, rate-limited subscriptions
+
+`POST /games/:id/subscriptions` is idempotent on `(gameId, callbackUrl)` — the same spirit as round 2's
+`externalEventId` ingestion idempotency. Registering the same `callbackUrl` for the same game twice returns the
+*original* subscription (`200`, `"duplicate": true`, same `id` and `secret`) rather than creating a second one that
+would double-fire every future alert.
+
+Each subscription is also capped at **5 alert deliveries per rolling 60-second window** (reusing the same
+fixed-window `checkRateLimit` from `src/rateLimiter.ts` that powers `/ask`'s rate limiting, keyed per subscription
+instead of per viewer). A burst of notable events beyond the cap — several quick go-ahead scores, say — has its
+*excess deliveries dropped* for that subscription rather than queued or batched: the receiver never gets flooded,
+and nothing is actually lost, since the full, uncapped notable-event history is always available afterward via
+`GET /games/:id/highlights`. See `FRICTION_LOG.md` for why "drop" was chosen over "batch" here.
+
+```bash
+# Registering the same callback twice is a no-op, not a second subscription:
+curl -X POST localhost:4455/games/<id>/subscriptions -H "Content-Type: application/json" \
+  -d '{"callbackUrl": "https://example.com/courtside-alerts"}'
+# -> 200 { "subscription": { ...same id and secret as the first registration... }, "duplicate": true }
+```
+
 ## Project layout
 
 ```
 src/
-  types.ts               Game/event/commentary data model, valid event-type vocabulary, preferences/metrics types
-  store.ts                In-memory game/commentary storage, idempotency ledger, metrics, viewer preferences
+  types.ts               Game/event/commentary data model, valid event-type vocabulary, preferences/metrics types,
+                          NotableEventRecord (highlights) and Subscription (webhook) types
+  store.ts                In-memory game/commentary storage, idempotency ledger, metrics, viewer preferences,
+                           per-game highlight reel, per-game subscriptions, viewer<->game interaction tracking
   commentaryProvider.ts    CommentaryProvider interface (the Bedrock/LLM seam) + TemplateCommentaryProvider fallback
                            + personalizeText (per-viewer preference decorator)
   gameService.ts           Core logic: start a game, ingest + validate + de-duplicate events, confidence-gated
-                           commentary routing (isNotableEvent), generate commentary, answer questions
+                           commentary routing (isNotableEvent), generate commentary, answer questions, highlights,
+                           subscription registration, cross-game watchlist aggregation
+  webhooks.ts             Outbound score-alert delivery: HMAC-SHA256 signing, retry with exponential backoff,
+                           per-subscription rate capping
   pubsub.ts               Per-game EventEmitter registry powering the SSE stream
-  rateLimiter.ts           Fixed-window rate limiter for POST /ask
+  rateLimiter.ts           Fixed-window rate limiter shared by POST /ask and outbound webhook delivery
   server.ts                Express app factory: the HTTP API a Fire TV overlay would poll and stream
   index.ts                 Entry point
 test/
   smoke.test.ts            End-to-end test over real HTTP: start game → ingest events → state/commentary →
                             Q&A → unknown-game 404s → invalid-event 400s → ordering guarantees → SSE push →
                             idempotent ingestion → fast/escalated routing → per-viewer personalization →
-                            resumable feed → /ask rate limiting
+                            resumable feed → /ask rate limiting → highlights → signed webhook delivery →
+                            idempotent subscriptions → per-subscription rate cap → multi-game watchlist
 ```
 
 ## Running it
@@ -217,6 +304,16 @@ both escalate, reflected exactly in `GET /games/:id/metrics`; a viewer's stored 
 stay unchanged; `?since=<commentary-id>` (and `?since=<timestamp>`) returns only newer entries; and the 11th rapid
 question from one viewer in one game is rejected with 429 while a second viewer on the same game is unaffected. No
 external services required.
+
+It then covers all four round-3 features: `GET /games/:id/highlights` returns only the notable events out of a mixed
+sequence of routine/notable ones, both while the game is in progress and after `game_end`; a webhook registered via
+`POST /games/:id/subscriptions` (against a tiny local `http.createServer` the test spins up itself) receives a
+correctly HMAC-SHA256-signed `POST` the moment a notable event is ingested, and nothing at all for a routine one;
+registering the same `callbackUrl` twice returns the original subscription instead of creating a duplicate; a burst
+of 8 notable events against one subscription results in exactly 5 deliveries (the rate cap) with the rest dropped,
+while the full 8 still show up in that game's `/highlights`; and `GET /watchlist?viewerId=...` aggregates notable
+events across two different games one viewer interacted with (one via `/ask`, one via preferences), newest-first
+across games, with an empty (not error) result for a viewer with no interactions yet.
 
 ## Swapping in a real Bedrock-backed provider
 
