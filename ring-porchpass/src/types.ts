@@ -35,6 +35,36 @@ export interface Pass {
   recurrence?: RecurrenceRule; // when set, validity within [validFrom, validUntil] is further narrowed to matching day/time windows
   allowQuietHours?: boolean; // opt out of household quiet-hours enforcement for this specific pass
   idempotencyKey?: string; // the key this pass was issued under, if any (for debugging/audit)
+  deviceIds?: string[]; // Ring device(s) this pass's check-in correlates against; defaults to [FRONT_DOOR_DEVICE_ID] when omitted, for backward compatibility
+  extension?: PassExtension; // grace-period extension request/decision state — see passService.ts's request/decide-extension flow
+}
+
+/**
+ * Tracks a homeowner-side registered Ring device. Devices need no separate
+ * setup step to be usable — the first pass or Ring event that references a
+ * `deviceId` implicitly registers it (see `devices.ts`) — `POST /devices`
+ * is available for a homeowner who wants to name one ahead of time.
+ */
+export interface Device {
+  id: string;
+  name: string;
+  registeredAt: string; // ISO timestamp
+  registeredVia: "explicit" | "pass" | "event"; // how this device first came to be known to PorchPass
+}
+
+/**
+ * State machine for a grace-period check-in extension: `undefined` (never
+ * requested) -> "pending" (visitor asked, homeowner not yet responded) ->
+ * "approved" | "denied" (homeowner's decision, final). An approved
+ * extension is usable for exactly one more check-in, within a short window
+ * after `decidedAt` (see `EXTENSION_USABLE_WINDOW_MS` in `passService.ts`);
+ * `usedAt` marks that single use as spent so it can't be replayed.
+ */
+export interface PassExtension {
+  status: "pending" | "approved" | "denied";
+  requestedAt: string; // ISO timestamp
+  decidedAt?: string; // ISO timestamp — set once the homeowner approves or denies
+  usedAt?: string; // ISO timestamp — set once an approved extension is consumed by a check-in
 }
 
 export type RingEventType = "ding" | "motion";

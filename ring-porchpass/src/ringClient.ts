@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RingEvent, RingEventType } from "./types.js";
+import { registerDevice } from "./devices.js";
 
 /**
  * The seam between PorchPass's access-control logic and Ring itself. A real
@@ -28,10 +29,14 @@ export class SimulatedRingClient implements RingClient {
   private events: RingEvent[] = [];
 
   async emitEvent(deviceId: string, type: RingEventType): Promise<RingEvent> {
+    // Any deviceId is accepted here — this is one of the two places a device
+    // can become "registered" (the other being a pass that names one in its
+    // `deviceIds`); see `devices.ts`.
+    const device = registerDevice(deviceId, { via: "event" });
     const event: RingEvent = {
       id: randomUUID(),
       deviceId,
-      deviceName: deviceId === "front-door" ? "Front Door" : deviceId,
+      deviceName: device.name,
       type,
       occurredAt: new Date().toISOString(),
       // A real client would return Ring's actual signed snapshot/clip URL.
