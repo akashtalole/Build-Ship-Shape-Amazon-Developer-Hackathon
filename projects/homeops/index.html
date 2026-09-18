@@ -1,0 +1,1867 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Six category implementations for the Build, Ship, Shape Amazon Developer Hackathon.">
+      
+      
+      
+        <link rel="canonical" href="https://akashtalole.github.io/Build-Ship-Shape-Amazon-Developer-Hackathon/projects/homeops/">
+      
+      
+        <link rel="prev" href="../../ideas/open-source/">
+      
+      
+        <link rel="next" href="../porchpass/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>HomeOps (Alexa+) - Build, Ship, Shape — Amazon Developer Hackathon</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#homeops-household-operations-mcp-server-for-alexa" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Build, Ship, Shape — Amazon Developer Hackathon" class="md-header__button md-logo" aria-label="Build, Ship, Shape — Amazon Developer Hackathon" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Build, Ship, Shape — Amazon Developer Hackathon
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              HomeOps (Alexa+)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ideas/" class="md-tabs__link">
+          
+  
+  
+  Winning Ideas
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  Projects
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../deploy/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../demo/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Demo Video
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../devpost-submission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Devpost Submission
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Build, Ship, Shape — Amazon Developer Hackathon" class="md-nav__button md-logo" aria-label="Build, Ship, Shape — Amazon Developer Hackathon" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Build, Ship, Shape — Amazon Developer Hackathon
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Winning Ideas
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Winning Ideas
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/fire-tv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fire TV
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/alexa-plus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alexa+
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/bee/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bee
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/ring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/aws-builder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS Builder
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/open-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Open Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Projects
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HomeOps (Alexa+)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HomeOps (Alexa+)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-it-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What it does
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What it does">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#advancedunique-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced/unique features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Persistence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#connecting-with-a-bearer-token-multi-household" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connecting with a bearer token (multi-household)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#issuing-a-read-only-token-role-based-access-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Issuing a read-only token (role-based access control)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registering-an-alert-webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registering an alert webhook
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#wiring-it-up-to-alexa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wiring it up to Alexa+
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-resumability-by-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying resumability by hand
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#judging-criteria-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Judging-criteria alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#friction-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Friction log
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porchpass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PorchPass (Ring)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../courtside/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CourtSide (Fire TV)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../studyloop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    StudyLoop (Bee)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../model-router/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Router (AWS Builder)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../friction-log-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    friction-log-toolkit (Open Source)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deploy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demo Video
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../devpost-submission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devpost Submission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-it-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What it does
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What it does">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#advancedunique-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced/unique features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Persistence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#connecting-with-a-bearer-token-multi-household" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connecting with a bearer token (multi-household)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#issuing-a-read-only-token-role-based-access-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Issuing a read-only token (role-based access control)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#registering-an-alert-webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registering an alert webhook
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#wiring-it-up-to-alexa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wiring it up to Alexa+
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-resumability-by-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying resumability by hand
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#judging-criteria-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Judging-criteria alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#friction-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Friction log
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<div class="admonition note">
+<p class="admonition-title">Source of truth</p>
+<p>This page mirrors <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/alexa-homeops-mcp/README.md"><code>alexa-homeops-mcp/README.md</code></a> in the repo — edit it there, not here. Links below point back to the repo on GitHub.</p>
+</div>
+<h1 id="homeops-household-operations-mcp-server-for-alexa">HomeOps — Household Operations MCP Server for Alexa+<a class="headerlink" href="#homeops-household-operations-mcp-server-for-alexa" title="Permanent link">&para;</a></h1>
+<p>Implementation of the "HomeOps" idea from <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/hackathon-ideas/alexa-plus.md"><code>hackathon-ideas/alexa-plus.md</code></a>: a
+self-hosted <a href="https://modelcontextprotocol.io">MCP</a> server that lets Alexa+ answer questions like <em>"what's due this
+week"</em> or <em>"reorder anything running low"</em> by orchestrating across household tools — tasks, a shopping/reorder list,
+and expense tracking — instead of handling a single isolated command.</p>
+<p>Built for the <strong>Alexa+ track</strong> of the <a href="https://amazonappdev2026.devpost.com/">Build, Ship, Shape: Amazon Developer Hackathon</a>,
+which requires an Agent Skill or a self-hosted MCP server on the 2025-11-25+ spec using Streamable HTTP transport.</p>
+<h2 id="what-it-does">What it does<a class="headerlink" href="#what-it-does" title="Permanent link">&para;</a></h2>
+<p>Alexa+'s agent can call these tools, in combination, to complete multi-step requests:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>list_upcoming_tasks</code></td>
+<td>Household to-dos due within N days (materializes recurring-task occurrences on the fly)</td>
+</tr>
+<tr>
+<td><code>add_task</code></td>
+<td>Add a task; auto-assigns fairly if no assignee is given</td>
+</tr>
+<tr>
+<td><code>add_recurring_task</code></td>
+<td>Add a weekly recurring chore template (e.g. "every Tuesday") — no per-week row needed</td>
+</tr>
+<tr>
+<td><code>import_tasks</code></td>
+<td>Bulk-add many tasks in one call, with a per-item added/rejected result</td>
+</tr>
+<tr>
+<td><code>mark_task_done</code></td>
+<td>Mark a task complete</td>
+</tr>
+<tr>
+<td><code>suggest_assignee</code></td>
+<td>Recommend who should take the next chore, by current open-task load</td>
+</tr>
+<tr>
+<td><code>list_low_stock_items</code></td>
+<td>Items running low that might need reordering</td>
+</tr>
+<tr>
+<td><code>reorder_item</code></td>
+<td>Reorder an item — confirms via <strong>MCP elicitation</strong> before spending</td>
+</tr>
+<tr>
+<td><code>add_expense</code></td>
+<td>Log a household expense; warns if it pushes a category over budget, and fires an alert webhook</td>
+</tr>
+<tr>
+<td><code>get_weekly_summary</code></td>
+<td>Total spend by category over the past 7 days</td>
+</tr>
+<tr>
+<td><code>set_budget</code> / <code>get_budget_status</code></td>
+<td>Set and check weekly budgets per category</td>
+</tr>
+<tr>
+<td><code>generate_weekly_narrative</code></td>
+<td>Turn the week's data into a natural-language digest via <strong>MCP sampling</strong></td>
+</tr>
+<tr>
+<td><code>sync_household_calendar</code></td>
+<td>Sync tasks to a shared calendar, streaming <strong>progress notifications</strong> per task</td>
+</tr>
+<tr>
+<td><code>run_morning_briefing</code></td>
+<td><strong>Compound tool</strong>: chains tasks + assignment + stock + budget into one call, then narrates them</td>
+</tr>
+<tr>
+<td><code>export_household_digest</code></td>
+<td>Combined tasks + budget + low-stock text report, reusing the sampling-backed narrative</td>
+</tr>
+<tr>
+<td><code>issue_household_token</code></td>
+<td>Mint a new bearer token for this household as <code>full-access</code> or <code>read-only</code></td>
+</tr>
+<tr>
+<td><code>register_alert_webhook</code></td>
+<td>Register an HMAC-signed callback URL for proactive budget/overdue-task alerts</td>
+</tr>
+<tr>
+<td><code>get_alert_webhook_status</code></td>
+<td>Check whether a webhook is registered and how its last delivery went</td>
+</tr>
+</tbody>
+</table>
+<p>Beyond tools, the server also exposes:</p>
+<ul>
+<li><strong>Resources</strong> (<code>homeops://tasks/upcoming</code>, <code>homeops://shopping/low-stock</code>, <code>homeops://budget/status</code>) that a
+  client can subscribe to and get pushed <code>notifications/resources/updated</code> events for, instead of polling.</li>
+<li><strong>A resource template</strong> (<code>homeops://tasks/{taskId}</code>) with argument completion, so a client can look up one task
+  by ID and get autocomplete suggestions for valid IDs as the user types.</li>
+<li><strong>A prompt</strong> (<code>weekly_household_briefing</code>) — a ready-made template a client can pull instead of hand-assembling
+  one from raw tool output.</li>
+<li><strong>Tool annotations</strong> (<code>readOnlyHint</code>, <code>destructiveHint</code>, <code>idempotentHint</code>, <code>openWorldHint</code>) on every tool, so a
+  client can decide what needs a confirmation prompt without parsing descriptions.</li>
+<li><strong>Structured output</strong> (<code>outputSchema</code> + <code>structuredContent</code>) on the read-heavy tools (<code>list_upcoming_tasks</code>,
+  <code>list_low_stock_items</code>, <code>get_budget_status</code>), so a client can render its own UI from typed JSON instead of
+  reparsing the text summary.</li>
+</ul>
+<h3 id="advancedunique-features">Advanced/unique features<a class="headerlink" href="#advancedunique-features" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Elicitation-backed confirmation.</strong> <code>reorder_item</code> doesn't rely on a hand-rolled <code>confirm</code> boolean flag — it
+  calls <code>server.server.elicitInput(...)</code> to have the <em>client</em> prompt the user directly via a real MCP form
+  request, the protocol-correct way to gate a spending action. If the connected client hasn't declared the
+  elicitation capability, it gracefully falls back to a preview-then-confirm flow instead of failing.</li>
+<li><strong>Sampling instead of a bundled LLM key.</strong> <code>generate_weekly_narrative</code> has no API key or model of its own — it
+  sends a <code>createMessage</code> sampling request to the <em>connected client's</em> model (Alexa+'s own LLM) to narrate the raw
+  household data, and falls back to a templated digest if the client doesn't support sampling.</li>
+<li><strong>Live resources with push updates.</strong> Task, shopping, and budget state are exposed as MCP resources, and
+  <code>add_task</code>, <code>reorder_item</code>, <code>add_expense</code>, and <code>set_budget</code> all fire <code>notifications/resources/updated</code> to any
+  subscriber — a client can watch the household passively instead of re-polling tools.</li>
+<li><strong>Fair chore rotation.</strong> <code>add_task</code> auto-assigns to whichever household member currently has the fewest open
+  tasks when no assignee is given, and <code>suggest_assignee</code> exposes that logic directly so the agent can explain
+  <em>why</em> before assigning.</li>
+<li><strong>Proactive budget alerts.</strong> Categories carry a weekly budget; <code>add_expense</code> checks against it immediately and
+  surfaces an over-budget warning in the same response, with <code>homeops://budget/status</code> updated for subscribers.</li>
+<li><strong>Progress-streaming long operations.</strong> <code>sync_household_calendar</code> reports <code>notifications/progress</code> per task as
+  it "syncs" (simulated latency), so a client can show a live progress bar instead of a spinner with no feedback.</li>
+<li><strong>Discoverable, typed resources.</strong> A <code>ResourceTemplate</code> (<code>homeops://tasks/{taskId}</code>) supplies autocomplete
+  suggestions for its <code>taskId</code> argument via the MCP completion capability, and read-heavy tools return
+  <code>structuredContent</code> validated against a declared <code>outputSchema</code> alongside their text summary.</li>
+<li><strong>Tool-use safety hints.</strong> Every tool declares <code>readOnlyHint</code>/<code>destructiveHint</code>/<code>idempotentHint</code>/<code>openWorldHint</code>
+  annotations, the spec's mechanism for a client to decide which calls are safe to auto-approve.</li>
+<li><strong>Resumable Streamable HTTP sessions.</strong> The transport is backed by a custom <code>EventStore</code> (<code>src/eventStore.ts</code>).
+  If a client's connection drops mid-conversation, it can reconnect with a <code>Last-Event-ID</code> header and receive every
+  notification it missed — a task-completion or budget-alert push isn't silently lost to a flaky network. Verified
+  by hand against the running server: open the SSE stream, subscribe to a resource, trigger a change, kill the
+  connection, trigger a second change while "offline," then reconnect with <code>Last-Event-ID</code> and watch the missed
+  notification replay (see <code>docs</code>/commit history for the exact <code>curl</code> sequence).</li>
+<li><strong>Idempotency-key protected spending.</strong> <code>reorder_item</code> accepts an optional <code>idempotencyKey</code>; retrying the same
+  call with the same key (an agent replay after a timeout, a flaky connection) reorders <strong>at most once</strong> instead of
+  double-charging the household — the second call returns "already reordered" with no additional effect.</li>
+<li><strong>A compound orchestration tool.</strong> <code>run_morning_briefing</code> chains four internal operations (today's tasks, fair
+  chore assignment, low-stock check, budget status) into a single tool call, then narrates the result via sampling
+  — one round trip instead of four, which matters for a voice interaction where every tool call adds latency.</li>
+<li><strong>Bearer-token multi-household support.</strong> A prior round's README/friction log called out the single in-memory
+  household as the project's one hackathon-specific shortcut — this round closes that gap. The client's
+  <code>Authorization: Bearer &lt;token&gt;</code> header (read once, at session-<code>initialize</code> time, at the Express/Streamable-HTTP
+  layer in <code>src/index.ts</code> — MCP tool handlers never see raw HTTP headers) is hashed into a household ID and closed
+  over by every tool/resource that session's <code>McpServer</code> registers, so two different tokens never see each other's
+  tasks, shopping list, expenses, or budgets. No pre-registration: an unrecognized token just gets a fresh, empty
+  household the first time it's used. A request with no token at all falls back to the single well-known default
+  household (seeded with the original demo data), so existing demos/tests that don't pass a token keep working
+  unchanged.</li>
+<li><strong>Structured logging via the MCP logging capability.</strong> Beyond a tool's own result, the server emits leveled
+  <code>notifications/message</code> log entries (<code>server.server.sendLoggingMessage(...)</code>, gated on declaring
+  <code>capabilities: { logging: {} }</code> on the <code>McpServer</code>) for key household events — a task added, a bulk import
+  completed, a reorder declined or confirmed, a budget exceeded — so a client that's just watching the log stream
+  (no <code>logging/setLevel</code> call required; every level ships until a client asks to filter) can build a live activity
+  feed independent of which tool call triggered each event.</li>
+<li><strong>Durable, file-backed persistence.</strong> Each household is now a JSON file (<code>data/&lt;householdId&gt;.json</code> by default,
+  overridable via <code>HOMEOPS_DATA_DIR</code>) instead of a plain in-memory object, written with a write-temp-file-then-rename
+  so a reader never observes a half-written file. Restarting the server no longer wipes out demo data — see
+  "Persistence" below for the explicitly-stated tradeoffs of this approach.</li>
+<li><strong>Bulk task import.</strong> <code>import_tasks</code> accepts an array of <code>{title, dueDate, assignee?}</code> objects — "add my whole
+  week's chores at once" — validates each item independently, adds every valid one in a single household write, and
+  fires exactly one combined <code>homeops://tasks/upcoming</code> update notification for the whole batch instead of one per
+  item. The result reports each item's outcome (<code>added</code> with its new task ID, or <code>rejected</code> with a reason) so a
+  malformed entry in the middle of a batch doesn't silently disappear or block the rest.</li>
+<li><strong>Role-based access control.</strong> Every bearer token now resolves to both a household <em>and</em> an access role
+  (<code>full-access</code> or <code>read-only</code>), via <code>issue_household_token</code> — a full-access session can mint a new token for its
+  <em>own</em> household at either level, e.g. a read-only one for a kid's device or a shared kitchen display that should
+  only ever check things. A read-only token can call every read tool (<code>list_upcoming_tasks</code>, <code>get_budget_status</code>,
+  <code>export_household_digest</code>, ...) but is rejected — with a clear <code>isError</code> message, never a silent no-op — on every
+  write tool (<code>add_task</code>, <code>reorder_item</code>, <code>add_expense</code>, <code>import_tasks</code>, <code>register_alert_webhook</code>, even
+  <code>issue_household_token</code> itself). The enforcement point is a single wrapper (<code>src/rbac.ts</code>) around
+  <code>McpServer#registerTool</code>, applied once at session-creation time for a read-only session and never touching any
+  individual tool file — it reuses the <code>readOnlyHint</code> annotation every tool already declares (for an unrelated
+  reason, since round 2) rather than hand-adding a role check to a dozen handlers. Round 4's exact "no token or
+  unrecognized token" behavior is unchanged: only a token this server actually issued (via <code>issue_household_token</code>)
+  carries a role at all; every other token still gets hash-derived, full-access, no-pre-registration-required
+  treatment.</li>
+<li><strong>Outbound household-alert webhooks.</strong> <code>register_alert_webhook</code> lets a household register a callback URL to be
+  proactively notified — no MCP session needs to be open to receive these — when <code>add_expense</code> pushes a category
+  over its weekly budget, or when a task operation (<code>add_task</code>, <code>import_tasks</code>, <code>sync_household_calendar</code>) reveals
+  something overdue. Mirrors, in spirit, this repo's <code>ring-porchpass</code>/<code>firetv-courtside</code> outbound-webhook pattern:
+  payloads are signed with HMAC-SHA256 (header <code>X-HomeOps-Signature</code>, over the raw JSON body) using a secret handed
+  back exactly once at registration, and delivery retries up to 3 times with exponential backoff before giving up
+  and logging a warning via the MCP logging capability. Delivery is fire-and-forget by construction — the tool call
+  that triggered the alert returns immediately, never blocked on a slow or unreachable endpoint — and
+  <code>get_alert_webhook_status</code> reports the outcome of the most recent attempt (never the secret) for observability.</li>
+<li><strong>Recurring/template tasks.</strong> <code>add_recurring_task</code> adds a weekly chore template (<code>daysOfWeek: number[]</code>, e.g.
+  <code>[2]</code> for every Tuesday) instead of a one-off task with a single due date. No per-occurrence row is ever stored:
+  <code>list_upcoming_tasks</code> materializes the actual occurrences on read, one per matching weekday within whatever
+  <code>withinDays</code> window is requested, each with its own synthetic ID (<code>${templateId}:${date}</code>) — so "take out the
+  trash every Tuesday" survives across weeks without a background job re-adding it, and a 30-day lookahead shows
+  every occurrence that falls in that window in one <code>list_upcoming_tasks</code> call.</li>
+<li><strong>Household digest export.</strong> <code>export_household_digest</code> produces one combined text report — upcoming tasks,
+  budget status, and low-stock items — for a household member to read at a glance, save, or share. Its summary
+  paragraph reuses the exact same sampling-backed narrative generation <code>generate_weekly_narrative</code> and
+  <code>run_morning_briefing</code> already use (falling back to the same kind of templated summary when the client doesn't
+  support MCP sampling) rather than duplicating that logic a third time.</li>
+</ul>
+<h2 id="persistence">Persistence<a class="headerlink" href="#persistence" title="Permanent link">&para;</a></h2>
+<p>Household data lives in <code>data/&lt;householdId&gt;.json</code> (gitignored; created on first use). Every store function reads
+its household's file fresh and writes the whole file back (via write-to-temp-then-<code>rename</code>, which is atomic on the
+same filesystem) after any mutation — there's deliberately no long-lived in-memory cache, which is what makes a
+second server instance pointed at the same directory immediately see the first one's writes.</p>
+<p><strong>This is explicitly a demo-grade persistence layer, not a database — a stated tradeoff, not an oversight:</strong></p>
+<ul>
+<li>No locking beyond what a single writer's atomic rename gives you. Two truly concurrent writers touching the exact
+  same household at the same instant could still race (last write wins) — fine for a single household operated by
+  one Alexa+ session at a time, not fine for a multi-writer production system.</li>
+<li>No transactions, indexes, or query capability beyond "load the whole household JSON blob."</li>
+<li>No migrations: a change to <code>types.ts</code>'s shape doesn't rewrite existing files on disk.</li>
+<li>A read on every call means a stat+read (and a stat+write+rename on every mutation) instead of an in-memory
+  lookup — irrelevant at demo scale, but not what you'd want under real load.</li>
+</ul>
+<p>Swapping this for a real database (SQLite, DynamoDB, etc.) would mean reimplementing the functions in <code>src/store.ts</code>
+against it — the rest of the codebase (tools, resources) only calls those functions and doesn't know or care how a
+household is stored.</p>
+<p>The server holds one household per distinct bearer token (or the single seeded default household for a request with
+no token), each independently loaded/saved from its own file. A token minted by <code>issue_household_token</code> also gets
+an entry in <code>data/_tokens.json</code> (the same directory, same write-then-rename discipline) mapping its hash to the
+household + role it was issued for — that registry, not the household files, is what makes a read-only token for
+an existing household possible at all (see "Role-based access control" above). Alert-webhook delivery <em>status</em>
+(last attempt/success/error) is the one piece of round-5 state that is intentionally <strong>not</strong> persisted — it's
+process-lifetime observability only, the same tradeoff round 4 made for the reorder-idempotency cache.</p>
+<h2 id="project-layout">Project layout<a class="headerlink" href="#project-layout" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>src/
+  index.ts        Express app + Streamable HTTP transport; extracts the bearer token per session and resolves
+                  it to a household ID + access role (src/auth.ts) before creating that session's McpServer
+  auth.ts          extractBearerToken(), resolveHouseholdId() (round 4, hash-only), and resolveAccess()/
+                   issueToken() (round 5's role-aware lookup + a small on-disk token registry)
+  rbac.ts          restrictToReadOnlyTools() — wraps McpServer#registerTool so a read-only session's write
+                   tools reject with a clear error, without touching any individual tool file
+  server.ts        createHomeOpsServer(householdId, role) factory — wires resources, prompts, and all tools
+                   onto a fresh McpServer scoped to one household (and access role), logging capability declared
+  store.ts         File-backed household data (tasks, shopping, expenses, budgets, alert webhook registration),
+                   one JSON file per household ID under data/ (HOMEOPS_DATA_DIR-overridable), atomic
+                   write-then-rename + fair-rotation/budget/idempotency logic + bulk import + recurring-task
+                   materialization + overdue-task lookup
+  webhookDelivery.ts  fireHouseholdAlert() — HMAC-SHA256-signed outbound webhook delivery with retry/backoff
+  logging.ts       logEvent() helper over the MCP logging capability (notifications/message)
+  resources.ts     homeops:// resources + subscribe/unsubscribe + notify() helper for push updates, scoped by
+                   household ID
+  eventStore.ts    InMemoryEventStore — Streamable HTTP resumability (replay after a dropped connection)
+  prompts.ts       weekly_household_briefing prompt template
+  types.ts         Shared data model, including RecurrenceRule, AlertWebhookRegistration, AccessRole
+  tools/
+    tasks.ts       list_upcoming_tasks, add_task, add_recurring_task, import_tasks, mark_task_done,
+                   suggest_assignee, sync_household_calendar (the last three also fire overdue-task alerts)
+    shopping.ts    list_low_stock_items, reorder_item (elicitation-backed, idempotency-key protected)
+    expenses.ts    add_expense (also fires budget-exceeded alerts), get_weekly_summary, set_budget,
+                   get_budget_status
+    insights.ts    generate_weekly_narrative, run_morning_briefing, export_household_digest (MCP sampling +
+                   compound orchestration + combined report, all sharing one sampleNarrative() helper)
+    access.ts      issue_household_token — mint a full-access or read-only token for this household
+    webhooks.ts    register_alert_webhook, get_alert_webhook_status
+data/              JSON-file-backed household storage, one file per household ID, plus _tokens.json (the
+                   role-aware token registry) — gitignored, created on first use
+test/
+  smoke.test.ts    End-to-end test: real MCP client + server, exercising every tool, resource (+ template,
+                   completion, subscribe/notify), prompt, elicitation round-trip, sampling call,
+                   progress-streaming tool call, idempotent retry, compound tool, a direct EventStore unit
+                   test, bearer-token household isolation, structured logging notifications, file-backed
+                   persistence across a simulated restart, bulk task import, recurring-task materialization
+                   across multiple weeks, the household digest export, read-only token enforcement, and
+                   HMAC-signed webhook delivery against a real local HTTP listener
+</code></pre></div>
+<h2 id="running-it">Running it<a class="headerlink" href="#running-it" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>install
+npm<span class="w"> </span>run<span class="w"> </span>build
+npm<span class="w"> </span>start
+<span class="c1"># HomeOps MCP server listening on http://localhost:3333/mcp</span>
+</code></pre></div>
+<p>Or for local iteration:</p>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>run<span class="w"> </span>dev
+</code></pre></div>
+<p>By default household data is written to <code>data/</code> under the current working directory; set <code>HOMEOPS_DATA_DIR</code> to
+point it elsewhere (the test suite uses this to isolate itself into a scratch directory).</p>
+<h3 id="connecting-with-a-bearer-token-multi-household">Connecting with a bearer token (multi-household)<a class="headerlink" href="#connecting-with-a-bearer-token-multi-household" title="Permanent link">&para;</a></h3>
+<p>Every client gets its own isolated household, keyed off its <code>Authorization: Bearer &lt;token&gt;</code> header:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:3333/mcp<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">"Accept: application/json, text/event-stream"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer my-households-token"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"jsonrpc":"2.0","id":1,"method":"initialize", ...}'</span>
+</code></pre></div>
+<p>or, with the SDK's <code>StreamableHTTPClientTransport</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="ow">new</span><span class="w"> </span><span class="nx">StreamableHTTPClientTransport</span><span class="p">(</span><span class="nx">url</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nx">requestInit</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">headers</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">Authorization</span><span class="o">:</span><span class="w"> </span><span class="s2">"Bearer my-households-token"</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">},</span>
+<span class="p">});</span>
+</code></pre></div>
+<p>A different token always gets its own fresh, empty household on first use — no pre-registration needed. Omitting
+the header entirely connects to the single seeded default household (the one with the original demo tasks/shopping
+items), so existing demos and tooling that don't send a token are unaffected.</p>
+<h3 id="issuing-a-read-only-token-role-based-access-control">Issuing a read-only token (role-based access control)<a class="headerlink" href="#issuing-a-read-only-token-role-based-access-control" title="Permanent link">&para;</a></h3>
+<p>Every token above connects <code>full-access</code> by default (unchanged from round 4). To hand out a token that can only
+call read tools — a kid's device, a shared kitchen display, a dashboard — call <code>issue_household_token</code> from a
+full-access session already connected to the household you want to scope it to:</p>
+<div class="highlight"><pre><span></span><code>// tools/call issue_household_token { "role": "read-only" }
+// -&gt; structuredContent: { "token": "&lt;hex&gt;", "role": "read-only", "householdId": "home-1" }
+</code></pre></div>
+<p>Connect a second client with <code>Authorization: Bearer &lt;that token&gt;</code> and it lands on the <em>same</em> household, but every
+write tool (<code>add_task</code>, <code>reorder_item</code>, <code>add_expense</code>, <code>import_tasks</code>, <code>add_recurring_task</code>,
+<code>register_alert_webhook</code>, even <code>issue_household_token</code> itself) responds with <code>isError: true</code> and a message naming
+the token as read-only, instead of either silently succeeding or silently doing nothing. Read tools
+(<code>list_upcoming_tasks</code>, <code>get_budget_status</code>, <code>list_low_stock_items</code>, <code>export_household_digest</code>, ...) work exactly
+as they would for a full-access token.</p>
+<h3 id="registering-an-alert-webhook">Registering an alert webhook<a class="headerlink" href="#registering-an-alert-webhook" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>// tools/call register_alert_webhook { "url": "https://your-endpoint.example/homeops-alerts" }
+// -&gt; structuredContent: { "url": "...", "secret": "&lt;hex, shown once&gt;", "createdAt": "..." }
+</code></pre></div>
+<p>From then on, an over-budget <code>add_expense</code> or an overdue task surfaced by <code>add_task</code>/<code>import_tasks</code>/
+<code>sync_household_calendar</code> POSTs a signed JSON payload to that URL:</p>
+<div class="highlight"><pre><span></span><code>POST https://your-endpoint.example/homeops-alerts
+X-HomeOps-Signature: &lt;hex HMAC-SHA256 of the raw body, using the secret above&gt;
+X-HomeOps-Alert-Type: budget_exceeded | task_overdue
+Content-Type: application/json
+
+{"type":"budget_exceeded","householdId":"home-1","message":"...","data":{...},"firedAt":"..."}
+</code></pre></div>
+<p>Verify it the same way <code>ring-porchpass</code>'s Ring-event ingress verifies inbound signatures — recompute
+<code>HMAC-SHA256(secret, rawBody)</code> and compare — just in the opposite direction, since here HomeOps is the sender.
+<code>get_alert_webhook_status</code> reports the outcome of the most recent delivery attempt without ever re-exposing the
+secret.</p>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span><span class="nb">test</span>
+</code></pre></div>
+<p>This starts the server on an ephemeral port, connects a real MCP <code>Client</code> over <code>StreamableHTTPClientTransport</code>
+(with elicitation- and sampling-handling stubs wired in), and drives a full scenario: list tools/resources/prompts →
+get a fair-rotation suggestion → add a task and confirm its resource-update notification arrives → bulk-import a
+mixed batch of valid/invalid tasks in one call → reorder an item through a live elicitation round-trip → log an
+expense and see the over-budget warning → generate a sampling-backed narrative — while asserting along the way that
+key events (a task added, a reorder confirmed, a budget exceeded) also arrive as independent
+<code>notifications/message</code> log entries. It then adds a recurring task and confirms it materializes into distinct,
+correctly-spaced occurrences across a two-week <code>list_upcoming_tasks</code> window; exports a household digest and checks
+its tasks/budget/low-stock sections against the equivalent individual tool calls; mints a read-only token via
+<code>issue_household_token</code> and confirms that token can list tasks but is rejected — with a clear error, and no actual
+effect — when it calls <code>add_task</code>; and registers an alert webhook against a real local <code>http</code> listener spun up in
+the test process, then verifies a subsequent over-budget expense (and a subsequent already-overdue <code>add_task</code>)
+each deliver a payload to it whose <code>X-HomeOps-Signature</code> header is exactly the HMAC-SHA256 the test independently
+recomputes from the secret <code>register_alert_webhook</code> returned. It then connects two more clients under two
+different bearer tokens and confirms their household data is completely isolated, and finally spins up two
+independent server instances pointed at the same on-disk data directory to confirm a household's data survives a
+simulated restart. No external services required.</p>
+<p>You can also point the <a href="https://modelcontextprotocol.io/legacy/tools/inspector">MCP Inspector</a> at the running
+server for interactive exploration:</p>
+<div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@modelcontextprotocol/inspector
+<span class="c1"># Transport: Streamable HTTP, URL: http://localhost:3333/mcp</span>
+</code></pre></div>
+<h2 id="wiring-it-up-to-alexa">Wiring it up to Alexa+<a class="headerlink" href="#wiring-it-up-to-alexa" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Run the server somewhere reachable over HTTPS (a tunnel like <code>ngrok http 3333</code> works for local demos).</li>
+<li>In the Alexa+ Agent Skill / web app simulator, register the MCP server endpoint (<code>https://&lt;host&gt;/mcp</code>), passing
+   whatever bearer token identifies that user's household (see above) if you want per-user isolation rather than
+   the shared default household.</li>
+<li>Try prompts such as:</li>
+<li>"What's due around the house this week?"</li>
+<li>"Add these chores for the week: recycling Monday, laundry Tuesday, vacuuming Wednesday" (bulk <code>import_tasks</code>)</li>
+<li>"Who should take out the trash?" (fair chore rotation)</li>
+<li>"Is anything running low?" → "Yes, go ahead and reorder the dog food" (Alexa+ surfaces the elicitation form)</li>
+<li>"Log $60 for dog food under pets" (triggers the over-budget warning if the pets budget is set below that)</li>
+<li>"Give me the weekly household briefing" (uses the <code>weekly_household_briefing</code> prompt + sampling-backed digest)</li>
+<li>"Sync my tasks to the calendar" (streams progress notifications as each task syncs)</li>
+<li>"Take out the trash every Tuesday" (<code>add_recurring_task</code>; shows up in every future week's task list)</li>
+<li>"Give me the full household report" (<code>export_household_digest</code> — tasks, budget, and low stock in one report)</li>
+<li>"Set up a read-only token for the kitchen display" (<code>issue_household_token</code> with <code>role: "read-only"</code>)</li>
+<li>"Notify me at this URL if we go over budget or something's overdue" (<code>register_alert_webhook</code>)</li>
+</ol>
+<h2 id="verifying-resumability-by-hand">Verifying resumability by hand<a class="headerlink" href="#verifying-resumability-by-hand" title="Permanent link">&para;</a></h2>
+<p><code>npm test</code> unit-tests the <code>InMemoryEventStore</code> class directly; to see the full HTTP-level behavior, run the
+server (<code>npm run build &amp;&amp; npm start</code>) and, in another shell:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">SESSION</span><span class="o">=</span>&lt;mcp-session-id<span class="w"> </span>from<span class="w"> </span>your<span class="w"> </span>initialize<span class="w"> </span>response<span class="s1">'s headers&gt;</span>
+
+<span class="s1"># 1. Subscribe to a resource, then open the standalone SSE stream.</span>
+<span class="s1">curl -N http://localhost:3333/mcp -H "Accept: text/event-stream" -H "mcp-session-id: $SESSION" &amp;</span>
+
+<span class="s1"># 2. Trigger a change (note the "id: ...:000000000002"-style line the stream prints), then Ctrl-C the curl above</span>
+<span class="s1">#    to simulate a dropped connection.</span>
+<span class="s1">curl -X POST http://localhost:3333/mcp -H "Content-Type: application/json" \</span>
+<span class="s1">  -H "Accept: application/json, text/event-stream" -H "mcp-session-id: $SESSION" \</span>
+<span class="s1">  -d '</span><span class="o">{</span><span class="s2">"jsonrpc"</span>:<span class="s2">"2.0"</span>,<span class="s2">"id"</span>:3,<span class="s2">"method"</span>:<span class="s2">"tools/call"</span>,<span class="s2">"params"</span>:<span class="o">{</span><span class="s2">"name"</span>:<span class="s2">"add_task"</span>,<span class="s2">"arguments"</span>:<span class="o">{</span><span class="s2">"title"</span>:<span class="s2">"Test A"</span>,<span class="s2">"dueDate"</span>:<span class="s2">"2026-09-05"</span><span class="o">}}}</span><span class="s1">'</span>
+
+<span class="s1"># 3. Trigger a second change while "offline" — a client that just reconnects fresh would miss this entirely.</span>
+<span class="s1">curl -X POST http://localhost:3333/mcp -H "Content-Type: application/json" \</span>
+<span class="s1">  -H "Accept: application/json, text/event-stream" -H "mcp-session-id: $SESSION" \</span>
+<span class="s1">  -d '</span><span class="o">{</span><span class="s2">"jsonrpc"</span>:<span class="s2">"2.0"</span>,<span class="s2">"id"</span>:4,<span class="s2">"method"</span>:<span class="s2">"tools/call"</span>,<span class="s2">"params"</span>:<span class="o">{</span><span class="s2">"name"</span>:<span class="s2">"add_task"</span>,<span class="s2">"arguments"</span>:<span class="o">{</span><span class="s2">"title"</span>:<span class="s2">"Test B"</span>,<span class="s2">"dueDate"</span>:<span class="s2">"2026-09-06"</span><span class="o">}}}</span><span class="err">'</span>
+
+<span class="c1"># 4. Reconnect with the last event ID you saw in step 1 — the missed notification from step 3 replays immediately.</span>
+curl<span class="w"> </span>-N<span class="w"> </span>http://localhost:3333/mcp<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Accept: text/event-stream"</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">"mcp-session-id: </span><span class="nv">$SESSION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Last-Event-ID: &lt;the id from step 1&gt;"</span>
+</code></pre></div>
+<h2 id="judging-criteria-alignment">Judging-criteria alignment<a class="headerlink" href="#judging-criteria-alignment" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Tech Implementation:</strong> Real Streamable HTTP MCP transport (2025-11-25+ spec) with proper session lifecycle
+  (<code>Mcp-Session-Id</code> header, per-session <code>McpServer</code> instances, session cleanup on close), backed by a custom
+  resumable <code>EventStore</code> — plus resources (including a completable resource template), prompts, elicitation,
+  sampling, structured tool output, tool annotations, progress notifications, and the logging capability
+  (<code>notifications/message</code>): essentially the full breadth of the MCP spec rather than tools alone. Bearer-token
+  auth is threaded from the HTTP layer into per-session state the same way a real multi-tenant MCP server would,
+  now carrying an access role as well as a household ID, and enforced by wrapping the SDK's own tool-registration
+  API rather than hand-checking a role in every handler. Outbound alert delivery reuses the exact HMAC-SHA256 +
+  retry-with-backoff pattern this repo's other services (<code>ring-porchpass</code>, <code>firetv-courtside</code>) use for their own
+  webhooks, applied in the opposite (outbound) direction.</li>
+<li><strong>Design:</strong> Tools are scoped and composable so the agent can chain them (check → decide → act), with
+  <code>run_morning_briefing</code> collapsing the common four-tool chain into one round trip for latency-sensitive voice
+  interactions, <code>import_tasks</code> collapsing a whole batch of adds into one round trip and one notification, and
+  <code>export_household_digest</code> collapsing the same three-domain check into one shareable report. The one spending
+  tool (<code>reorder_item</code>) confirms through the protocol's own elicitation mechanism and is safe to retry via an
+  idempotency key, and every capability degrades gracefully when a client doesn't support it.</li>
+<li><strong>Potential Impact:</strong> A genuinely useful daily-use pattern (household coordination, fair chore-splitting, budget
+  awareness) rather than a novelty demo, with production-grade concerns actually handled — safe retries on the
+  spending path, connection resumability, per-household data isolation via bearer tokens, data that survives a
+  restart, least-privilege access for household members who shouldn't be able to spend or edit, and proactive
+  alerts that don't require an open session to receive — not just a happy-path demo. Recurring tasks close a real
+  daily-use gap (nobody re-adds "take out the trash" every single week by hand). The remaining hackathon-specific
+  shortcuts are the persistence layer (a JSON file per household, no real database) and the in-memory token/webhook
+  delivery-status registries — explicitly documented as such, not hidden.</li>
+<li><strong>Quality of Idea:</strong> Demonstrates multi-tool agentic orchestration <em>and</em> deep MCP protocol usage (resources with
+  live push updates, sampling instead of a bundled model key, resumable transport, idempotent writes, structured
+  logging as a first-class observability channel, and now role-aware tool registration plus signed outbound
+  webhooks) — the actual differentiators between an "Agent Skill" and a legacy single-intent Alexa Skill.</li>
+</ul>
+<h2 id="friction-log">Friction log<a class="headerlink" href="#friction-log" title="Permanent link">&para;</a></h2>
+<p>See <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/alexa-homeops-mcp/FRICTION_LOG.md"><code>FRICTION_LOG.md</code></a> for notes captured while building this (eligible for the hackathon's
+judging bonus).</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "content.code.copy", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

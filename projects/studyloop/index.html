@@ -1,0 +1,2218 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Six category implementations for the Build, Ship, Shape Amazon Developer Hackathon.">
+      
+      
+      
+        <link rel="canonical" href="https://akashtalole.github.io/Build-Ship-Shape-Amazon-Developer-Hackathon/projects/studyloop/">
+      
+      
+        <link rel="prev" href="../courtside/">
+      
+      
+        <link rel="next" href="../model-router/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>StudyLoop (Bee) - Build, Ship, Shape — Amazon Developer Hackathon</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#studyloop-ambient-study-session-coach-for-bee" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Build, Ship, Shape — Amazon Developer Hackathon" class="md-header__button md-logo" aria-label="Build, Ship, Shape — Amazon Developer Hackathon" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Build, Ship, Shape — Amazon Developer Hackathon
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              StudyLoop (Bee)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ideas/" class="md-tabs__link">
+          
+  
+  
+  Winning Ideas
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../homeops/" class="md-tabs__link">
+          
+  
+  
+  Projects
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../deploy/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../demo/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Demo Video
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../devpost-submission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Devpost Submission
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Build, Ship, Shape — Amazon Developer Hackathon" class="md-nav__button md-logo" aria-label="Build, Ship, Shape — Amazon Developer Hackathon" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Build, Ship, Shape — Amazon Developer Hackathon
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Winning Ideas
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Winning Ideas
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/fire-tv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fire TV
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/alexa-plus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alexa+
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/bee/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bee
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/ring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/aws-builder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS Builder
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/open-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Open Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Projects
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../homeops/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HomeOps (Alexa+)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porchpass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PorchPass (Ring)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../courtside/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CourtSide (Fire TV)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    StudyLoop (Bee)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    StudyLoop (Bee)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope-of-this-submission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope of this submission
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scope of this submission">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-stands-in-for-bee-and-what-a-real-integration-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What stands in for Bee, and what a real integration looks like
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#try-it-by-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Try it by hand
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced features
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Advanced features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-idempotent-session-ingestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Idempotent session ingestion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-leech-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Leech detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-topic-tagging-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Topic tagging + search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-adaptive-review-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Adaptive review ordering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-streamingincremental-ingestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Streaming/incremental ingestion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-portable-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Portable export
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#swapping-in-a-real-llm-backed-generator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Swapping in a real LLM-backed generator
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#judging-criteria-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Judging-criteria alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#round-3-quiz-mode-shared-decks-reminders-adaptive-generation-bias" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 3: quiz mode, shared decks, reminders, adaptive generation bias
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round 3: quiz mode, shared decks, reminders, adaptive generation bias">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#7-shared-study-group-decks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Shared study-group decks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-quizpractice-test-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Quiz/practice-test mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#9-due-card-reminder-digest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Due-card reminder digest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10-adaptive-new-card-generation-bias" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Adaptive new-card generation bias
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#round-4-streaks-gamification-session-planner-import-round-trip-regenerate-a-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 4: streaks &amp; gamification, session planner, import round-trip, regenerate-a-card
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round 4: streaks &amp; gamification, session planner, import round-trip, regenerate-a-card">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-study-streaks-gamification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Study streaks &amp; gamification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-global-daily-review-session-planner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Global daily review session planner
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-import-round-trip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Import round-trip
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-regenerate-a-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Regenerate-a-card
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#friction-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Friction log
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../model-router/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Router (AWS Builder)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../friction-log-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    friction-log-toolkit (Open Source)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deploy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demo Video
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../devpost-submission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devpost Submission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scope-of-this-submission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope of this submission
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scope of this submission">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-stands-in-for-bee-and-what-a-real-integration-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What stands in for Bee, and what a real integration looks like
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#try-it-by-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Try it by hand
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced features
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Advanced features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-idempotent-session-ingestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Idempotent session ingestion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-leech-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Leech detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-topic-tagging-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Topic tagging + search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-adaptive-review-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Adaptive review ordering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-streamingincremental-ingestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Streaming/incremental ingestion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-portable-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Portable export
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#swapping-in-a-real-llm-backed-generator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Swapping in a real LLM-backed generator
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#judging-criteria-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Judging-criteria alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#round-3-quiz-mode-shared-decks-reminders-adaptive-generation-bias" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 3: quiz mode, shared decks, reminders, adaptive generation bias
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round 3: quiz mode, shared decks, reminders, adaptive generation bias">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#7-shared-study-group-decks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Shared study-group decks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-quizpractice-test-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Quiz/practice-test mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#9-due-card-reminder-digest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Due-card reminder digest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10-adaptive-new-card-generation-bias" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Adaptive new-card generation bias
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#round-4-streaks-gamification-session-planner-import-round-trip-regenerate-a-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 4: streaks &amp; gamification, session planner, import round-trip, regenerate-a-card
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Round 4: streaks &amp; gamification, session planner, import round-trip, regenerate-a-card">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-study-streaks-gamification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Study streaks &amp; gamification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-global-daily-review-session-planner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Global daily review session planner
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-import-round-trip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Import round-trip
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-regenerate-a-card" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Regenerate-a-card
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#friction-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Friction log
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<div class="admonition note">
+<p class="admonition-title">Source of truth</p>
+<p>This page mirrors <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/bee-studyloop/README.md"><code>bee-studyloop/README.md</code></a> in the repo — edit it there, not here. Links below point back to the repo on GitHub.</p>
+</div>
+<h1 id="studyloop-ambient-study-session-coach-for-bee">StudyLoop — Ambient Study Session Coach for Bee<a class="headerlink" href="#studyloop-ambient-study-session-coach-for-bee" title="Permanent link">&para;</a></h1>
+<p>Implementation of the "StudyLoop" idea from <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/hackathon-ideas/bee.md"><code>hackathon-ideas/bee.md</code></a>: students lose
+track of what they actually discussed or decided in a study session, and converting ambient conversation into
+structured review material is friction they mostly skip. StudyLoop takes a study session's transcript, turns it
+into a short summary plus a set of spaced-repetition flashcards automatically, and schedules them into a daily
+review queue — no manual note-taking required.</p>
+<p>Built for the <strong>Bee track</strong> of the <a href="https://amazonappdev2026.devpost.com/">Build, Ship, Shape: Amazon Developer Hackathon</a>,
+which requires data from a real Bee wearable (or an Apple Watch running Bee software) and guides teams to integrate
+Bee's CLI, MCP server, or Agent Skills, prioritizing education, developer experience, and productivity.</p>
+<h2 id="scope-of-this-submission">Scope of this submission<a class="headerlink" href="#scope-of-this-submission" title="Permanent link">&para;</a></h2>
+<p>This environment has no physical Bee device or Apple Watch, so this repo implements <strong>the backend service that
+would sit behind Bee's ambient capture</strong> — the part of StudyLoop that is genuinely testable headlessly: ingesting
+transcript segments, generating flashcards/summaries from them, and running the spaced-repetition scheduler that
+decides what to review and when. That pipeline is real, tested, and independent of where the transcript came from.</p>
+<h3 id="what-stands-in-for-bee-and-what-a-real-integration-looks-like">What stands in for Bee, and what a real integration looks like<a class="headerlink" href="#what-stands-in-for-bee-and-what-a-real-integration-looks-like" title="Permanent link">&para;</a></h3>
+<p><code>POST /sessions</code> accepts a raw transcript directly (a text block, or an array of <code>{speaker, text, timestampMs}</code>
+segments) — standing in for what Bee's MCP server or CLI would hand off after a study session ends. That
+normalization is isolated in one function, <code>normalizeTranscript</code> in <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/bee-studyloop/src/studyService.ts"><code>src/studyService.ts</code></a>,
+which is explicitly documented as the integration seam:</p>
+<ul>
+<li><strong>Today:</strong> a caller (a script, a curl command, a UI) posts a transcript straight to <code>POST /sessions</code>.</li>
+<li><strong>With real Bee integration:</strong> instead of a human/UI posting a transcript, a small sync job would call Bee's
+  transcript-retrieval MCP tool (e.g. a <code>get_transcript</code>-style tool for a session or time range) — which already
+  returns diarized, timestamped segments in the <em>same</em> <code>{speaker, text, timestampMs}</code> shape defined in
+  <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/bee-studyloop/src/types.ts"><code>src/types.ts</code></a> — and pass that array straight into <code>normalizeTranscript</code>/<code>ingestSession</code>. The
+  array branch of <code>normalizeTranscript</code> <strong>is</strong> the real integration path already; only the string-splitting branch
+  (a convenience for pasting raw text by hand, used here so the API is testable without Bee) would become dead code.</li>
+<li>Nothing in <code>flashcardGenerator.ts</code>, <code>scheduler.ts</code>, <code>studyService.ts</code>, or <code>server.ts</code> needs to change to wire in
+  the real source — they only ever see <code>TranscriptSegment[]</code>.</li>
+</ul>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Ingest a session</strong> (<code>POST /sessions</code>) — post a transcript (string or segments). StudyLoop normalizes it,
+   generates a summary and a set of flashcards, and stores them.</li>
+<li><strong>Generate flashcards/summary</strong> — <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/bee-studyloop/src/flashcardGenerator.ts"><code>src/flashcardGenerator.ts</code></a> defines an
+   LLM-shaped <code>FlashcardGenerator</code> interface and ships <code>TemplateFlashcardGenerator</code>, a heuristic implementation with
+   no model dependency: it pairs question/answer exchanges, extracts definition-style statements ("X is/means/refers
+   to Y"), and falls back to cloze-deletion cards from the longest sentences so a session with neither still yields
+   review material.</li>
+<li><strong>Schedule review</strong> — each flashcard gets spaced-repetition state (interval, ease factor, repetitions, due date)
+   from a simplified SM-2 algorithm in <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/bee-studyloop/src/scheduler.ts"><code>src/scheduler.ts</code></a>, as pure functions.</li>
+<li><strong>Review daily</strong> (<code>GET /review/due</code>) — the flashcards due today, across every session, oldest-due first.</li>
+<li><strong>Submit a grade</strong> (<code>POST /review/:cardId</code>) — <code>again</code> / <code>hard</code> / <code>good</code> / <code>easy</code>; the scheduler reschedules the
+   card's next due date and returns its updated interval/ease factor.</li>
+</ol>
+<p>A second pass added six more production-grade pieces on top of that pipeline — idempotent retries, leech
+detection, topic tagging + search, adaptive review ordering, incremental/streaming ingestion, and a portable
+export — each described in detail in <strong>Advanced features</strong> below.</p>
+<h2 id="project-layout">Project layout<a class="headerlink" href="#project-layout" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>src/
+  types.ts               TranscriptSegment, StudySession, Flashcard, RecallGrade, PersonalReviewState,
+                           PersonalFlashcardView, Quiz data model
+  store.ts                In-memory session/flashcard storage, the idempotency-key index, per-student
+                           review-state storage, and quiz storage
+  flashcardGenerator.ts    FlashcardGenerator interface (LLM-shaped) + TemplateFlashcardGenerator heuristic
+                           impl, incl. the exported generateClozeCards used by both tier 3 and the
+                           adaptive generation-bias heuristic
+  scheduler.ts             Spaced-repetition (simplified SM-2) logic, as pure functions
+  leech.ts                 Leech-detection state machine (consecutive-failure tracking), as pure functions
+  priority.ts              Adaptive review-ordering priority-score formula, as a pure function
+  topics.ts                Heuristic topic-tag extraction (word-frequency, not real NLP)
+  export.ts                Portable TSV export formatting (Anki-importable)
+  studyService.ts          Business logic: ingestion (incl. idempotent + incremental + adaptive bias),
+                           due/leech/search queries, record review, shared-deck join, quiz sampling/
+                           grading/results, reminder digest
+  server.ts                Express app factory — see "How it works", "Advanced features", and "Round 3"
+                           for the full route list
+  index.ts                 Entry point
+test/
+  smoke.test.ts            End-to-end test over real HTTP covering the base lifecycle (ingest -&gt; summary/
+                           flashcards -&gt; due queue -&gt; good/again review rescheduling -&gt; 404s -&gt; invalid
+                           grade -&gt; empty transcript -&gt; raw-text transcript) plus every feature in
+                           "Advanced features" and "Round 3" below, and direct unit checks of scheduler.ts,
+                           leech.ts, priority.ts, and topics.ts
+</code></pre></div>
+<h2 id="running-it">Running it<a class="headerlink" href="#running-it" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>install
+npm<span class="w"> </span>run<span class="w"> </span>build
+npm<span class="w"> </span>start
+<span class="c1"># StudyLoop listening on http://localhost:4466</span>
+</code></pre></div>
+<p>Or for local iteration: <code>npm run dev</code></p>
+<h3 id="try-it-by-hand">Try it by hand<a class="headerlink" href="#try-it-by-hand" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Ingest a study session transcript (stands in for a Bee ambient capture pull)</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/sessions<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "title": "Bio 101 study group",</span>
+<span class="s1">  "transcript": [</span>
+<span class="s1">    {"speaker": "Alice", "text": "Mitochondria is the powerhouse of the cell."},</span>
+<span class="s1">    {"speaker": "Bob", "text": "What is the powerhouse of the cell?"},</span>
+<span class="s1">    {"speaker": "Alice", "text": "The mitochondria is the powerhouse of the cell."}</span>
+<span class="s1">  ]</span>
+<span class="s1">}'</span>
+<span class="c1"># -&gt; note the session id and the generated flashcard ids in the response</span>
+
+<span class="c1"># 2. See the session's summary and flashcards again</span>
+curl<span class="w"> </span>localhost:4466/sessions/&lt;sessionId&gt;
+
+<span class="c1"># 3. Check today's review queue (freshly generated cards are due immediately)</span>
+curl<span class="w"> </span>localhost:4466/review/due
+
+<span class="c1"># 4. Submit a recall grade for a card ("again" | "hard" | "good" | "easy")</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/review/&lt;cardId&gt;<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"grade": "good"}'</span>
+<span class="c1"># -&gt; the response shows the new interval/dueAt; review again with "again" to see it drop back down</span>
+</code></pre></div>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span><span class="nb">test</span>
+</code></pre></div>
+<p>Starts the server on an ephemeral port and drives it over real HTTP requests: ingesting a transcript produces a
+non-empty summary and at least one flashcard; a fresh card appears in <code>GET /review/due</code>; a <code>good</code> grade grows its
+interval and moves it out of today's queue; consecutive <code>good</code> grades keep growing the interval; an <code>again</code> grade
+resets the streak and shortens the interval back down instead of continuing to grow it; reviewing an unknown card
+id or fetching an unknown session id returns a clean 404; an invalid grade returns a 400; an empty/whitespace-only
+transcript still returns a sensible response (a fallback summary, zero flashcards) instead of crashing; and a raw
+text-block transcript (not pre-segmented) is ingested successfully too. A couple of direct unit-style checks of
+<code>scheduler.ts</code>'s interval/ease-factor math round it out. Every feature in <strong>Advanced features</strong> and <strong>Round 3</strong>
+below has its own passing HTTP-level check plus, where the logic is pure, a direct unit-style check — see the
+"Feature N" tests in <code>test/smoke.test.ts</code>.</p>
+<h2 id="advanced-features">Advanced features<a class="headerlink" href="#advanced-features" title="Permanent link">&para;</a></h2>
+<p>A second implementation pass added six production-grade features on top of the v1 pipeline above. Each is
+independently tested in <code>test/smoke.test.ts</code> (search for "Feature 1" through "Feature 6").</p>
+<h3 id="1-idempotent-session-ingestion">1. Idempotent session ingestion<a class="headerlink" href="#1-idempotent-session-ingestion" title="Permanent link">&para;</a></h3>
+<p><code>POST /sessions</code> accepts an optional <code>idempotencyKey</code> (or <code>externalSessionId</code>, treated as an alias — pass whichever
+you have). Re-posting the same transcript with the same key returns the <em>original</em> session and flashcards —
+same ids, no regeneration — instead of creating a duplicate study set. This is what makes a retried upload (a
+flaky connection, an at-least-once sync queue, a doubled tap on "sync now" in a companion app) safe to replay.
+The mapping from key -&gt; session id lives in <code>store.ts</code>; <code>studyService.ingestSession</code> checks it before doing any
+generation work at all.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/sessions<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "title": "Bio 101 study group",</span>
+<span class="s1">  "idempotencyKey": "sync-job-run-482",</span>
+<span class="s1">  "transcript": "Osmosis is the movement of water across a semipermeable membrane."</span>
+<span class="s1">}'</span>
+<span class="c1"># Re-run the exact same request (same idempotencyKey) any number of times —</span>
+<span class="c1"># the response always has the same session.id and flashcard ids, never a duplicate.</span>
+</code></pre></div>
+<h3 id="2-leech-detection">2. Leech detection<a class="headerlink" href="#2-leech-detection" title="Permanent link">&para;</a></h3>
+<p>Every flashcard tracks <code>consecutiveFailures</code> (consecutive "again" grades) and <code>isLeech</code> (true once that streak
+hits <code>LEECH_THRESHOLD</code>, currently 3 — see <code>leech.ts</code>). A single subsequent "good" or "easy" grade clears the flag
+and resets the streak; a "hard" grade neither advances nor resets it (it's a lukewarm pass, not a failure). Leeches
+are surfaced on their own endpoint, <code>GET /review/leeches</code>, distinct from the general due queue, so a student can
+see which cards need to be <em>reformulated</em> rather than endlessly rescheduled — SM-2's core blind spot.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Grade the same card "again" three times in a row...</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/review/&lt;cardId&gt;<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"grade": "again"}'</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/review/&lt;cardId&gt;<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"grade": "again"}'</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/review/&lt;cardId&gt;<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"grade": "again"}'</span>
+<span class="c1"># -&gt; the response now has "isLeech": true, "consecutiveFailures": 3</span>
+
+curl<span class="w"> </span>localhost:4466/review/leeches
+<span class="c1"># -&gt; a list of every currently-flagged leech, across every session</span>
+
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/review/&lt;cardId&gt;<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"grade": "good"}'</span>
+<span class="c1"># -&gt; "isLeech": false, "consecutiveFailures": 0 — one solid recall clears it</span>
+</code></pre></div>
+<h3 id="3-topic-tagging-search">3. Topic tagging + search<a class="headerlink" href="#3-topic-tagging-search" title="Permanent link">&para;</a></h3>
+<p>When a session is ingested (or extended — see Feature 5), <code>topics.ts</code> extracts 1-3 heuristic topic tags from the
+full transcript and attaches them to every flashcard generated at that point. <strong>This is explicitly a heuristic,
+not real NLP or topic modeling</strong>: it scores each content word (length &gt;= 4, not a stopword) by raw frequency, with
+a small bonus for words that appeared capitalized in the original text (a cheap proxy for proper nouns/key terms),
+and returns the top-scoring 1-3 as lowercase tags. It reliably picks out the term a session was <em>about</em> ("ribosome,"
+"mitochondria") when that term is repeated, and does nothing cleverer than that. <code>GET /flashcards/search?topic=</code>
+then finds every flashcard across <em>every</em> session carrying a given tag, so a student can pull together material on
+the same topic even when it came from separate study sessions weeks apart.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span><span class="s2">"localhost:4466/flashcards/search?topic=ribosome"</span>
+<span class="c1"># -&gt; every flashcard, from any session, whose extracted topics include "ribosome"</span>
+</code></pre></div>
+<h3 id="4-adaptive-review-ordering">4. Adaptive review ordering<a class="headerlink" href="#4-adaptive-review-ordering" title="Permanent link">&para;</a></h3>
+<p><code>GET /review/due</code> no longer returns cards in plain due-date order — it ranks them by a priority score (see
+<code>priority.ts</code>, doc-commented in full there):</p>
+<div class="highlight"><pre><span></span><code>score = overdueDays * OVERDUE_WEIGHT           (OVERDUE_WEIGHT = 1)
+      + (isLeech ? LEECH_BONUS : 0)            (LEECH_BONUS   = 10)
+      + max(0, BASELINE_EASE - easeFactor)      (BASELINE_EASE = 2.5)
+        * EASE_WEIGHT                           (EASE_WEIGHT   = 2)
+</code></pre></div>
+<p><code>overdueDays</code> rewards cards that have been put off longer; the leech bonus is a large flat addition (worth ~10
+days of plain overdue-ness) so a leech surfaces near the top of the queue almost regardless of its due date,
+because the whole point of leech-flagging is forcing it in front of the student instead of letting it get quietly
+rescheduled forever; the ease term gives a smaller boost to cards that have historically been hard to recall
+(a below-baseline SM-2 ease factor), since that's a real but softer signal than 3-in-a-row failures. Cards that
+aren't due yet are still filtered out first — this only reorders the pool that's already eligible today.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>localhost:4466/review/due
+<span class="c1"># -&gt; due cards sorted by priority score descending: a leech, or a badly overdue/hard card, first</span>
+</code></pre></div>
+<h3 id="5-streamingincremental-ingestion">5. Streaming/incremental ingestion<a class="headerlink" href="#5-streamingincremental-ingestion" title="Permanent link">&para;</a></h3>
+<p><code>PATCH /sessions/:id/segments</code> appends newly-captured transcript segments to an already-ingested session — the
+same shape <code>POST /sessions</code> accepts (a string, or an array of <code>{speaker, text, timestampMs}</code> segments) — mirroring
+Bee's continuous ambient capture (many small updates over the course of a session) rather than one big batch
+upload after the fact. It regenerates the session's summary and topic tags from the <em>full</em> updated transcript, but
+only persists flashcards that weren't already generated for this session (deduped by front text), so re-running
+the generator over the combined transcript doesn't re-mint duplicates for material it already produced a card
+from earlier.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>PATCH<span class="w"> </span>localhost:4466/sessions/&lt;sessionId&gt;/segments<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "segments": [</span>
+<span class="s1">    {"speaker": "Alice", "text": "Active transport moves molecules against a concentration gradient using energy."},</span>
+<span class="s1">    {"speaker": "Bob", "text": "What is active transport?"},</span>
+<span class="s1">    {"speaker": "Alice", "text": "It requires ATP to move against the gradient."}</span>
+<span class="s1">  ]</span>
+<span class="s1">}'</span>
+<span class="c1"># -&gt; { "session": { ...updated summary/segments/topics... }, "newFlashcards": [ ...only the new cards... ] }</span>
+</code></pre></div>
+<h3 id="6-portable-export">6. Portable export<a class="headerlink" href="#6-portable-export" title="Permanent link">&para;</a></h3>
+<p><code>GET /sessions/:id/export</code> (one session) and <code>GET /export</code> (every session) return every flashcard as a flat TSV —
+tab-separated rather than comma-separated because flashcard text routinely contains commas, which would otherwise
+need quoting. Three columns, with a header row: <code>front</code>, <code>back</code>, <code>tags</code> (space-separated, matching Anki's own
+multi-value tag convention).</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>localhost:4466/sessions/&lt;sessionId&gt;/export
+<span class="c1"># front back    tags</span>
+<span class="c1"># What is a ribosome?   Ribosome function is essential for protein synthesis.   ribosome protein</span>
+<span class="c1"># ...</span>
+</code></pre></div>
+<p>To import into Anki: <strong>File -&gt; Import</strong>, set "Fields separated by" to <strong>Tab</strong>, map column 1 -&gt; Front, column 2 -&gt;
+Back, column 3 -&gt; Tags, and tell it to skip the header line.</p>
+<h2 id="swapping-in-a-real-llm-backed-generator">Swapping in a real LLM-backed generator<a class="headerlink" href="#swapping-in-a-real-llm-backed-generator" title="Permanent link">&para;</a></h2>
+<p>Everything in <code>server.ts</code> and <code>studyService.ts</code> depends only on the <code>FlashcardGenerator</code> interface in
+<code>flashcardGenerator.ts</code> (<code>generate(segments) -&gt; {summary, flashcards}</code>), not on <code>TemplateFlashcardGenerator</code>
+specifically. To go from heuristic to model-backed:</p>
+<ol>
+<li>Implement <code>FlashcardGenerator</code> with a class that sends the segments to a model — e.g. Amazon Bedrock (natural
+   pairing with the hackathon's AWS Builder mini-challenge) — with a prompt like "extract key facts and Q&amp;A pairs
+   from this study session transcript and return JSON <code>{summary, flashcards: [{front, back}]}</code>", then parses and
+   validates the model's JSON response into that same shape.</li>
+<li>Swap the generator instance constructed in <code>src/index.ts</code> (and in tests, if desired) from
+   <code>new TemplateFlashcardGenerator()</code> to <code>new LlmFlashcardGenerator(bedrockClient)</code>.</li>
+</ol>
+<p>No change to <code>studyService.ts</code>, <code>scheduler.ts</code>, or <code>server.ts</code> is needed — that's the point of isolating generation
+behind an interface from the start.</p>
+<h2 id="judging-criteria-alignment">Judging-criteria alignment<a class="headerlink" href="#judging-criteria-alignment" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Tech Implementation:</strong> The three real seams a production build would need — Bee transcript ingestion,
+  LLM-backed generation, and spaced-repetition scheduling — are each isolated behind a small interface
+  (<code>normalizeTranscript</code>'s segment shape, <code>FlashcardGenerator</code>, and pure functions in <code>scheduler.ts</code>), so swapping
+  the heuristic generator for Bedrock or wiring in Bee's real MCP tool is a scoped, single-file change, not a
+  rewrite. The scheduler itself implements real SM-2 mechanics (interval growth, ease factor, repetition streak
+  reset on failure), not a placeholder. The advanced round adds real production concerns on top: idempotent
+  ingestion (safe retries), a leech-detection state machine, a documented multi-signal priority formula for review
+  ordering, incremental ingestion that dedupes against already-generated material, and a portable export format —
+  each isolated in its own small module (<code>leech.ts</code>, <code>priority.ts</code>, <code>topics.ts</code>, <code>export.ts</code>) and covered by its
+  own passing test, not bolted on as a demo-only stub.</li>
+<li><strong>Design:</strong> Zero manual note-taking — a transcript in, a summary and review-ready flashcards out. The daily
+  review surface (<code>GET /review/due</code>) is a single endpoint by design, matching the idea's "clean daily review flow"
+  goal; a companion app would render it directly with no extra aggregation logic needed.</li>
+<li><strong>Potential Impact:</strong> Directly hits "education," one of the Bee track's three explicitly prioritized categories,
+  with an everyday, recurring use case (students studying together, or half-remembering a lecture) rather than a
+  one-off demo scenario.</li>
+<li><strong>Quality of Idea:</strong> Goes beyond a transcript viewer or generic summarizer by closing the loop into an active
+  learning system — extraction feeding a real scheduling algorithm that adapts to how well material was recalled,
+  which is what makes it a study <em>coach</em> rather than a note-taking tool.</li>
+</ul>
+<h2 id="round-3-quiz-mode-shared-decks-reminders-adaptive-generation-bias">Round 3: quiz mode, shared decks, reminders, adaptive generation bias<a class="headerlink" href="#round-3-quiz-mode-shared-decks-reminders-adaptive-generation-bias" title="Permanent link">&para;</a></h2>
+<p>A third pass added four more features, each independently tested in <code>test/smoke.test.ts</code> (search for
+"Feature 7" through "Feature 10").</p>
+<h3 id="7-shared-study-group-decks">7. Shared study-group decks<a class="headerlink" href="#7-shared-study-group-decks" title="Permanent link">&para;</a></h3>
+<p><code>POST /sessions</code> accepts an optional <code>shared: true</code>, marking the resulting session as a shared study-group deck.
+Another student — identified by nothing more than a caller-supplied <code>studentId</code> string, no auth for this demo —
+can then call <code>POST /decks/:sessionId/join</code> to pull that session's flashcards into their own personal review
+queue. Critically, the flashcard <em>content</em> (front/back/tags) is <strong>never copied or regenerated</strong>: only a fresh,
+independent review-state row (interval, ease factor, repetitions, due date, leech tracking) is created per
+(studentId, card) pair. Two students who join the same deck and review the same card end up with completely
+independent ease factors, due dates, and leech flags — one can leech a card while the other aces it, and neither
+touches the card's own embedded (student-less) state, which is what every original, <code>studentId</code>-less endpoint
+still reads and writes. <code>GET /review/due</code>, <code>GET /review/leeches</code>, and <code>POST /review/:cardId</code> all accept an
+optional <code>studentId</code> (query param for the GETs, body field for the POST) to operate on that student's own state
+instead of the shared default.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Ingest a shared deck</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/sessions<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "title": "Bio 101 study group", "shared": true,</span>
+<span class="s1">  "transcript": "Meiosis is the process of cell division that produces gametes."</span>
+<span class="s1">}'</span>
+<span class="c1"># -&gt; note the session id</span>
+
+<span class="c1"># Two different students join the same deck</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/decks/&lt;sessionId&gt;/join<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"studentId": "alice"}'</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/decks/&lt;sessionId&gt;/join<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"studentId": "bob"}'</span>
+
+<span class="c1"># They review the same card independently</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/review/&lt;cardId&gt;<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"grade": "easy", "studentId": "alice"}'</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/review/&lt;cardId&gt;<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"grade": "again", "studentId": "bob"}'</span>
+<span class="c1"># -&gt; alice's and bob's responses show different easeFactor/dueAt/isLeech on the *same* cardId</span>
+
+curl<span class="w"> </span><span class="s2">"localhost:4466/review/due?studentId=alice"</span><span class="w">   </span><span class="c1"># alice's own due queue</span>
+curl<span class="w"> </span><span class="s2">"localhost:4466/review/leeches?studentId=bob"</span><span class="w"> </span><span class="c1"># bob's own leeches</span>
+</code></pre></div>
+<h3 id="8-quizpractice-test-mode">8. Quiz/practice-test mode<a class="headerlink" href="#8-quizpractice-test-mode" title="Permanent link">&para;</a></h3>
+<p><code>POST /quiz/start { count, studentId? }</code> samples up to <code>count</code> cards into a new timed quiz. Sampling reuses the
+exact same due-filtering (<code>isDue</code>) and priority-ranking (<code>priorityScore</code>/<code>sortByPriority</code>) logic <code>GET /review/due</code>
+is built on — due cards come first, worst-priority (leeches, overdue, historically-hard cards) first, then, if
+<code>count</code> isn't filled, padded out with not-yet-due cards in the same priority order — rather than a separate,
+duplicated sampling algorithm. An optional <code>studentId</code> samples from that student's own personal deck (joined
+shared decks + directly-reviewed cards, see Feature 7) instead of the shared default pool. The response exposes
+each sampled card's <code>front</code> only — <code>back</code> is withheld until it's graded.</p>
+<p><code>POST /quiz/:id/answer { cardId, answer }</code> grades the response. <strong>Grading approach: a simple case-insensitive,
+whitespace-trimmed exact match</strong> against the card's <code>back</code> text (both sides lowercased, trimmed, and
+whitespace-collapsed before comparing) — no fuzzy matching, synonym handling, or partial credit. This is
+deliberately the simplest thing that could work; see FRICTION_LOG.md for the tradeoff.</p>
+<p><code>GET /quiz/:id/results</code> returns a score summary — usable mid-quiz (a partial score) or once every sampled card has
+been answered (<code>complete: true</code>) — including exactly which cards were missed, with their prompt/answer, so a
+student can review what they got wrong right after finishing.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/quiz/start<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"count": 5, "studentId": "alice"}'</span>
+<span class="c1"># -&gt; { "id": "...", "cards": [ { "cardId": "...", "front": "What is meiosis?" }, ... ] }</span>
+
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/quiz/&lt;quizId&gt;/answer<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "cardId": "&lt;cardId&gt;", "answer": "a process of cell division that produces gametes"</span>
+<span class="s1">}'</span>
+<span class="c1"># -&gt; { "correct": true } or { "correct": false }</span>
+
+curl<span class="w"> </span>localhost:4466/quiz/&lt;quizId&gt;/results
+<span class="c1"># -&gt; { "total": 5, "answered": 3, "correct": 2, "complete": false, "missed": [ {"cardId": "...", "front": "...", "back": "...", "submittedAnswer": "..."} ] }</span>
+</code></pre></div>
+<h3 id="9-due-card-reminder-digest">9. Due-card reminder digest<a class="headerlink" href="#9-due-card-reminder-digest" title="Permanent link">&para;</a></h3>
+<p><code>GET /reminders/digest?studentId=</code> returns a compact, single-paragraph summary of that student's own due queue —
+built from the exact same per-student due/leech logic Features 7 and 8 use, so it can't drift out of sync with
+what the student would actually see — designed to be easy for another service or a voice assistant to read aloud
+directly, e.g. <code>"You have 5 cards due today, including 2 leeches."</code> The response also includes the structured
+counts the sentence is built from (<code>due</code>, <code>dueLeeches</code>, <code>totalLeeches</code>, <code>totalCards</code>), for a caller that wants to
+render its own UI instead of just reading the sentence.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span><span class="s2">"localhost:4466/reminders/digest?studentId=alice"</span>
+<span class="c1"># -&gt; {</span>
+<span class="c1">#      "studentId": "alice",</span>
+<span class="c1">#      "summary": "You have 5 cards due today, including 2 leeches.",</span>
+<span class="c1">#      "counts": { "due": 5, "dueLeeches": 2, "totalLeeches": 3, "totalCards": 12 }</span>
+<span class="c1">#    }</span>
+</code></pre></div>
+<h3 id="10-adaptive-new-card-generation-bias">10. Adaptive new-card generation bias<a class="headerlink" href="#10-adaptive-new-card-generation-bias" title="Permanent link">&para;</a></h3>
+<p><code>PATCH /sessions/:id/segments</code> now accepts an optional <code>studentId</code>. When given, appending new material biases
+flashcard generation toward topics that student has historically struggled with. <strong>The exact heuristic:</strong></p>
+<ol>
+<li>A topic (one of a card's heuristic <code>tags</code>, see Feature 3 in the previous round) counts as <strong>weak</strong> for a
+   student if, across every card of theirs (joined or directly reviewed) carrying that tag, the <em>average ease
+   factor</em> is below <code>2.0</code> (meaningfully under <code>scheduler.ts</code>'s <code>2.5</code> baseline) — <strong>or</strong> at least one of those
+   cards is currently flagged a leech. A leech alone is enough regardless of average ease, since three failures in
+   a row is a stronger signal than a merely-below-average ease factor (the same priority <code>priority.ts</code> already
+   gives leeches over ease elsewhere).</li>
+<li>The topics of just the <em>newly appended</em> segments (not the full transcript) are extracted the same way any
+   other ingest does (<code>topics.ts</code>).</li>
+<li>If any of those overlap the student's weak topics, up to 3 extra simple <strong>cloze-deletion</strong> cards (fill-in-the-
+   blank, blanking the longest word in each new sentence) are generated from the new segments alone and added on
+   top of whatever the generator's normal Q&amp;A/definition/cloze tiers already produced for the full transcript —
+   so a weak topic visibly yields <em>more</em> review material than a topic the student is already acing, which produces
+   nothing extra.</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1"># alice previously failed several "photosynthesis"-tagged cards -&gt; that topic is now "weak" for her</span>
+curl<span class="w"> </span>-X<span class="w"> </span>PATCH<span class="w"> </span>localhost:4466/sessions/&lt;sessionId&gt;/segments<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "studentId": "alice",</span>
+<span class="s1">  "segments": "Photosynthesis also depends on chlorophyll concentration in the leaf."</span>
+<span class="s1">}'</span>
+<span class="c1"># -&gt; "newFlashcards" includes both whatever the normal tiers found AND a few extra</span>
+<span class="c1">#    "Fill in the blank: ..." cards from just this new sentence, because photosynthesis is weak for alice.</span>
+<span class="c1"># The same PATCH with no studentId (or a studentId with no weak topics) yields only the normal-tier cards.</span>
+</code></pre></div>
+<p>See FRICTION_LOG.md for this heuristic's real limitations (topic granularity, cold-start behavior, and why "more
+cards" rather than "simpler cards" was the chosen bias).</p>
+<h2 id="round-4-streaks-gamification-session-planner-import-round-trip-regenerate-a-card">Round 4: streaks &amp; gamification, session planner, import round-trip, regenerate-a-card<a class="headerlink" href="#round-4-streaks-gamification-session-planner-import-round-trip-regenerate-a-card" title="Permanent link">&para;</a></h2>
+<p>A fourth pass added four more features, each independently tested in <code>test/smoke.test.ts</code> (search for "Feature 11"
+through "Feature 14").</p>
+<h3 id="11-study-streaks-gamification">11. Study streaks &amp; gamification<a class="headerlink" href="#11-study-streaks-gamification" title="Permanent link">&para;</a></h3>
+<p>Every review submitted with a <code>studentId</code> (<code>POST /review/:cardId { grade, studentId }</code>) now also folds into that
+student's daily streak (see <code>streak.ts</code>). A "streak day" is any UTC calendar day on which the student completed at
+least one review — reviewing ten cards in one sitting only counts once. Consecutive streak days grow
+<code>currentStreak</code>; a day with <strong>zero</strong> reviews breaks it: the next review resets <code>currentStreak</code> back to <code>1</code> (the
+day it happens on still counts), but <code>longestStreak</code> only ever grows, never shrinks. Milestone badges
+(<code>3-day-streak</code>, <code>7-day-streak</code>, <code>30-day-streak</code>) are earned based on <code>longestStreak</code>, so once earned a badge is
+never revoked just because the current streak later resets — the same "permanent achievement" model most habit
+trackers use.</p>
+<p><code>GET /students/:studentId/streak</code> returns the current state; a student who has never reviewed anything gets a
+valid all-zero response rather than a 404 (asking about a streak that hasn't started isn't an error).</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>localhost:4466/students/alice/streak
+<span class="c1"># -&gt; { "studentId": "alice", "currentStreak": 4, "longestStreak": 12, "badges": ["3-day-streak", "7-day-streak"], "lastActiveDate": "2026-03-04" }</span>
+</code></pre></div>
+<p>Note: since streaks are keyed off a <code>studentId</code>, only reviews submitted through the shared-decks <code>studentId</code> path
+count toward one — the original, student-less "default reviewer" endpoint (<code>POST /review/:cardId</code> with no
+<code>studentId</code>) has no single student to credit and never touches streak state.</p>
+<h3 id="12-global-daily-review-session-planner">12. Global daily review session planner<a class="headerlink" href="#12-global-daily-review-session-planner" title="Permanent link">&para;</a></h3>
+<p><code>GET /review/session?studentId=&amp;maxCards=&lt;n&gt;</code> builds one bounded "here's your review for today" session across
+<strong>every</strong> deck a student has — their own directly-reviewed cards and every shared deck they've joined (Feature 7)
+— in the exact same adaptive priority order <code>GET /review/due</code> already uses (<code>priorityScore</code>/<code>sortByPriority</code>), then
+caps the result at <code>maxCards</code>. This is deliberately a thin wrapper around the existing per-student due-card query,
+not a new ranking algorithm: the planner's job is the cap and the "how many are left for later" count (<code>totalDue</code>),
+not a different ordering. A leech or badly-overdue card from one deck still outranks a merely-due card from
+another, so capping never means silently dropping the most urgent material.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span><span class="s2">"localhost:4466/review/session?studentId=alice&amp;maxCards=15"</span>
+<span class="c1"># -&gt; {</span>
+<span class="c1">#      "studentId": "alice", "maxCards": 15, "totalDue": 42,</span>
+<span class="c1">#      "cards": [ /* up to 15 PersonalFlashcardView objects, worst-priority first, across every deck alice has */ ]</span>
+<span class="c1">#    }</span>
+</code></pre></div>
+<h3 id="13-import-round-trip">13. Import round-trip<a class="headerlink" href="#13-import-round-trip" title="Permanent link">&para;</a></h3>
+<p><code>POST /import { tsv, sessionId?, title? }</code> is the inverse of <code>GET /export</code>/<code>GET /sessions/:id/export</code>: it parses a
+TSV in that exact format (<code>front</code>, <code>back</code>, <code>tags</code>, header optional — see <code>fromPortableTsv</code> in <code>export.ts</code>) and
+creates flashcards from it, so a student can back up a deck and restore it later, or migrate cards between
+environments (a local dev instance and a deployed one, say). Pass <code>sessionId</code> to import into an existing session;
+omit it to create a fresh one (the "restore a full backup" shape).</p>
+<p><strong>Deduplication, exactly as documented:</strong> a row is skipped (counted in <code>skippedDuplicates</code>, not created) if its
+trimmed, lowercased <code>front</code> text matches either (a) a flashcard the target session already has, or (b) an earlier
+row already accepted from this same import batch. That second half matters even for a brand-new session: a TSV
+with an accidental duplicate row still only produces one card. Imported cards always start with fresh
+scheduling/leech state (<code>interval: 0</code>, no leech history) — a TSV export carries no review history to restore, only
+front/back/tags survive the round trip (see FRICTION_LOG.md).</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Back up a deck</span>
+curl<span class="w"> </span>localhost:4466/sessions/&lt;sessionId&gt;/export<span class="w"> </span>-o<span class="w"> </span>backup.tsv
+
+<span class="c1"># ...later, or in a different environment: restore it into a brand-new session</span>
+<span class="c1"># (jq builds the JSON body so the TSV's tabs/newlines are escaped correctly)</span>
+jq<span class="w"> </span>-Rs<span class="w"> </span><span class="s1">'{tsv: .}'</span><span class="w"> </span>backup.tsv<span class="w"> </span><span class="p">|</span><span class="w"> </span>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/import<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span>@-
+<span class="c1"># -&gt; { "session": {...}, "imported": [ ...new Flashcard objects... ], "skippedDuplicates": 0 }</span>
+
+<span class="c1"># Re-importing the same backup into the same session is a safe no-op</span>
+jq<span class="w"> </span>-Rs<span class="w"> </span>--arg<span class="w"> </span>sid<span class="w"> </span><span class="s2">"&lt;sessionId&gt;"</span><span class="w"> </span><span class="s1">'{tsv: ., sessionId: $sid}'</span><span class="w"> </span>backup.tsv<span class="w"> </span><span class="p">|</span><span class="w"> </span>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/import<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span>@-
+<span class="c1"># -&gt; "imported": [], "skippedDuplicates": &lt;row count&gt;</span>
+</code></pre></div>
+<h3 id="14-regenerate-a-card">14. Regenerate-a-card<a class="headerlink" href="#14-regenerate-a-card" title="Permanent link">&para;</a></h3>
+<p><code>POST /flashcards/:cardId/regenerate</code> re-runs flashcard generation to produce an alternative phrasing for one
+existing card, replacing its <code>front</code>/<code>back</code> in place. Everything else — <code>id</code>, <code>tags</code>, and every bit of
+spaced-repetition/leech state (<code>interval</code>, <code>easeFactor</code>, <code>repetitions</code>, <code>dueAt</code>, <code>consecutiveFailures</code>, <code>isLeech</code>)
+— is carried over untouched, so regenerating a confusingly-worded card doesn't cost a student their progress on it.</p>
+<p>It <strong>reuses the same injected <code>FlashcardGenerator</code></strong> every other ingestion path uses — no separate regeneration
+logic. The only new piece is recovering <em>which part</em> of the session's transcript the card came from
+(<code>findUnderlyingSegments</code> in <code>studyService.ts</code>), so regeneration runs the generator over just that material instead
+of the whole session (which would just reproduce the same card set the original ingest already did). This exploits
+how each generator tier builds a card's text: a Q&amp;A card's front/back are the two source segments' text verbatim,
+so an exact match recovers them exactly; a cloze card's blanked word can be substituted back in to reconstruct the
+original sentence and locate it; a definition card only has "the segment mentioning the term" as a fallback signal,
+since its front is reworded rather than verbatim. If the generator's normal tiers produce nothing different for
+that material (a real possibility for terse source text), regeneration falls back to <code>generateClozeCards</code> — the
+same exported helper Feature 10's adaptive bias already reuses — for a guaranteed-different fill-in-the-blank
+phrasing, rather than writing a second cloze generator.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4466/flashcards/&lt;cardId&gt;/regenerate
+<span class="c1"># -&gt; the same card id, with a fresh front/back and identical interval/easeFactor/dueAt/isLeech</span>
+</code></pre></div>
+<h2 id="friction-log">Friction log<a class="headerlink" href="#friction-log" title="Permanent link">&para;</a></h2>
+<p>See <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/bee-studyloop/FRICTION_LOG.md"><code>FRICTION_LOG.md</code></a> for notes captured while building this (eligible for the hackathon's
+optional friction-log bonus).</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "content.code.copy", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

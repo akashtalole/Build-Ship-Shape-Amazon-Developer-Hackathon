@@ -1,0 +1,2322 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Six category implementations for the Build, Ship, Shape Amazon Developer Hackathon.">
+      
+      
+      
+        <link rel="canonical" href="https://akashtalole.github.io/Build-Ship-Shape-Amazon-Developer-Hackathon/projects/model-router/">
+      
+      
+        <link rel="prev" href="../studyloop/">
+      
+      
+        <link rel="next" href="../friction-log-toolkit/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Model Router (AWS Builder) - Build, Ship, Shape — Amazon Developer Hackathon</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#model-router-the-sagemaker-sidecar-pattern" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Build, Ship, Shape — Amazon Developer Hackathon" class="md-header__button md-logo" aria-label="Build, Ship, Shape — Amazon Developer Hackathon" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Build, Ship, Shape — Amazon Developer Hackathon
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Model Router (AWS Builder)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ideas/" class="md-tabs__link">
+          
+  
+  
+  Winning Ideas
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../homeops/" class="md-tabs__link">
+          
+  
+  
+  Projects
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../deploy/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../demo/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Demo Video
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../devpost-submission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Devpost Submission
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Build, Ship, Shape — Amazon Developer Hackathon" class="md-nav__button md-logo" aria-label="Build, Ship, Shape — Amazon Developer Hackathon" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Build, Ship, Shape — Amazon Developer Hackathon
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Winning Ideas
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Winning Ideas
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/fire-tv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fire TV
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/alexa-plus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alexa+
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/bee/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bee
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/ring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/aws-builder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS Builder
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/open-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Open Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Projects
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../homeops/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HomeOps (Alexa+)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porchpass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PorchPass (Ring)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../courtside/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CourtSide (Fire TV)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../studyloop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    StudyLoop (Bee)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Router (AWS Builder)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Router (AWS Builder)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-demo-task-urgency-triage-for-household-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The demo task: urgency triage for household messages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#simulated-cost-latency-illustrative-not-real-aws-pricing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Simulated cost &amp; latency (illustrative, not real AWS pricing)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#try-it-by-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Try it by hand
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#swapping-in-the-real-aws-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Swapping in the real AWS services
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced features
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Advanced features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-response-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Response caching
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-circuit-breaker-fallback-chain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Circuit breaker / fallback chain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-shadow-evaluation-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Shadow evaluation mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-adaptive-threshold-suggestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Adaptive threshold suggestion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-simulated-streaming-foundation-model-responses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Simulated streaming foundation-model responses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-per-caller-rate-limiting-quota" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Per-caller rate limiting / quota
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-three-tier-cascade-a-mid-tier-reviewer-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Three-tier cascade: a mid-tier "reviewer" model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-cost-budget-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Cost-budget enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#9-classification-explainability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Classification explainability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10-persistent-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Persistent metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#11-per-caller-cost-budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Per-caller cost budgets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-canary-a-b-sidecar-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Canary / A-B sidecar routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-outbound-alert-webhooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Outbound alert webhooks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-prometheus-format-metrics-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Prometheus-format metrics export
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-stackable-pattern-not-a-one-off-feature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A stackable pattern, not a one-off feature
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#judging-criteria-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Judging-criteria alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../friction-log-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    friction-log-toolkit (Open Source)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deploy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demo Video
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../devpost-submission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devpost Submission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-demo-task-urgency-triage-for-household-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The demo task: urgency triage for household messages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#simulated-cost-latency-illustrative-not-real-aws-pricing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Simulated cost &amp; latency (illustrative, not real AWS pricing)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#try-it-by-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Try it by hand
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#swapping-in-the-real-aws-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Swapping in the real AWS services
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced features
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Advanced features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-response-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Response caching
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-circuit-breaker-fallback-chain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Circuit breaker / fallback chain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-shadow-evaluation-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Shadow evaluation mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-adaptive-threshold-suggestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Adaptive threshold suggestion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-simulated-streaming-foundation-model-responses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Simulated streaming foundation-model responses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-per-caller-rate-limiting-quota" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Per-caller rate limiting / quota
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-three-tier-cascade-a-mid-tier-reviewer-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Three-tier cascade: a mid-tier "reviewer" model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-cost-budget-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Cost-budget enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#9-classification-explainability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Classification explainability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10-persistent-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Persistent metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#11-per-caller-cost-budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Per-caller cost budgets
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-canary-a-b-sidecar-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Canary / A-B sidecar routing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-outbound-alert-webhooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Outbound alert webhooks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-prometheus-format-metrics-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Prometheus-format metrics export
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-stackable-pattern-not-a-one-off-feature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A stackable pattern, not a one-off feature
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#judging-criteria-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Judging-criteria alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<div class="admonition note">
+<p class="admonition-title">Source of truth</p>
+<p>This page mirrors <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/aws-builder-model-router/README.md"><code>aws-builder-model-router/README.md</code></a> in the repo — edit it there, not here. Links below point back to the repo on GitHub.</p>
+</div>
+<h1 id="model-router-the-sagemaker-sidecar-pattern">Model Router — the "SageMaker Sidecar" Pattern<a class="headerlink" href="#model-router-the-sagemaker-sidecar-pattern" title="Permanent link">&para;</a></h1>
+<p>Implementation of the "SageMaker Sidecar" idea (idea 3) from
+<a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/hackathon-ideas/aws-builder.md"><code>hackathon-ideas/aws-builder.md</code></a>, generalized into a reusable pattern rather
+than tied to one primary track's feature: off-the-shelf foundation models (Bedrock) are often overkill in cost and
+latency for narrow, well-defined tasks. This router keeps a small, purpose-built classifier ("sidecar",
+SageMaker-shaped) in front of a full foundation model (Bedrock-shaped) — the sidecar handles the common case fast
+and cheap, and the router escalates to the foundation model only when the sidecar's own confidence is too low to
+trust.</p>
+<p>Built for the <strong>AWS Builder mini-challenge</strong> of the
+<a href="https://amazonappdev2026.devpost.com/">Build, Ship, Shape: Amazon Developer Hackathon</a> ("meaningfully incorporate
+AWS services such as Bedrock, AgentCore, SageMaker, Strands SDK, or Kiro"). No AWS credentials are available in this
+environment, so both the sidecar and the foundation model sit behind interfaces shaped exactly like the real AWS
+SDKs require, backed by mock implementations — see <a href="#swapping-in-the-real-aws-services">Swapping in the real AWS services</a>
+for exactly what changes to go live.</p>
+<h2 id="the-demo-task-urgency-triage-for-household-messages">The demo task: urgency triage for household messages<a class="headerlink" href="#the-demo-task-urgency-triage-for-household-messages" title="Permanent link">&para;</a></h2>
+<p>To make the pattern concrete instead of abstract, the router classifies short household-automation-style messages
+(the kind a HomeOps/Alexa+-style assistant or a Ring/Bee-style notification pipeline needs to triage) into one of
+three urgency buckets:</p>
+<ul>
+<li><strong><code>urgent</code></strong> — "There's smoke coming from the kitchen!", "the front door alarm won't stop"</li>
+<li><strong><code>routine</code></strong> — "reminder: trash day is tomorrow", "the furnace filter needs replacing"</li>
+<li><strong><code>informational</code></strong> — "FYI, the package was delivered", "heads up, storms expected tonight"</li>
+</ul>
+<p>Most messages a household-automation system sees are one of these three unambiguous cases — a job a small,
+explainable, keyword-driven classifier handles perfectly well in single-digit milliseconds. Only the genuinely
+ambiguous minority ("can you check on things when you get a chance?") needs a full foundation model's language
+understanding to triage correctly. Routing on confidence, rather than always calling the expensive model, is the
+whole point of the pattern.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong><code>POST /classify</code></strong> runs the sidecar (<code>MockSidecarClassifier</code>) first, always. It's a deterministic keyword/
+   pattern matcher — deliberately simple and explainable, not a disguised LLM call — so its cost and latency
+   profile is honestly the cheap/fast one it claims to be.</li>
+<li>If the sidecar's <code>confidence</code> meets the threshold (default <strong>0.7</strong>, overridable per request), its answer is
+   returned immediately: <strong>fast path</strong>, no foundation model call.</li>
+<li>If confidence is below the threshold, the router escalates to the foundation model (<code>MockBedrockProvider</code>) for a
+   fuller answer: <strong>slow path</strong>, at foundation-model cost and latency.</li>
+<li>Every request's outcome — which path it took, and the simulated cost/latency of each leg — is returned in the
+   response and rolled into cumulative metrics.</li>
+</ol>
+<h3 id="simulated-cost-latency-illustrative-not-real-aws-pricing">Simulated cost &amp; latency (illustrative, not real AWS pricing)<a class="headerlink" href="#simulated-cost-latency-illustrative-not-real-aws-pricing" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Cost / request</th>
+<th>Latency</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sidecar (SageMaker-shaped)</td>
+<td>~$0.0001</td>
+<td>~45 ms</td>
+</tr>
+<tr>
+<td>Foundation model (Bedrock-shaped)</td>
+<td>~$0.012</td>
+<td>~850 ms</td>
+</tr>
+</tbody>
+</table>
+<p>These numbers are made up to be directionally realistic (a small real-time SageMaker endpoint really is roughly two
+orders of magnitude cheaper and faster than a hosted foundation model call) — a real deployment would replace them
+with numbers pulled from CloudWatch (endpoint invocation latency) and the actual SageMaker/Bedrock pricing pages for
+the instance type and model chosen. The point they're used to make is directional and quantifiable: <strong><code>GET
+/metrics</code></strong> compares the router's actual cumulative cost against what the same traffic would have cost if every
+request always hit the foundation model directly, which is the concrete argument for why this pattern matters.</p>
+<h2 id="project-layout">Project layout<a class="headerlink" href="#project-layout" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>src/
+  types.ts               Shared types: SidecarResult, FoundationResult, RouteResult, MetricsSnapshot, CanaryStatus, CallerBudgetSnapshot
+  sidecarClassifier.ts   SidecarClassifier interface + MockSidecarClassifier (keyword-based urgency heuristic, now configurable for canary/A-B routing)
+  foundationModel.ts     FoundationModelProvider interface + MockBedrockProvider (template answer + simulated failures)
+  reviewerModel.ts       MockReviewerProvider: the three-tier cascade's cheaper/faster mid-tier "reviewer" model
+  budgetTracker.ts       BudgetTracker: fixed-window dollar-spend cap for cost-budget enforcement (one instance per caller as of round 4)
+  alertWebhooks.ts       AlertWebhookDispatcher: HMAC-SHA256-signed outbound webhook delivery for budget/circuit-breaker alerts
+  prometheusFormat.ts    renderPrometheusMetrics: renders GET /metrics's JSON as Prometheus exposition-format text
+  metricsPersistence.ts  loadMetricsState/saveMetricsState: demo-grade JSON file persistence for cumulative metrics
+  rateLimiter.ts         RateLimiter: in-memory, fixed-window, per-caller quota
+  router.ts              ModelRouter: routing decision (3-tier cascade), cache, circuit breaker, shadow eval, feedback, per-caller budgets, canary routing, alerts, persistence, metrics
+  server.ts              Express app factory: POST /classify(/stream), POST /feedback, POST+GET+DELETE /budget(/all), POST+GET+DELETE /router/canary, POST+GET+DELETE /alerts/webhook, GET /metrics(/prometheus)
+  index.ts               Entry point: wires up the mocks (incl. the reviewer), creates the app, starts listening, persists metrics on shutdown
+test/
+  smoke.test.ts          Unit-style router tests (no HTTP) + end-to-end HTTP tests via fetch(), covering every feature below
+</code></pre></div>
+<h2 id="running-it">Running it<a class="headerlink" href="#running-it" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>install
+npm<span class="w"> </span>run<span class="w"> </span>build
+npm<span class="w"> </span>start
+<span class="c1"># Model router listening on http://localhost:4567</span>
+</code></pre></div>
+<p>Or for local iteration: <code>npm run dev</code></p>
+<h3 id="try-it-by-hand">Try it by hand<a class="headerlink" href="#try-it-by-hand" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Fast path: an unambiguous, high-confidence input never touches the foundation model</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "text": "There is smoke and fire in the kitchen, call 911 emergency!"</span>
+<span class="s1">}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "path": "sidecar", "label": "urgent", "confidence": 0.92, "totalCostUsd": 0.0001, "totalLatencyMs": 45</span>
+
+<span class="c1"># Escalation path: a genuinely ambiguous input gets a fuller foundation-model answer</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "text": "Can you check on things when you get a chance?"</span>
+<span class="s1">}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "path": "foundation", "confidence": 0.3, "foundation": {...}, "totalCostUsd": 0.0121, "totalLatencyMs": 895</span>
+
+<span class="c1"># A borderline input's routing changes if you lower the confidence threshold</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">  "text": "Just a reminder to take out the trash tonight.",</span>
+<span class="s1">  "threshold": 0.5</span>
+<span class="s1">}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; confidence 0.55 is below the default 0.7 threshold (escalates) but clears a threshold of 0.5 (fast path)</span>
+
+<span class="c1"># Cumulative metrics: actual cost vs. an always-foundation-model baseline</span>
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<p>See <a href="#advanced-features">Advanced features</a> below for <code>curl</code> examples of the cache, the forced-failure fallback path,
+and the streaming endpoint.</p>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span><span class="nb">test</span>
+</code></pre></div>
+<p><code>test/smoke.test.ts</code> covers, in order:</p>
+<ol>
+<li><strong>Router unit tests (no HTTP):</strong> a clear high-confidence input takes the sidecar path; a zero-keyword-signal
+   input escalates to the foundation model; the <em>same</em> borderline-confidence input (<code>confidence</code> 0.55) routes to the
+   foundation model at the default threshold (0.7) but to the sidecar path at a lowered threshold (0.5); and
+   cumulative metrics correctly track path counts plus the actual-cost-vs-always-foundation-cost math.</li>
+<li><strong>Response cache (unit):</strong> a repeated identical input within the TTL is served from cache (<code>cacheHit: true</code>)
+   without re-invoking either model; the escalation path is cached too; cache hits are folded into the cumulative
+   savings math; and an entry past its TTL (driven by an injectable clock, no real sleeping) is a fresh miss again.</li>
+<li><strong>Circuit breaker / fallback (unit):</strong> an always-failing foundation provider trips the breaker open after
+   <code>circuitBreakerFailureThreshold</code> consecutive failures; every failure falls back to the sidecar's best-effort
+   answer (<code>fallbackUsed: true</code>, <code>path: "fallback"</code>) rather than failing the request; an open circuit fast-fails
+   further escalations without even attempting the call; and after the cooldown elapses, a successful half-open
+   trial call closes the circuit again. The <code>FAILURE_TRIGGER</code> sentinel string is also exercised as the alternate,
+   input-driven way to force a failure.</li>
+<li><strong>Shadow evaluation (unit):</strong> a confident sidecar answer with <code>shadowMode: true</code> returns immediately (same cost
+   and latency as without shadow mode) while a background foundation-model call is kicked off; <code>flushShadowEvaluations()</code>
+   waits for it deterministically, and both an agreement and a deliberately engineered disagreement are checked
+   against <code>shadowAgreementRate</code>.</li>
+<li><strong>Adaptive threshold suggestion (unit):</strong> with no feedback yet, <code>GET /metrics</code>-equivalent <code>getMetrics()</code> suggests
+   nothing; after several fast-path classifications are reported incorrect via <code>recordFeedback</code>, the suggested
+   threshold moves upward (more conservative) as expected.</li>
+<li><strong>End-to-end HTTP tests:</strong> starts the real Express app via <code>createApp()</code> on an ephemeral port (<code>app.listen(0)</code>)
+   and drives it with real <code>fetch()</code> calls — the original validation/routing/metrics checks; a repeated request is
+   a cache hit over HTTP; <code>POST /feedback</code> accepts a known <code>requestId</code> (200) and rejects an unknown one (404);
+   <code>POST /classify/stream</code> delivers dozens of discrete SSE chunks ending in one <code>done</code> event; a simulated
+   foundation-model outage returns <code>200</code> with <code>fallbackUsed: true</code> instead of a server error; and a dedicated
+   rate-limiting test drives one caller to exactly their 5-request limit, confirms their 6th request gets <code>429</code>,
+   and confirms a different <code>X-Caller-Id</code> is unaffected.</li>
+<li><strong>Classification explainability (unit):</strong> a confident classification's <code>explanation</code> and <code>sidecar.matchedKeywords</code>
+   both cite the real keyword(s) that drove it (e.g. <code>"fire"</code>); a single-keyword borderline match reports exactly
+   that one keyword; and a zero-signal input is honestly explained as a low-confidence default guess rather than a
+   fabricated match.</li>
+<li><strong>Three-tier cascade (unit):</strong> a clearly-confident input still resolves at the sidecar tier without ever
+   consulting the reviewer; a borderline-confidence input (engineered to land exactly at the reviewer-band boundary)
+   resolves at the mid tier when the reviewer model's independent guess confirms the sidecar's label; a different
+   borderline input where the reviewer's own guess <em>disagrees</em> cascades on to the full foundation model, billing all
+   three tiers; a clearly-low-confidence input still escalates straight to the top tier, skipping the reviewer
+   entirely; <code>GET /metrics</code>'s <code>reviewerPathRequests</code>/<code>reviewerPathRate</code> reflect the mid-tier resolutions; omitting the
+   <code>reviewer</code> option collapses the router back to the original two-tier behavior; and a reviewer call that fails
+   outright fails open to the top tier rather than silently trusting the sidecar.</li>
+<li><strong>Cost-budget enforcement (unit + HTTP):</strong> with no budget configured, escalation is never throttled; configuring a
+   budget that covers exactly one escalation lets that first call through, then throttles the next one to the
+   sidecar's best-effort answer (<code>path: "sidecar"</code>, <code>budgetExceeded: true</code>) without calling the foundation model;
+   <code>GET /budget</code>'s <code>exceeded</code>/<code>spendUsd</code> reflect this; <code>budgetThrottledRequests</code> in <code>GET /metrics</code> is tracked
+   separately from genuine <code>sidecarPathRequests</code>; clearing the budget lifts the throttle immediately; and a dedicated
+   HTTP test drives the same story through real <code>POST</code>/<code>GET /budget</code> and <code>POST /classify</code> calls, including a 400 on
+   an invalid budget body.</li>
+<li><strong>Persistent metrics (unit):</strong> <code>persistMetricsNow()</code> writes cumulative path counts, cache stats, and budget
+    config/spend to a JSON file; a <strong>freshly-constructed</strong> <code>ModelRouter</code> pointed at that same file (simulating a
+    process restart) reloads those totals instead of resetting to zero, and continues accumulating correctly on top
+    of them; a <code>persistEveryNRequests</code>-configured router auto-saves after that many calls with no explicit save; and
+    pointing at a metrics file that doesn't exist yet starts fresh rather than throwing.</li>
+<li><strong>Per-caller cost budgets (unit + HTTP):</strong> two callers with different <code>setBudget(limit, periodMs, callerId)</code>
+    configurations are throttled completely independently — one caller's exhausted budget never affects the other's;
+    a caller who never configured their own budget falls back to the shared default (and continues to, even after a
+    different caller's override is cleared); <code>GET /metrics</code>'s <code>callerBudgets</code> lists exactly the callers with an
+    explicit override; and a dedicated HTTP test drives the same story through <code>POST</code>/<code>GET /budget</code> scoped by
+    <code>X-Caller-Id</code>, plus <code>GET /budget/all</code> for the admin/dashboard view of every caller at once.</li>
+<li><strong>Canary/A-B sidecar routing (unit + HTTP):</strong> a candidate sidecar configured with a keyword the primary doesn't
+    recognize disagrees with the primary on every evaluated input containing it (a deterministic disagreement signal,
+    independent of the random traffic-split draw); registering it at a given percentage and running hundreds of
+    requests shows the candidate actually serving roughly that share of traffic (a probabilistic check with a
+    generous tolerance band, not an exact count); clearing the canary stops routing to it without erasing the
+    cumulative comparison counters; and a dedicated HTTP test drives <code>POST</code>/<code>GET</code>/<code>DELETE /router/canary</code>, including
+    a 400 on an out-of-range <code>percentage</code>.</li>
+<li><strong>Outbound alert webhooks (HTTP + unit):</strong> a local Node <code>http</code> listener stands in for an operator's own webhook
+    receiver; registering it via <code>POST /alerts/webhook</code> hands back a signing secret; exceeding a configured budget
+    fires a <code>budget_exceeded</code> delivery whose <code>X-ModelRouter-Signature</code> header is independently recomputed and checked
+    against the raw body with that exact secret; tripping the circuit breaker (an always-failing foundation provider)
+    fires a <code>circuit_open</code> delivery the same way; and a further failure while the circuit is already open confirms no
+    duplicate <code>circuit_open</code> alert fires (transition-only, not one-per-failure).</li>
+<li><strong>Prometheus-format metrics export (HTTP):</strong> <code>GET /metrics/prometheus</code> returns <code>200 text/plain</code>; every metric
+    name that appears has both a <code># HELP</code> and a <code># TYPE</code> comment; labeled series (per-circuit-breaker-state, per-caller
+    budgets) render with the expected <code>{label="value"}</code> syntax; the round-4 canary and alert-webhook metric names are
+    all present; and <code>GET /metrics</code>'s original JSON shape is confirmed unchanged by the new endpoint's existence.</li>
+</ol>
+<p>No external services or AWS credentials are required to run the tests.</p>
+<h2 id="swapping-in-the-real-aws-services">Swapping in the real AWS services<a class="headerlink" href="#swapping-in-the-real-aws-services" title="Permanent link">&para;</a></h2>
+<p>Both interfaces are already shaped like their real AWS SDK counterparts, so going live is a matter of implementing
+each interface against the real client rather than restructuring anything that calls them.</p>
+<p><strong>Sidecar → Amazon SageMaker.</strong> Replace <code>MockSidecarClassifier</code> with a class implementing <code>SidecarClassifier</code> using
+<a href="https://www.npmjs.com/package/@aws-sdk/client-sagemaker-runtime"><code>@aws-sdk/client-sagemaker-runtime</code></a>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">SageMakerRuntimeClient</span><span class="p">,</span><span class="w"> </span><span class="nx">InvokeEndpointCommand</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"@aws-sdk/client-sagemaker-runtime"</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">class</span><span class="w"> </span><span class="nx">SageMakerSidecarClassifier</span><span class="w"> </span><span class="k">implements</span><span class="w"> </span><span class="nx">SidecarClassifier</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">SageMakerRuntimeClient</span><span class="p">({</span><span class="w"> </span><span class="nx">region</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env.AWS_REGION</span><span class="w"> </span><span class="p">});</span>
+
+<span class="w">  </span><span class="k">async</span><span class="w"> </span><span class="nx">classify</span><span class="p">(</span><span class="nx">input</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">SidecarResult</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">client</span><span class="p">.</span><span class="nx">send</span><span class="p">(</span><span class="ow">new</span><span class="w"> </span><span class="nx">InvokeEndpointCommand</span><span class="p">({</span>
+<span class="w">      </span><span class="nx">EndpointName</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env.SAGEMAKER_ENDPOINT_NAME</span><span class="p">,</span><span class="w"> </span><span class="c1">// e.g. "urgency-classifier-prod"</span>
+<span class="w">      </span><span class="nx">ContentType</span><span class="o">:</span><span class="w"> </span><span class="s2">"application/json"</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">Body</span><span class="o">:</span><span class="w"> </span><span class="kt">new</span><span class="w"> </span><span class="nx">TextEncoder</span><span class="p">().</span><span class="nx">encode</span><span class="p">(</span><span class="nb">JSON</span><span class="p">.</span><span class="nx">stringify</span><span class="p">({</span><span class="w"> </span><span class="nx">inputs</span><span class="o">:</span><span class="w"> </span><span class="kt">input</span><span class="w"> </span><span class="p">})),</span>
+<span class="w">    </span><span class="p">}));</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">body</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">parse</span><span class="p">(</span><span class="ow">new</span><span class="w"> </span><span class="nx">TextDecoder</span><span class="p">().</span><span class="nx">decode</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">Body</span><span class="p">));</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">top</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">body</span><span class="p">[</span><span class="mf">0</span><span class="p">];</span><span class="w"> </span><span class="c1">// shape depends on the container's inference.py — a typical HF</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="kt">top.label</span><span class="p">,</span><span class="w"> </span><span class="nx">confidence</span><span class="o">:</span><span class="w"> </span><span class="kt">top.score</span><span class="w"> </span><span class="p">};</span><span class="w"> </span><span class="c1">// text-classification container returns [{label, score}, ...]</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>That endpoint would be trained (e.g. a fine-tuned DistilBERT or a linear classifier over TF-IDF features) on
+labeled household-message data and deployed as a real-time or serverless SageMaker inference endpoint; a hand-written
+rule set fills that role for this demo without needing training data or GPU time.</p>
+<p><strong>Foundation model → Amazon Bedrock.</strong> Replace <code>MockBedrockProvider</code> with a class implementing
+<code>FoundationModelProvider</code> using
+<a href="https://www.npmjs.com/package/@aws-sdk/client-bedrock-runtime"><code>@aws-sdk/client-bedrock-runtime</code></a>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">BedrockRuntimeClient</span><span class="p">,</span><span class="w"> </span><span class="nx">InvokeModelCommand</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"@aws-sdk/client-bedrock-runtime"</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">class</span><span class="w"> </span><span class="nx">BedrockFoundationModelProvider</span><span class="w"> </span><span class="k">implements</span><span class="w"> </span><span class="nx">FoundationModelProvider</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">private</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">BedrockRuntimeClient</span><span class="p">({</span><span class="w"> </span><span class="nx">region</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env.AWS_REGION</span><span class="w"> </span><span class="p">});</span>
+
+<span class="w">  </span><span class="k">async</span><span class="w"> </span><span class="nx">invoke</span><span class="p">(</span><span class="nx">prompt</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">FoundationResult</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="nx">client</span><span class="p">.</span><span class="nx">send</span><span class="p">(</span><span class="ow">new</span><span class="w"> </span><span class="nx">InvokeModelCommand</span><span class="p">({</span>
+<span class="w">      </span><span class="nx">modelId</span><span class="o">:</span><span class="w"> </span><span class="kt">process.env.BEDROCK_MODEL_ID</span><span class="w"> </span><span class="o">??</span><span class="w"> </span><span class="s2">"anthropic.claude-3-5-haiku-20241022-v1:0"</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">contentType</span><span class="o">:</span><span class="w"> </span><span class="s2">"application/json"</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">accept</span><span class="o">:</span><span class="w"> </span><span class="s2">"application/json"</span><span class="p">,</span>
+<span class="w">      </span><span class="nx">body</span><span class="o">:</span><span class="w"> </span><span class="kt">JSON.stringify</span><span class="p">({</span>
+<span class="w">        </span><span class="nx">anthropic_version</span><span class="o">:</span><span class="w"> </span><span class="s2">"bedrock-2023-05-31"</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">max_tokens</span><span class="o">:</span><span class="w"> </span><span class="kt">512</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">messages</span><span class="o">:</span><span class="w"> </span><span class="p">[{</span><span class="w"> </span><span class="nx">role</span><span class="o">:</span><span class="w"> </span><span class="s2">"user"</span><span class="p">,</span><span class="w"> </span><span class="nx">content</span><span class="o">:</span><span class="w"> </span><span class="kt">prompt</span><span class="w"> </span><span class="p">}],</span>
+<span class="w">      </span><span class="p">}),</span>
+<span class="w">    </span><span class="p">}));</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">body</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">JSON</span><span class="p">.</span><span class="nx">parse</span><span class="p">(</span><span class="ow">new</span><span class="w"> </span><span class="nx">TextDecoder</span><span class="p">().</span><span class="nx">decode</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">body</span><span class="p">));</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">text</span><span class="o">:</span><span class="w"> </span><span class="kt">body.content</span><span class="p">[</span><span class="mf">0</span><span class="p">].</span><span class="nx">text</span><span class="p">,</span><span class="w"> </span><span class="nx">inputTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">body.usage.input_tokens</span><span class="p">,</span><span class="w"> </span><span class="nx">outputTokens</span><span class="o">:</span><span class="w"> </span><span class="kt">body.usage.output_tokens</span><span class="w"> </span><span class="p">};</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Auth, both cases:</strong> no API keys in application code. Both clients use the AWS SDK's default credential chain — in
+production, an IAM role attached to whatever compute calls this code (Lambda, ECS task, EC2 instance), scoped to
+<code>sagemaker:InvokeEndpoint</code> on the specific endpoint ARN and <code>bedrock:InvokeModel</code> on the specific model ARN. Cost and
+latency, once live, would come from CloudWatch metrics and the real per-call <code>Body</code>/<code>usage</code> fields instead of the
+constants in <code>router.ts</code>.</p>
+<p><strong>Streaming → <code>InvokeModelWithResponseStreamCommand</code>.</strong> <code>POST /classify/stream</code> (see
+<a href="#advanced-features">Advanced features</a> below) currently chunks <code>MockBedrockProvider</code>'s already-complete text after
+the fact, because there's no real streaming provider available in this environment. A live implementation swaps in
+<code>InvokeModelWithResponseStreamCommand</code> instead of <code>InvokeModelCommand</code>, and relays each event from the returned
+<code>response.body</code> async-iterable (<code>PartialModelResponse</code>/<code>chunk.bytes</code> events, decoded incrementally) straight to the
+caller as it arrives — that also improves real time-to-first-token, not just presentation, since the caller starts
+seeing text before the model has finished generating the rest of it.</p>
+<p><strong>Mid tier (reviewer) → a second, smaller Bedrock model.</strong> <code>MockReviewerProvider</code> (<code>reviewerModel.ts</code>) is already
+shaped exactly like <code>FoundationModelProvider</code> — the same interface <code>MockBedrockProvider</code> implements — so going live
+is the <em>same</em> class-body swap shown above for the top tier, just constructed a second time with a smaller/cheaper
+<code>modelId</code> (e.g. <code>anthropic.claude-3-5-haiku-...</code> for the reviewer vs. a larger Sonnet/Opus-class model for the top
+tier). No other code changes: <code>ModelRouter</code> only knows it received "a <code>FoundationModelProvider</code>," not which size of
+model backs it.</p>
+<p>Everything else — <code>router.ts</code>, <code>server.ts</code>, the metrics math — is completely unaware it's talking to mocks; it only
+depends on the interfaces in <code>sidecarClassifier.ts</code> and <code>foundationModel.ts</code> (the latter shared by both the reviewer
+and the top-tier foundation model).</p>
+<h2 id="advanced-features">Advanced features<a class="headerlink" href="#advanced-features" title="Permanent link">&para;</a></h2>
+<p>Fourteen production-grade additions on top of the base routing pattern, all genuinely implemented and covered by
+<code>test/smoke.test.ts</code> (not stubs) — see <a href="#testing">Testing</a> above for exactly which checks cover which feature.</p>
+<h3 id="1-response-caching">1. Response caching<a class="headerlink" href="#1-response-caching" title="Permanent link">&para;</a></h3>
+<p><code>ModelRouter</code> caches each <code>RouteResult</code> by a key of <code>threshold + normalized input</code> (trimmed, lowercased) for a
+configurable TTL (<code>cacheTtlMs</code>, default 5 minutes). An identical repeat request within the TTL is served from cache
+— <strong>skipping the sidecar and the foundation model entirely</strong> — flagged with <code>cacheHit: true</code>. Cache hits are folded
+into <code>GET /metrics</code>'s cost-savings math: the hypothetical "always-foundation" baseline still charges a cache hit at
+full foundation-model cost, while the router's actual cost for that request is $0, so a cache-heavy workload shows a
+larger <code>estimatedSavingsUsd</code> than routing alone would produce.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># First call: a real classification</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"text": "There is smoke and fire in the kitchen, call 911 emergency!"}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; no "cacheHit" field</span>
+
+<span class="c1"># Identical call again within the TTL: served from cache, no model invoked</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"text": "There is smoke and fire in the kitchen, call 911 emergency!"}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "cacheHit": true</span>
+</code></pre></div>
+<h3 id="2-circuit-breaker-fallback-chain">2. Circuit breaker / fallback chain<a class="headerlink" href="#2-circuit-breaker-fallback-chain" title="Permanent link">&para;</a></h3>
+<p>The router wraps every foundation-model call with a classic circuit-breaker state machine (<code>closed</code> →
+<code>open</code> → <code>half-open</code> → <code>closed</code>/<code>open</code>): after <code>circuitBreakerFailureThreshold</code> (default 3) consecutive failures it
+opens for <code>circuitBreakerCooldownMs</code> (default 30s), fast-failing further escalations without even attempting the
+call, then allows one half-open trial call once the cooldown elapses. Any failure (open circuit or a thrown error
+from the provider) falls back to <strong>the sidecar's own best-effort answer</strong>, even below its normal confidence
+threshold, rather than failing the request — marked <code>path: "fallback"</code>, <code>fallbackUsed: true</code>. <code>GET /metrics</code> exposes
+<code>fallbackRequests</code> and the current <code>circuitState</code>.</p>
+<p>Two deterministic ways to simulate a foundation-model outage for testing (see <code>src/foundationModel.ts</code>):
+<code>new MockBedrockProvider({ alwaysFail: true })</code> / <code>{ failFirstN: n }</code> as constructor flags, or embedding the
+<code>FAILURE_TRIGGER</code> sentinel string anywhere in the input text.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># The FAILURE_TRIGGER sentinel forces this specific call to fail, deterministically, without touching any config</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"text": "Can you check on things? __FORCE_FOUNDATION_FAILURE__"}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "path": "fallback", "fallbackUsed": true, 200 OK (not a 500)</span>
+</code></pre></div>
+<h3 id="3-shadow-evaluation-mode">3. Shadow evaluation mode<a class="headerlink" href="#3-shadow-evaluation-mode" title="Permanent link">&para;</a></h3>
+<p>Passing <code>"shadowMode": true</code> (or setting <code>defaultShadowMode</code> on the <code>ModelRouter</code> constructor) makes a <strong>confident,
+fast-path</strong> request also kick off a foundation-model call in the background, purely to compare its implied label
+against the sidecar's — after the fast-path response has already been sent, so it adds zero latency and can never
+fail the caller's request. <code>GET /metrics</code> exposes <code>shadowEvaluations</code>, <code>shadowAgreements</code>, and
+<code>shadowAgreementRate</code> — a genuine ML-ops technique for finding out whether a cheap classifier's confident answers
+actually match what the expensive model would have said, without paying the expensive model's latency on the happy
+path.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"text": "There is smoke and fire in the kitchen, call 911 emergency!", "shadowMode": true}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; the fast-path "sidecar" response, same latency/cost as without shadowMode</span>
+
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "shadowEvaluations": 1, "shadowAgreements": 1, "shadowAgreementRate": 1</span>
+</code></pre></div>
+<h3 id="4-adaptive-threshold-suggestion">4. Adaptive threshold suggestion<a class="headerlink" href="#4-adaptive-threshold-suggestion" title="Permanent link">&para;</a></h3>
+<p><code>GET /metrics</code> also reports <code>suggestedThreshold</code> and <code>thresholdSuggestionReason</code>, computed from a pool of "was the
+sidecar's trusted (fast-path) answer actually right?" samples drawn from two sources: shadow-mode agreement (feature
+3) and explicit caller feedback via <code>POST /feedback</code>, keyed by the <code>requestId</code> every <code>/classify</code> response already
+returns. With too few samples it suggests nothing rather than react to noise; otherwise low observed accuracy at the
+current threshold nudges the suggestion up (more conservative), and very high accuracy over enough samples nudges it
+down (fewer unnecessary escalations). <strong>This is a deliberately simple, illustrative heuristic</strong> — no confidence
+intervals, no bias correction — documented as such in <code>router.ts</code>, not real statistical rigor.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Report that a past classification (by its requestId) was wrong</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/feedback<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"requestId": "&lt;a requestId from an earlier /classify response&gt;", "correct": false}'</span>
+
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; e.g. "currentThreshold": 0.7, "suggestedThreshold": 0.75,</span>
+<span class="c1">#    "thresholdSuggestionReason": "Current threshold 0.70, but observed sidecar accuracy at that</span>
+<span class="c1">#     threshold is only 33.3% over 3 sample(s) — below the 95% target. Consider raising the</span>
+<span class="c1">#     threshold to 0.75. (Illustrative heuristic, not real statistical rigor...)"</span>
+</code></pre></div>
+<h3 id="5-simulated-streaming-foundation-model-responses">5. Simulated streaming foundation-model responses<a class="headerlink" href="#5-simulated-streaming-foundation-model-responses" title="Permanent link">&para;</a></h3>
+<p><code>POST /classify/stream</code> runs the same routing decision as <code>/classify</code>, but for an escalation-path (foundation-model)
+result it relays the answer as a sequence of Server-Sent Events — one <code>chunk</code> event per word — instead of one JSON
+blob, ending in a single <code>done</code> event carrying the full result. See
+<a href="#swapping-in-the-real-aws-services">Streaming → InvokeModelWithResponseStreamCommand</a> above for what a live,
+truly-incremental version would change.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-N<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify/stream<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"text": "Can you check on things when you get a chance?"}'</span>
+<span class="c1"># -&gt; a stream of "event: chunk\ndata: {\"token\":\"...\"}\n\n" events, one per word,</span>
+<span class="c1">#    ending in "event: done\ndata: {...full RouteResult...}\n\n"</span>
+</code></pre></div>
+<h3 id="6-per-caller-rate-limiting-quota">6. Per-caller rate limiting / quota<a class="headerlink" href="#6-per-caller-rate-limiting-quota" title="Permanent link">&para;</a></h3>
+<p><code>RateLimiter</code> (<code>src/rateLimiter.ts</code>) is a small in-memory, fixed-window limiter keyed by the <code>X-Caller-Id</code> request
+header (an unset header falls back to a shared <code>"anonymous"</code> bucket rather than skipping enforcement). It guards
+both <code>/classify</code> and <code>/classify/stream</code>. Exceeding the window's quota returns <code>429</code> with a clear message and
+<code>Retry-After</code>/<code>X-RateLimit-*</code> headers; a different caller id is completely unaffected. The default is a generous 60
+requests/minute — any real deployment sharing a metered AWS resource (a SageMaker endpoint, a Bedrock model) across
+callers needs <em>some</em> quota story, and this is the simplest version of that story that's still genuinely enforcing a
+limit.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Six rapid requests from the same caller, with the default limit lowered for illustration —</span>
+<span class="c1"># in this demo's default config (60/min) you'd need 61 requests to see this:</span>
+<span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">6</span><span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">  </span>curl<span class="w"> </span>-s<span class="w"> </span>-o<span class="w"> </span>/dev/null<span class="w"> </span>-w<span class="w"> </span><span class="s2">"%{http_code}\n"</span><span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">"X-Caller-Id: demo-caller"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-d<span class="w"> </span><span class="s2">"{\"text\": \"request </span><span class="nv">$i</span><span class="s2">\"}"</span>
+<span class="k">done</span>
+<span class="c1"># -&gt; 200 200 200 200 200 200  (all succeed under the default 60/min limit — lower it via a custom</span>
+<span class="c1">#    RateLimiter passed to createApp() to see a 429 sooner, as the smoke test does)</span>
+</code></pre></div>
+<h3 id="7-three-tier-cascade-a-mid-tier-reviewer-model">7. Three-tier cascade: a mid-tier "reviewer" model<a class="headerlink" href="#7-three-tier-cascade-a-mid-tier-reviewer-model" title="Permanent link">&para;</a></h3>
+<p>Between the sidecar and the full foundation model sits an optional third tier: a cheaper/faster <strong>reviewer</strong> model
+(<code>MockReviewerProvider</code>, <code>src/reviewerModel.ts</code>) — same <code>FoundationModelProvider</code> shape as the top-tier
+<code>MockBedrockProvider</code>, but modeling a smaller model (lower simulated cost <code>REVIEWER_COST_USD</code> <strong>$0.002</strong> and latency
+<code>REVIEWER_LATENCY_MS</code> <strong>250ms</strong>, vs. the top tier's $0.012/850ms) with its own independent keyword-hint heuristic.</p>
+<p>The cascade is driven by two thresholds, both configurable:</p>
+<table>
+<thead>
+<tr>
+<th>Sidecar confidence</th>
+<th>Tier</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&gt;= threshold</code> (default 0.7)</td>
+<td><strong>Sidecar</strong> — trusted directly, no escalation</td>
+</tr>
+<tr>
+<td><code>&gt;= reviewerConfidenceThreshold</code> (default <strong>0.6</strong>) and <code>&lt; threshold</code></td>
+<td><strong>Reviewer</strong> — the cheaper model is consulted</td>
+</tr>
+<tr>
+<td><code>&lt; reviewerConfidenceThreshold</code></td>
+<td><strong>Foundation</strong> — straight to the full model, reviewer skipped</td>
+</tr>
+</tbody>
+</table>
+<p>In the reviewer band, if the reviewer's own independent guess <strong>agrees</strong> with the sidecar's label, that resolves the
+request at the mid tier (<code>path: "reviewer"</code>) — cheaper and faster than the top tier, without giving up a second
+opinion. If the reviewer <strong>disagrees</strong> (or its call fails outright), the router escalates once more to the full
+foundation model, billing all three tiers' cost/latency. Why skip the reviewer entirely below
+<code>reviewerConfidenceThreshold</code> rather than always trying it first? See <code>DEFAULT_REVIEWER_CONFIDENCE_THRESHOLD</code>'s doc
+comment in <code>router.ts</code> — a genuinely near-zero-signal input is unlikely to benefit from a <em>second</em>, similarly-sized
+model's opinion, so the router pays for the full model's stronger language understanding directly instead of paying
+for both. <code>reviewer</code> is an optional <code>ModelRouterOptions</code> field — omitting it collapses the router back to the
+original two-tier behavior with no other changes.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># A borderline-confidence input that lands in the reviewer band and the reviewer confirms</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"text": "reminder: the grocery order today, though there is a leaking pipe outside too."}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "path": "reviewer", "confidence": 0.6, "reviewer": {...}, no "foundation" field</span>
+
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "reviewerPathRequests": 1, "reviewerPathRate": ...</span>
+</code></pre></div>
+<h3 id="8-cost-budget-enforcement">8. Cost-budget enforcement<a class="headerlink" href="#8-cost-budget-enforcement" title="Permanent link">&para;</a></h3>
+<p><code>POST /budget { "limit": &lt;dollars&gt;, "periodMs": &lt;milliseconds&gt; }</code> configures a <strong>fixed-window dollar cap</strong> on the
+router's paid-tier spend (the reviewer and full foundation model — the sidecar's own tiny, always-incurred cost isn't
+budgeted). Once cumulative spend for the current period reaches the limit, the router auto-throttles: further
+escalations — even a clearly low-confidence input that would normally reach the top tier — are answered with the
+sidecar's best-effort classification instead, flagged <code>budgetExceeded: true</code> so a caller can tell it apart from a
+normal fast-path hit (which never sets that flag). <code>GET /budget</code> reports current spend, the limit, and time remaining
+in the period. See <code>budgetTracker.ts</code>'s doc comment for exactly why this is a fixed window (not rolling) and a dollar
+cap (not a request-count cap) — both deliberate, documented simplifications for a demo, not oversights.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Configure a small budget — 1 cent per hour</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/budget<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"limit": 0.01, "periodMs": 3600000}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "enabled": true, "limitUsd": 0.01, "spendUsd": 0, "exceeded": false</span>
+
+<span class="c1"># ...after enough escalations exhaust that budget:</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"text": "Can you check on things when you get a chance?"}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "path": "sidecar", "budgetExceeded": true — the foundation model was never called</span>
+
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/budget<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "exceeded": true, "remainingUsd": 0, "msRemainingInPeriod": ...</span>
+</code></pre></div>
+<h3 id="9-classification-explainability">9. Classification explainability<a class="headerlink" href="#9-classification-explainability" title="Permanent link">&para;</a></h3>
+<p>Every <code>SidecarResult</code> now carries <code>matchedKeywords</code>: the specific keyword(s)/pattern(s) that drove the classification
+— not just the label and a confidence number. <code>RouteResult.explanation</code> weaves that signal into a human-readable
+sentence (<code>Sidecar classified this as "urgent" ... (matched signal(s): "fire", "smoke") ...</code>) at every tier, including
+the reviewer and fallback paths, so a caller (or a judge reading a response body) can see <em>why</em>, not just <em>what</em>. A
+zero-signal input is explained honestly as a low-confidence default guess rather than a fabricated match. This is
+explicitly the keyword-heuristic sidecar's own explainability story — see <code>SidecarResult</code>'s doc comment in <code>types.ts</code>
+for why a trained-model endpoint would need a different mechanism (e.g. attention weights or SHAP values) and might
+not have <code>matchedKeywords</code> at all.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/classify<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"text": "There is smoke and fire in the kitchen, call 911 emergency!"}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "sidecar": {"label": "urgent", "confidence": 0.92, "matchedKeywords": ["fire", "smoke", "emergency", "call 911"], ...},</span>
+<span class="c1">#    "explanation": "Sidecar classified this as \"urgent\" with confidence 0.92 (matched signal(s): \"fire\", \"smoke\",</span>
+<span class="c1">#     \"emergency\", \"call 911\"), meeting the 0.70 threshold — no escalation needed."</span>
+</code></pre></div>
+<h3 id="10-persistent-metrics">10. Persistent metrics<a class="headerlink" href="#10-persistent-metrics" title="Permanent link">&para;</a></h3>
+<p><code>ModelRouter</code> can be configured with a <code>metricsPersistPath</code> (index.ts points it at <code>metrics-state.json</code> in the
+package root by default). Cumulative path counts, cache stats, circuit-breaker state, shadow-eval totals, and budget
+config/spend are written to that JSON file every <code>persistEveryNRequests</code> calls (default 20) and on graceful shutdown
+(<code>SIGINT</code>/<code>SIGTERM</code> in <code>index.ts</code> call <code>router.persistMetricsNow()</code>), and reloaded automatically the next time a
+<code>ModelRouter</code> is constructed pointed at the same path — so restarting the demo server doesn't reset the cost-savings
+story back to zero. This is <strong>demo-grade persistence</strong>, explicitly not a production datastore: plain synchronous
+<code>fs.writeFileSync</code> with no atomic rename-on-write and no file locking (fine for one process; two processes sharing a
+path would clobber each other) — see <code>metricsPersistence.ts</code>'s doc comment for the full honest list, same framing as
+this repo's other simple file-based persistence.</p>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>start
+<span class="c1"># ...classify a few messages, building up real metrics...</span>
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool<span class="w">   </span><span class="c1"># note totalRequests, actualCostUsd, etc.</span>
+
+<span class="c1"># Ctrl-C the server (a graceful SIGINT), then start it again:</span>
+npm<span class="w"> </span>start
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; the same cumulative totals as before the restart, not reset to zero</span>
+</code></pre></div>
+<h3 id="11-per-caller-cost-budgets">11. Per-caller cost budgets<a class="headerlink" href="#11-per-caller-cost-budgets" title="Permanent link">&para;</a></h3>
+<p>Round 3's <code>POST</code>/<code>GET /budget</code> was global — one shared budget for every caller. Round 4 scopes it per caller, reusing
+the exact identification mechanism the per-caller rate limiter already uses: the <code>X-Caller-Id</code> header. Send it on a
+<code>/budget</code> call and you're configuring/reading <strong>that caller's own independent budget</strong>, tracked and enforced
+completely separately from every other caller's; omit it (as every pre-round-4 call shape still does) and you're
+configuring/reading the <strong>shared default</strong> instead — which is also what any caller <em>without</em> their own override falls
+back to, rather than being silently unbudgeted. That fallback is the "sensible default" for callers who never set
+their own: whatever the operator has configured as the shared default (including "nothing yet," preserving the exact
+pre-round-4 behavior when nobody has configured any budget at all).</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Give one specific caller ("mobile-app") their own tight budget</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/budget<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span>-H<span class="w"> </span><span class="s2">"X-Caller-Id: mobile-app"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"limit": 0.01, "periodMs": 3600000}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "enabled": true, "limitUsd": 0.01 — this budget belongs to "mobile-app" alone</span>
+
+<span class="c1"># A different caller, with no override of their own, is governed by the shared default instead</span>
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/budget<span class="w"> </span>-H<span class="w"> </span><span class="s2">"X-Caller-Id: some-other-caller"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; whatever the shared default currently is (unconfigured -&gt; "enabled": false, unaffected by mobile-app's budget)</span>
+
+<span class="c1"># See every caller with an explicit override at a glance, alongside the shared default</span>
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/budget/all<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<h3 id="12-canary-a-b-sidecar-routing">12. Canary / A-B sidecar routing<a class="headerlink" href="#12-canary-a-b-sidecar-routing" title="Permanent link">&para;</a></h3>
+<p><code>POST /router/canary { "percentage": &lt;0..1&gt;, "config": {...} }</code> registers a second "candidate" <code>MockSidecarClassifier</code>
+alongside the primary one — tuned via <code>config</code> (<code>extraKeywords</code> and/or <code>confidenceScale</code>, since both sidecars here are
+the same keyword-heuristic class; a real deployment would point this at a genuinely different trained-model
+endpoint). From then on, <strong>every</strong> request evaluates both classifiers on the same input — mirroring the spirit of the
+advanced round's shadow evaluation, but comparing two <em>sidecar</em> configurations against each other instead of
+sidecar-vs-foundation — and <code>percentage</code> of the time, the candidate's answer (not the primary's) is the one that
+actually continues through the rest of the routing decision. <code>GET /metrics</code> (and the dedicated <code>GET /router/canary</code>)
+report how often the two disagreed and what share of traffic the candidate actually ended up serving, so you can
+compare the <em>observed</em> traffic split against the <em>configured</em> one and watch for a candidate that disagrees with the
+primary more than expected before ever promoting it to be the new primary.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Route 30% of traffic to a candidate that's more conservative (scaled-down confidence) than the primary</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/router/canary<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"percentage": 0.3, "config": {"confidenceScale": 0.8}}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "enabled": true, "percentage": 0.3, "evaluations": 0, "disagreements": 0</span>
+
+<span class="c1"># ...classify a bunch of messages...</span>
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/router/canary<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; "evaluations": 47, "disagreements": 5, "disagreementRate": 0.106, "servedRequests": 15 (~30% of 47)</span>
+
+<span class="c1"># Done comparing — stop routing to the candidate (comparison counters are preserved, not reset)</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span>localhost:4567/router/canary<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+</code></pre></div>
+<h3 id="13-outbound-alert-webhooks">13. Outbound alert webhooks<a class="headerlink" href="#13-outbound-alert-webhooks" title="Permanent link">&para;</a></h3>
+<p>Everything else an operator can observe about this router is <strong>pull</strong> — <code>GET /metrics</code>, <code>GET /budget</code>, <code>GET
+/router/canary</code> — something you have to remember to poll. <code>POST /alerts/webhook { "url": "..." }</code> adds a <strong>push</strong>
+surface: register a callback URL once (getting back a signing secret, shown exactly once) and the router POSTs to it
+whenever a (global or per-caller) cost budget is exceeded or the foundation-model circuit breaker trips open, signed
+<code>HMAC-SHA256</code> over the raw JSON body — the same scheme <code>ring-porchpass</code>'s <code>webhookAuth.ts</code>/<code>outboundWebhooks.ts</code> use,
+so your receiver recomputes the signature with the secret and compares it (constant-time) before trusting the
+payload. Delivery is fire-and-forget with retries (up to 3 attempts, exponential backoff) so a slow or down receiver
+never adds latency to the classification request that triggered the alert.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Register your own callback (e.g. a webhook.site URL for testing, or your own receiver)</span>
+curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>localhost:4567/alerts/webhook<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"url": "https://your-receiver.example.com/hook"}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; { "url": "...", "secret": "a1b2c3...", "createdAt": "..." } — save that secret, it's shown only once</span>
+
+<span class="c1"># ...configure a tight budget and exhaust it, or trip the circuit breaker...</span>
+<span class="c1"># Your receiver gets a POST with headers:</span>
+<span class="c1">#   X-ModelRouter-Event: budget_exceeded   (or: circuit_open)</span>
+<span class="c1">#   X-ModelRouter-Signature: &lt;hex hmac-sha256 of the raw JSON body, using your secret&gt;</span>
+<span class="c1"># and a body like: {"type":"budget_exceeded","occurredAt":"...","detail":{"callerId":"...","limitUsd":0.01,"spendUsd":0.012,"periodMs":3600000}}</span>
+
+curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/alerts/webhook<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<span class="c1"># -&gt; delivery history: "deliveries", "failures", "lastSuccessAt", "consecutiveFailures", ...</span>
+</code></pre></div>
+<h3 id="14-prometheus-format-metrics-export">14. Prometheus-format metrics export<a class="headerlink" href="#14-prometheus-format-metrics-export" title="Permanent link">&para;</a></h3>
+<p><code>GET /metrics</code> (JSON) is unchanged. <code>GET /metrics/prometheus</code> renders the <strong>same underlying numbers</strong> — every field
+in <code>MetricsSnapshot</code>, plus the shared/per-caller budget statuses and the alert-webhook delivery status that live
+outside it — as plain-text <a href="https://github.com/prometheus/docs/blob/main/content/docs/instrumenting/exposition_formats.md">Prometheus exposition format</a>:
+<code># HELP</code>/<code># TYPE</code> comments followed by <code>metric_name{labels} value</code> lines, computed fresh on every scrape so there's
+no separate metrics-tracking code path to keep in sync with <code>GET /metrics</code>. Point a real Prometheus server's scrape
+config at this endpoint (or run <code>promtool check metrics &lt; output</code> against a saved response) to verify it independently.</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-s<span class="w"> </span>localhost:4567/metrics/prometheus
+<span class="c1"># -&gt; # HELP model_router_requests_total Total classification requests handled (cache hits included).</span>
+<span class="c1">#    # TYPE model_router_requests_total counter</span>
+<span class="c1">#    model_router_requests_total 47</span>
+<span class="c1">#    ...</span>
+<span class="c1">#    # TYPE model_router_circuit_state gauge</span>
+<span class="c1">#    model_router_circuit_state{state="closed"} 1</span>
+<span class="c1">#    model_router_circuit_state{state="open"} 0</span>
+<span class="c1">#    model_router_circuit_state{state="half-open"} 0</span>
+<span class="c1">#    ...</span>
+<span class="c1">#    model_router_canary_enabled 1</span>
+<span class="c1">#    model_router_canary_percentage 0.3</span>
+<span class="c1">#    ...</span>
+</code></pre></div>
+<h2 id="a-stackable-pattern-not-a-one-off-feature">A stackable pattern, not a one-off feature<a class="headerlink" href="#a-stackable-pattern-not-a-one-off-feature" title="Permanent link">&para;</a></h2>
+<p>This mini-challenge is explicitly stackable onto any primary-track submission's own AI feature, and this router is
+built as a small, standalone library specifically so it can sit in front of <em>any</em> narrow classification or triage
+decision another track's feature needs to make — not just this repo's urgency-classification demo. Two concrete
+examples already exist elsewhere in this same repository as sibling submissions (on other branches, so they may not
+be visible from every checkout of this one):</p>
+<ul>
+<li><strong><code>alexa-homeops-mcp/</code></strong> (Alexa+ track) — HomeOps' task/expense/shopping orchestration could use this router to
+  triage which household requests need a full LLM-driven planning turn versus which ones a fast heuristic can
+  resolve directly (e.g. "add milk to the list" vs. "figure out who should pick up the kids given everyone's
+  calendars").</li>
+<li><strong><code>ring-porchpass/</code></strong> (Ring track) — PorchPass could use this router in front of any future computer-vision
+  scoring of doorbell snapshots (e.g. "is this a package delivery or a person lingering?"), letting a cheap sidecar
+  handle the obvious cases and escalating only ambiguous frames to a full vision-capable foundation model.</li>
+</ul>
+<p>Swapping in either integration is exactly the <code>SidecarClassifier</code>/<code>FoundationModelProvider</code> implementation swap
+described above — the router, metrics, and HTTP layer need no changes.</p>
+<h2 id="judging-criteria-alignment">Judging-criteria alignment<a class="headerlink" href="#judging-criteria-alignment" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Tech Implementation:</strong> A working, tested TypeScript library with two AWS-SDK-shaped interfaces, a
+  framework-agnostic router with real routing logic (not a stub), an Express API, and a smoke test suite exercising
+  both the library directly and the full HTTP surface. Zero TypeScript errors under <code>strict: true</code>. Beyond the base
+  routing decision, fourteen genuinely-working production-grade features (see <a href="#advanced-features">Advanced features</a>):
+  a TTL response cache, a circuit breaker with a sidecar-fallback chain, background shadow evaluation, a
+  feedback-driven adaptive-threshold suggestion, simulated SSE streaming, per-caller rate limiting, an optional
+  three-tier cascade with a cheaper "reviewer" model, cost-budget enforcement with auto-throttling (now scoped per
+  caller), keyword-level classification explainability, demo-grade file persistence of cumulative metrics, canary/A-B
+  sidecar routing, HMAC-signed outbound alert webhooks, and a Prometheus-format metrics export — each with its own
+  passing test coverage, not stubbed.</li>
+<li><strong>Design:</strong> The interfaces mirror the real <code>@aws-sdk/client-sagemaker-runtime</code> / <code>@aws-sdk/client-bedrock-runtime</code>
+  request/response shapes closely enough that going live is a class-body swap, not a redesign — the architectural
+  seam is the deliverable, not just working code behind it, and the reviewer tier reuses that exact same seam (a
+  second <code>FoundationModelProvider</code> instance) rather than inventing a new one; the canary feature reuses the identical
+  seam again (a second <code>SidecarClassifier</code>) for the same reason. The advanced features are each standard, named
+  production patterns (circuit breaker, shadow deployment, quota management, cost budgeting, cascade routing,
+  canary/A-B deployment, signed webhook alerting, Prometheus scraping) applied to <em>this specific</em> seam rather than
+  bolted on generically, and each is honestly scoped: the adaptive-threshold heuristic, the streaming endpoint's
+  chunking-after-the-fact, the fixed-window budget/rate-limit choice, the reviewer's fixed cost/latency profile, and
+  the per-request (not per-transition) budget-alert firing are all explicitly documented as illustrative
+  simplifications, not claims of statistical rigor or a fully hardened production alerting pipeline.</li>
+<li><strong>Potential Impact:</strong> This is a genuinely reusable AWS architecture pattern, not tied to one feature — any track
+  with an AI feature that mostly handles predictable cases (which is most of them) can drop this router in front of
+  its own model calls and get a concrete, measurable cost/latency win, as <code>GET /metrics</code> demonstrates numerically.</li>
+<li><strong>Quality of Idea:</strong> Directly addresses the AWS Builder mini-challenge's own framing — "off-the-shelf foundation
+  models are often overkill for narrow, well-defined tasks" — with a demo task grounded enough (urgency triage) to
+  be concretely testable, while staying generalizable enough to be a pattern rather than a single feature.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "content.code.copy", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

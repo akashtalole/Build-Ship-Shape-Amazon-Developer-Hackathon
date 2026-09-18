@@ -1,0 +1,2162 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Six category implementations for the Build, Ship, Shape Amazon Developer Hackathon.">
+      
+      
+      
+        <link rel="canonical" href="https://akashtalole.github.io/Build-Ship-Shape-Amazon-Developer-Hackathon/projects/friction-log-toolkit/">
+      
+      
+        <link rel="prev" href="../model-router/">
+      
+      
+        <link rel="next" href="../../deploy/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>friction-log-toolkit (Open Source) - Build, Ship, Shape — Amazon Developer Hackathon</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#friction-log-toolkit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Build, Ship, Shape — Amazon Developer Hackathon" class="md-header__button md-logo" aria-label="Build, Ship, Shape — Amazon Developer Hackathon" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Build, Ship, Shape — Amazon Developer Hackathon
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              friction-log-toolkit (Open Source)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ideas/" class="md-tabs__link">
+          
+  
+  
+  Winning Ideas
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../homeops/" class="md-tabs__link">
+          
+  
+  
+  Projects
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../deploy/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../demo/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Demo Video
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../devpost-submission/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Devpost Submission
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Build, Ship, Shape — Amazon Developer Hackathon" class="md-nav__button md-logo" aria-label="Build, Ship, Shape — Amazon Developer Hackathon" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Build, Ship, Shape — Amazon Developer Hackathon
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Winning Ideas
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Winning Ideas
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/fire-tv/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fire TV
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/alexa-plus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Alexa+
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/bee/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bee
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/ring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/aws-builder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS Builder
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ideas/open-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Open Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Projects
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../homeops/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HomeOps (Alexa+)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porchpass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PorchPass (Ring)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../courtside/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CourtSide (Fire TV)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../studyloop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    StudyLoop (Bee)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../model-router/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Router (AWS Builder)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    friction-log-toolkit (Open Source)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    friction-log-toolkit (Open Source)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-problem-it-solves" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The problem it solves
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation &amp; usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Command reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-init-force" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log init [--force]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-add-note-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log add "&lt;note&gt;" [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-list-tag-tag-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log list [--tag &lt;tag&gt;] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-search-query-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log search "&lt;query&gt;" [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-stats-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log stats [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-edit-id-note-note-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log edit &lt;id&gt; [--note &lt;note&gt;] [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-remove-id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log remove &lt;id&gt;
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-merge-otherfile-into-targetfile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log merge &lt;otherFile&gt; --into &lt;targetFile&gt;
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-sync-url-push-pull" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log sync &lt;url&gt; [--push|--pull]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-template-add-name-text-with-placeholders-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log template add &lt;name&gt; "&lt;text with {placeholders}&gt;" [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-template-use-name-set-keyvalue-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log template use &lt;name&gt; [--set key=value ...] [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-template-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log template list
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-serve-port-port" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log serve [--port &lt;port&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log watch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-export-out-file-title-title-format-jsonmdtxt-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#date-range-filtering-since-until" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Date-range filtering (--since/--until)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-tag-suggestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-tag suggestion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#config-file-friction-logrcjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config file: .friction-logrc.json
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#judging-criteria-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Judging-criteria alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope-boundaries-next-steps-for-real-open-source-adoption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope boundaries / next steps for real open-source adoption
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deploy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../demo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Demo Video
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../devpost-submission/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devpost Submission
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-problem-it-solves" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The problem it solves
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation &amp; usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Command reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-init-force" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log init [--force]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-add-note-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log add "&lt;note&gt;" [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-list-tag-tag-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log list [--tag &lt;tag&gt;] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-search-query-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log search "&lt;query&gt;" [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-stats-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log stats [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-edit-id-note-note-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log edit &lt;id&gt; [--note &lt;note&gt;] [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-remove-id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log remove &lt;id&gt;
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-merge-otherfile-into-targetfile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log merge &lt;otherFile&gt; --into &lt;targetFile&gt;
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-sync-url-push-pull" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log sync &lt;url&gt; [--push|--pull]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-template-add-name-text-with-placeholders-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log template add &lt;name&gt; "&lt;text with {placeholders}&gt;" [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-template-use-name-set-keyvalue-tag-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log template use &lt;name&gt; [--set key=value ...] [--tag &lt;tag&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-template-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log template list
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-serve-port-port" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log serve [--port &lt;port&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log watch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#friction-log-export-out-file-title-title-format-jsonmdtxt-since-date-until-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt] [--since &lt;date&gt;] [--until &lt;date&gt;]
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#date-range-filtering-since-until" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Date-range filtering (--since/--until)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-tag-suggestion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-tag suggestion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#config-file-friction-logrcjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config file: .friction-logrc.json
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#judging-criteria-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Judging-criteria alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope-boundaries-next-steps-for-real-open-source-adoption" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope boundaries / next steps for real open-source adoption
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<div class="admonition note">
+<p class="admonition-title">Source of truth</p>
+<p>This page mirrors <a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/friction-log-toolkit/README.md"><code>friction-log-toolkit/README.md</code></a> in the repo — edit it there, not here. Links below point back to the repo on GitHub.</p>
+</div>
+<h1 id="friction-log-toolkit">friction-log-toolkit<a class="headerlink" href="#friction-log-toolkit" title="Permanent link">&para;</a></h1>
+<p>A tiny CLI for capturing friction points <strong>in the moment</strong> while you build, and exporting them as a structured Markdown friction log.</p>
+<h2 id="the-problem-it-solves">The problem it solves<a class="headerlink" href="#the-problem-it-solves" title="Permanent link">&para;</a></h2>
+<p>The Build, Ship, Shape: Amazon Developer Hackathon explicitly rewards friction logs — a well-written <code>FRICTION_LOG.md</code> covering what worked, what didn't, and what you'd ask the platform team to fix can earn up to a <strong>10% judging bonus</strong>. But in practice, friction logs get written from memory an hour before submission, after the specific error messages, dead-end docs pages, and "wish this existed" moments have already been forgotten.</p>
+<p><code>friction-log-toolkit</code> fixes that by making logging a friction point as cheap as a single terminal command, right when it happens:</p>
+<div class="highlight"><pre><span></span><code>friction-log add "Alexa+ skill schema validation errors had no line numbers" --tag friction
+</code></pre></div>
+<p>Then, at submission time, one command turns everything you captured into a structured Markdown report in the same "What worked well / Friction encountered / Feature requests" shape used elsewhere in this repo (see <code>alexa-homeops-mcp/FRICTION_LOG.md</code> and <code>ring-porchpass/FRICTION_LOG.md</code>).</p>
+<h2 id="installation-usage">Installation &amp; usage<a class="headerlink" href="#installation-usage" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>friction-log-toolkit
+npm<span class="w"> </span>install
+npm<span class="w"> </span>run<span class="w"> </span>build
+</code></pre></div>
+<p>Then either:</p>
+<ul>
+<li><strong>Link it globally</strong> so <code>friction-log</code> is on your <code>PATH</code>:</li>
+</ul>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>link
+friction-log<span class="w"> </span>init
+</code></pre></div>
+<ul>
+<li><strong>Or run it directly</strong> without linking:</li>
+</ul>
+<div class="highlight"><pre><span></span><code>node<span class="w"> </span>dist/cli.js<span class="w"> </span>init
+</code></pre></div>
+<ul>
+<li><strong>Or run it without a separate build step</strong> via <code>npx .</code> from this directory (npm will run <code>prepare</code>-less local install and use the <code>bin</code> entry once built), or during development with <code>npm run dev -- &lt;command&gt;</code> (uses <code>tsx</code> against the TypeScript source directly, no build needed).</li>
+</ul>
+<p>Run it from inside whatever project directory you're building your hackathon submission in — <code>friction-log init</code> creates a <code>.friction-log.json</code> log store right there, next to your project's code.</p>
+<h2 id="command-reference">Command reference<a class="headerlink" href="#command-reference" title="Permanent link">&para;</a></h2>
+<h3 id="friction-log-init-force"><code>friction-log init [--force]</code><a class="headerlink" href="#friction-log-init-force" title="Permanent link">&para;</a></h3>
+<p>Creates a <code>.friction-log.json</code> file in the current directory. Refuses to overwrite an existing one unless you pass <code>--force</code>.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>init
+✓<span class="w"> </span>Initialized<span class="w"> </span>friction<span class="w"> </span>log<span class="w"> </span>at<span class="w"> </span>/home/you/my-hackathon-project/.friction-log.json
+
+$<span class="w"> </span>friction-log<span class="w"> </span>init
+Error:<span class="w"> </span>A<span class="w"> </span>friction<span class="w"> </span>log<span class="w"> </span>already<span class="w"> </span>exists<span class="w"> </span><span class="k">in</span><span class="w"> </span>/home/you/my-hackathon-project<span class="w"> </span><span class="o">(</span>.friction-log.json<span class="o">)</span>.
+Re-run<span class="w"> </span>with<span class="w"> </span>--force<span class="w"> </span>to<span class="w"> </span>overwrite<span class="w"> </span>it,<span class="w"> </span>or<span class="w"> </span>edit/delete<span class="w"> </span>the<span class="w"> </span>file<span class="w"> </span>yourself.
+</code></pre></div>
+<h3 id="friction-log-add-note-tag-tag"><code>friction-log add "&lt;note&gt;" [--tag &lt;tag&gt;]</code><a class="headerlink" href="#friction-log-add-note-tag-tag" title="Permanent link">&para;</a></h3>
+<p>Appends a timestamped entry. <code>--tag</code> is optional; entries with no tag default to <code>note</code>.</p>
+<p>Three tags are treated specially by <code>export</code> (any other string is still a valid tag, it just lands under "Other notes"):</p>
+<table>
+<thead>
+<tr>
+<th>Tag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>worked-well</code></td>
+<td>Something that went smoothly</td>
+</tr>
+<tr>
+<td><code>friction</code></td>
+<td>Something that slowed you down, confused you, or broke</td>
+</tr>
+<tr>
+<td><code>feature-request</code></td>
+<td>Something you wish the platform/SDK/docs had</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>add<span class="w"> </span><span class="s2">"Ring API sandbox mode made local testing painless"</span><span class="w"> </span>--tag<span class="w"> </span>worked-well
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>worked-well<span class="o">]</span><span class="w"> </span>Ring<span class="w"> </span>API<span class="w"> </span>sandbox<span class="w"> </span>mode<span class="w"> </span>made<span class="w"> </span><span class="nb">local</span><span class="w"> </span>testing<span class="w"> </span>painless
+
+$<span class="w"> </span>friction-log<span class="w"> </span>add<span class="w"> </span><span class="s2">"OAuth token refresh docs were split across three pages"</span><span class="w"> </span>--tag<span class="w"> </span>friction
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>OAuth<span class="w"> </span>token<span class="w"> </span>refresh<span class="w"> </span>docs<span class="w"> </span>were<span class="w"> </span>split<span class="w"> </span>across<span class="w"> </span>three<span class="w"> </span>pages
+</code></pre></div>
+<p><strong>Git-aware tagging</strong>: if the current directory is inside a git repository, <code>add</code> automatically captures the current branch name and short commit hash and stores them on the entry as <code>gitBranch</code>/<code>gitCommit</code> — purely informational, useful later for correlating a friction point with what was actually being built at the time:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>add<span class="w"> </span><span class="s2">"Schema validation errors had no line numbers"</span><span class="w"> </span>--tag<span class="w"> </span>friction
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>Schema<span class="w"> </span>validation<span class="w"> </span>errors<span class="w"> </span>had<span class="w"> </span>no<span class="w"> </span>line<span class="w"> </span>numbers<span class="w"> </span><span class="o">(</span>feature/alexa-skill@a1b2c3d<span class="o">)</span>
+</code></pre></div>
+<p>Outside a git repo (or if <code>git</code> isn't installed, or the repo has no commits yet), this is a silent no-op — no error, the entry is just saved without those two fields, exactly like before this feature existed.</p>
+<p><strong>Config-file default tag</strong>: see <a href="#config-file-friction-logrcjson"><code>friction-log defaultTag</code></a> below — if <code>--tag</code> is omitted <em>and</em> a <code>.friction-logrc.json</code> sets <code>"defaultTag"</code>, that's used instead of the hardcoded <code>"note"</code> fallback.</p>
+<p><strong>Auto-tag suggestion</strong>: if <code>--tag</code> is omitted <em>and</em> no <code>defaultTag</code> is configured, <code>add</code> tries a simple keyword heuristic against the note text before falling back to <code>"note"</code> — see <a href="#auto-tag-suggestion">Auto-tag suggestion</a> below. When it fires, the confirmation line says so explicitly, so the tag it picked is never a silent surprise:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>add<span class="w"> </span><span class="s2">"The Alexa+ emulator broke during setup"</span>
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>The<span class="w"> </span>Alexa+<span class="w"> </span>emulator<span class="w"> </span>broke<span class="w"> </span>during<span class="w"> </span>setup<span class="w"> </span><span class="o">(</span>auto-tagged<span class="w"> </span><span class="s2">"friction"</span><span class="w"> </span>based<span class="w"> </span>on<span class="w"> </span>the<span class="w"> </span>note<span class="w"> </span>text<span class="w"> </span>—<span class="w"> </span>override<span class="w"> </span>any<span class="w"> </span><span class="nb">time</span><span class="w"> </span>with<span class="w"> </span>--tag<span class="o">)</span>
+</code></pre></div>
+<h3 id="friction-log-list-tag-tag-since-date-until-date"><code>friction-log list [--tag &lt;tag&gt;] [--since &lt;date&gt;] [--until &lt;date&gt;]</code><a class="headerlink" href="#friction-log-list-tag-tag-since-date-until-date" title="Permanent link">&para;</a></h3>
+<p>Prints entries to stdout in chronological order (oldest first — the order you captured them while building), optionally filtered to one tag. Each line includes the entry's short id, needed for <code>edit</code>/<code>remove</code>.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>list<span class="w"> </span>--tag<span class="w"> </span>friction
+<span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>a1b2c3d4<span class="w">  </span><span class="m">2026</span>-09-02T09:14:03.112Z<span class="w">  </span>OAuth<span class="w"> </span>token<span class="w"> </span>refresh<span class="w"> </span>docs<span class="w"> </span>were<span class="w"> </span>split<span class="w"> </span>across<span class="w"> </span>three<span class="w"> </span>pages
+<span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>e5f6a7b8<span class="w">  </span><span class="m">2026</span>-09-02T10:02:47.881Z<span class="w">  </span>Alexa+<span class="w"> </span>skill<span class="w"> </span>manifest<span class="w"> </span>schema<span class="w"> </span>errors<span class="w"> </span>gave<span class="w"> </span>no<span class="w"> </span>line<span class="w"> </span>numbers
+</code></pre></div>
+<p><strong>Date-range filtering</strong> — see <a href="#date-range-filtering---since--until">Date-range filtering</a> below.</p>
+<h3 id="friction-log-search-query-tag-tag"><code>friction-log search "&lt;query&gt;" [--tag &lt;tag&gt;]</code><a class="headerlink" href="#friction-log-search-query-tag-tag" title="Permanent link">&para;</a></h3>
+<p>Full-text search over entry notes: a <strong>case-insensitive substring match</strong> (not fuzzy, not tokenized — <code>"line num"</code> matches <code>"had no line numbers"</code>, but <code>"numbers line"</code> would not). Optionally narrow to one tag with <code>--tag</code>, same as <code>list</code>. Output includes enough context to be useful without re-running <code>list</code>: the tag, id, timestamp, and full note text for every match.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>search<span class="w"> </span><span class="s2">"line numbers"</span>
+Found<span class="w"> </span><span class="m">1</span><span class="w"> </span>match<span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="s2">"line numbers"</span>:
+<span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>a1b2c3d4<span class="w">  </span><span class="m">2026</span>-09-02T09:14:03.112Z<span class="w">  </span>Alexa+<span class="w"> </span>skill<span class="w"> </span>manifest<span class="w"> </span>schema<span class="w"> </span>errors<span class="w"> </span>gave<span class="w"> </span>no<span class="w"> </span>line<span class="w"> </span>numbers
+
+$<span class="w"> </span>friction-log<span class="w"> </span>search<span class="w"> </span><span class="s2">"docs"</span><span class="w"> </span>--tag<span class="w"> </span>friction
+Found<span class="w"> </span><span class="m">1</span><span class="w"> </span>match<span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="s2">"docs"</span><span class="w"> </span><span class="o">(</span>tag:<span class="w"> </span>friction<span class="o">)</span>:
+<span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>e5f6a7b8<span class="w">  </span><span class="m">2026</span>-09-02T10:02:47.881Z<span class="w">  </span>OAuth<span class="w"> </span>token<span class="w"> </span>refresh<span class="w"> </span>docs<span class="w"> </span>were<span class="w"> </span>split<span class="w"> </span>across<span class="w"> </span>three<span class="w"> </span>pages
+
+$<span class="w"> </span>friction-log<span class="w"> </span>search<span class="w"> </span><span class="s2">"nothing matches this"</span>
+No<span class="w"> </span>entries<span class="w"> </span>matching<span class="w"> </span><span class="s2">"nothing matches this"</span>.
+</code></pre></div>
+<h3 id="friction-log-stats-since-date-until-date"><code>friction-log stats [--since &lt;date&gt;] [--until &lt;date&gt;]</code><a class="headerlink" href="#friction-log-stats-since-date-until-date" title="Permanent link">&para;</a></h3>
+<p>A quick summary: total entries, a breakdown per tag, the date range covered, which single day had the most entries logged, and a small ASCII bar chart of entries per day. Just a fast mid-hackathon check-in on how much you've captured so far.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>stats
+Friction<span class="w"> </span>Log<span class="w"> </span>Stats
+-------------------
+Total<span class="w"> </span>entries:<span class="w"> </span><span class="m">7</span>
+By<span class="w"> </span>tag:
+<span class="w">  </span>worked-well:<span class="w"> </span><span class="m">2</span>
+<span class="w">  </span>friction:<span class="w"> </span><span class="m">3</span>
+<span class="w">  </span>feature-request:<span class="w"> </span><span class="m">1</span>
+<span class="w">  </span>note:<span class="w"> </span><span class="m">1</span>
+Date<span class="w"> </span>range:<span class="w"> </span><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:02<span class="w"> </span>UTC<span class="w"> </span>-&gt;<span class="w"> </span><span class="m">2026</span>-09-02<span class="w"> </span><span class="m">12</span>:28<span class="w"> </span>UTC
+Busiest<span class="w"> </span>day:<span class="w"> </span><span class="m">2026</span>-09-02<span class="w"> </span><span class="o">(</span><span class="m">5</span><span class="w"> </span>entries<span class="o">)</span>
+Daily<span class="w"> </span>activity:
+<span class="w">  </span><span class="m">2026</span>-09-01<span class="w"> </span><span class="p">|</span>██<span class="w"> </span><span class="m">2</span>
+<span class="w">  </span><span class="m">2026</span>-09-02<span class="w"> </span><span class="p">|</span>█████<span class="w"> </span><span class="m">5</span>
+</code></pre></div>
+<p><strong>The bar chart</strong> (<code>Daily activity</code>) prints one line per calendar day that has at least one entry (a log spanning a huge date range with long empty gaps doesn't print a wall of zero-count days), in chronological order. Below 40 entries in a single day, a bar is exactly <code>count</code> block characters (<code>█</code>) long, so the bar itself is an exact, at-a-glance count — not just decoration next to the trailing number. Only once a day's count exceeds 40 does every bar get scaled down together (the busiest day becomes exactly 40 characters, every other day shrinks by the same factor), so one very busy day can't blow out terminal width while relative proportions between days stay meaningful. No dependency — just repeated <code>█</code> characters, same zero-dependency philosophy as everything else in this CLI.</p>
+<p><strong>Date-range filtering</strong> — see <a href="#date-range-filtering---since--until">Date-range filtering</a> below.</p>
+<h3 id="friction-log-edit-id-note-note-tag-tag"><code>friction-log edit &lt;id&gt; [--note &lt;note&gt;] [--tag &lt;tag&gt;]</code><a class="headerlink" href="#friction-log-edit-id-note-note-tag-tag" title="Permanent link">&para;</a></h3>
+<p>Updates an existing entry in place, by the short id shown in <code>list</code>. Pass <code>--note</code>, <code>--tag</code>, or both; anything you omit is left unchanged.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>edit<span class="w"> </span>a1b2c3d4<span class="w"> </span>--tag<span class="w"> </span>worked-well
+✓<span class="w"> </span>Updated<span class="w"> </span>entry<span class="w"> </span>a1b2c3d4:<span class="w"> </span><span class="o">[</span>worked-well<span class="o">]</span><span class="w"> </span>OAuth<span class="w"> </span>token<span class="w"> </span>refresh<span class="w"> </span>docs<span class="w"> </span>were<span class="w"> </span>split<span class="w"> </span>across<span class="w"> </span>three<span class="w"> </span>pages
+</code></pre></div>
+<p>An unknown id fails clearly instead of silently no-op'ing:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>edit<span class="w"> </span>doesnotexist<span class="w"> </span>--tag<span class="w"> </span>friction
+Error:<span class="w"> </span>No<span class="w"> </span>entry<span class="w"> </span>with<span class="w"> </span>id<span class="w"> </span><span class="s2">"doesnotexist"</span><span class="w"> </span>found.<span class="w"> </span>Run<span class="w"> </span><span class="s2">"friction-log list"</span><span class="w"> </span>to<span class="w"> </span>see<span class="w"> </span>valid<span class="w"> </span>ids.
+</code></pre></div>
+<h3 id="friction-log-remove-id"><code>friction-log remove &lt;id&gt;</code><a class="headerlink" href="#friction-log-remove-id" title="Permanent link">&para;</a></h3>
+<p>Deletes an entry by id. Same not-found error as <code>edit</code> if the id doesn't exist.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>remove<span class="w"> </span>a1b2c3d4
+✓<span class="w"> </span>Removed<span class="w"> </span>entry<span class="w"> </span>a1b2c3d4:<span class="w"> </span><span class="o">[</span>worked-well<span class="o">]</span><span class="w"> </span>OAuth<span class="w"> </span>token<span class="w"> </span>refresh<span class="w"> </span>docs<span class="w"> </span>were<span class="w"> </span>split<span class="w"> </span>across<span class="w"> </span>three<span class="w"> </span>pages
+</code></pre></div>
+<h3 id="friction-log-merge-otherfile-into-targetfile"><code>friction-log merge &lt;otherFile&gt; --into &lt;targetFile&gt;</code><a class="headerlink" href="#friction-log-merge-otherfile-into-targetfile" title="Permanent link">&para;</a></h3>
+<p>Combines entries from another <code>.friction-log.json</code>-shaped file into a target log file — for a team logging friction across multiple machines or branches and wanting one combined report at the end. Entries are de-duplicated by id (an entry present in both files is kept once, not doubled), and the result is re-sorted chronologically.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>merge<span class="w"> </span>../teammate-laptop/.friction-log.json<span class="w"> </span>--into<span class="w"> </span>.friction-log.json
+✓<span class="w"> </span>Merged<span class="w"> </span>/home/you/teammate-laptop/.friction-log.json<span class="w"> </span>into<span class="w"> </span>/home/you/my-hackathon-project/.friction-log.json:<span class="w"> </span>+4<span class="w"> </span>new,<span class="w"> </span><span class="m">1</span><span class="w"> </span>duplicate<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>skipped,<span class="w"> </span><span class="m">11</span><span class="w"> </span>total.
+</code></pre></div>
+<p>Both paths can be relative or absolute; <code>&lt;otherFile&gt;</code> is only read, <code>&lt;targetFile&gt;</code> is the one that gets updated. <code>&lt;targetFile&gt;</code> must already exist (run <code>init</code> there first if it doesn't).</p>
+<h3 id="friction-log-sync-url-push-pull"><code>friction-log sync &lt;url&gt; [--push|--pull]</code><a class="headerlink" href="#friction-log-sync-url-push-pull" title="Permanent link">&para;</a></h3>
+<p>Exchanges entries with a remote over HTTP, using the exact same id-based dedup logic as <code>merge</code> (<code>mergeEntries</code>, shared by both — one implementation, not two copies to keep in sync). Exactly one of <code>--push</code> or <code>--pull</code> must be given.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>sync<span class="w"> </span>https://team.example.com/friction-log<span class="w"> </span>--push
+✓<span class="w"> </span>Pushed<span class="w"> </span>to<span class="w"> </span>https://team.example.com/friction-log:<span class="w"> </span>+3<span class="w"> </span>new,<span class="w"> </span><span class="m">5</span><span class="w"> </span>duplicate<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>skipped,<span class="w"> </span><span class="m">8</span><span class="w"> </span>total<span class="w"> </span>on<span class="w"> </span>remote.
+
+$<span class="w"> </span>friction-log<span class="w"> </span>sync<span class="w"> </span>https://team.example.com/friction-log<span class="w"> </span>--pull
+✓<span class="w"> </span>Pulled<span class="w"> </span>from<span class="w"> </span>https://team.example.com/friction-log:<span class="w"> </span>+2<span class="w"> </span>new,<span class="w"> </span><span class="m">6</span><span class="w"> </span>duplicate<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>skipped,<span class="w"> </span><span class="m">8</span><span class="w"> </span>total<span class="w"> </span>locally.
+</code></pre></div>
+<p><strong>The contract</strong> (deliberately tiny — plain JSON over HTTP, nothing to install on the remote beyond something that speaks this shape):</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Request body</th>
+<th>Response body</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET &lt;url&gt;</code></td>
+<td>—</td>
+<td><code>200</code> with <code>{ "entries": LogEntry[] }</code> — the remote's full current entry list</td>
+</tr>
+<tr>
+<td><code>POST &lt;url&gt;</code></td>
+<td><code>{ "entries": LogEntry[] }</code> — the pusher's full local entry list</td>
+<td><code>200</code> with <code>{ "added": number, "duplicates": number, "total": number }</code> — what happened on the <em>remote's</em> side after merging the pushed entries in</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>--pull</code> does a <code>GET</code>, merges the remote's entries into the local log via <code>mergeEntries</code>, and reports the <strong>local</strong> added/duplicates/total.</li>
+<li><code>--push</code> does a <code>POST</code> of the full local log and reports back whatever added/duplicates/total the remote says happened on its side.</li>
+</ul>
+<p>Because both directions dedup by entry <code>id</code>, running <code>sync</code> repeatedly (a cron job, a pre-submission ritual, a flaky connection retried) never doubles up entries — a second identical push or pull reports <code>+0 new</code> and leaves everything else unchanged. <code>sync</code> requires a log to already exist (<code>friction-log init</code> first), same as <code>list</code>/<code>export</code>/<code>stats</code>/<code>serve</code>/<code>watch</code>; an unreachable URL, a non-2xx response, or a response that doesn't match the JSON shape above all fail clearly instead of hanging or crashing with a raw stack trace.</p>
+<p>No real server ships with this CLI — the contract above is everything a teammate (or this project's own test suite, which spins up a throwaway <code>node:http</code> listener as a stand-in) needs to implement to be a valid sync target.</p>
+<h3 id="friction-log-template-add-name-text-with-placeholders-tag-tag"><code>friction-log template add &lt;name&gt; "&lt;text with {placeholders}&gt;" [--tag &lt;tag&gt;]</code><a class="headerlink" href="#friction-log-template-add-name-text-with-placeholders-tag-tag" title="Permanent link">&para;</a></h3>
+<p>Saves a reusable note template under <code>&lt;name&gt;</code>, with any number of <code>{placeholder}</code> tokens (a placeholder name is letters/digits/underscore). Re-running <code>template add</code> with a name that already exists <strong>replaces</strong> it rather than creating a duplicate. <code>--tag</code> is optional — a template can carry its own tag, applied by <code>template use</code> whenever that command's own <code>--tag</code> is omitted.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>template<span class="w"> </span>add<span class="w"> </span>flaky-endpoint<span class="w"> </span><span class="s2">"{endpoint} returned {code} with no explanation"</span><span class="w"> </span>--tag<span class="w"> </span>friction
+✓<span class="w"> </span>Saved<span class="w"> </span>template<span class="w"> </span><span class="s2">"flaky-endpoint"</span><span class="w"> </span><span class="o">(</span>tag:<span class="w"> </span>friction<span class="o">)</span>:<span class="w"> </span><span class="o">{</span>endpoint<span class="o">}</span><span class="w"> </span>returned<span class="w"> </span><span class="o">{</span>code<span class="o">}</span><span class="w"> </span>with<span class="w"> </span>no<span class="w"> </span>explanation
+</code></pre></div>
+<h3 id="friction-log-template-use-name-set-keyvalue-tag-tag"><code>friction-log template use &lt;name&gt; [--set key=value ...] [--tag &lt;tag&gt;]</code><a class="headerlink" href="#friction-log-template-use-name-set-keyvalue-tag-tag" title="Permanent link">&para;</a></h3>
+<p>Fills in a saved template's placeholders and logs the result exactly like a normal <code>add</code> — same id generation, same git-aware tagging, same auto-tag fallback if neither the template nor <code>--tag</code> supplies a tag. Pass one <code>--set key=value</code> per placeholder; a placeholder with no matching <code>--set</code> fails clearly (listing every missing key at once) rather than silently saving a literal <code>{key}</code> in the note.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>template<span class="w"> </span>use<span class="w"> </span>flaky-endpoint<span class="w"> </span>--set<span class="w"> </span><span class="nv">endpoint</span><span class="o">=</span>/v1/token<span class="w"> </span>--set<span class="w"> </span><span class="nv">code</span><span class="o">=</span><span class="m">500</span>
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>/v1/token<span class="w"> </span>returned<span class="w"> </span><span class="m">500</span><span class="w"> </span>with<span class="w"> </span>no<span class="w"> </span>explanation
+
+$<span class="w"> </span>friction-log<span class="w"> </span>template<span class="w"> </span>use<span class="w"> </span>flaky-endpoint<span class="w"> </span>--set<span class="w"> </span><span class="nv">endpoint</span><span class="o">=</span>/v1/refresh<span class="w"> </span>--set<span class="w"> </span><span class="nv">code</span><span class="o">=</span><span class="m">502</span><span class="w"> </span>--tag<span class="w"> </span>worked-well
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>worked-well<span class="o">]</span><span class="w"> </span>/v1/refresh<span class="w"> </span>returned<span class="w"> </span><span class="m">502</span><span class="w"> </span>with<span class="w"> </span>no<span class="w"> </span>explanation
+</code></pre></div>
+<p><strong>Tag resolution order</strong>: an explicit <code>--tag</code> on <code>use</code> always wins; otherwise the template's own saved tag is used; otherwise it falls through to <code>add</code>'s normal chain (a configured <code>defaultTag</code>, then the auto-tag heuristic, then <code>"note"</code>) — a template with no tag of its own behaves exactly like a plain untagged <code>add</code> once its placeholders are filled in.</p>
+<h3 id="friction-log-template-list"><code>friction-log template list</code><a class="headerlink" href="#friction-log-template-list" title="Permanent link">&para;</a></h3>
+<p>Lists every saved template with its tag (if any) and raw <code>{placeholder}</code> text.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>template<span class="w"> </span>list
+flaky-endpoint<span class="w"> </span><span class="o">[</span>friction<span class="o">]</span>:<span class="w"> </span><span class="o">{</span>endpoint<span class="o">}</span><span class="w"> </span>returned<span class="w"> </span><span class="o">{</span>code<span class="o">}</span><span class="w"> </span>with<span class="w"> </span>no<span class="w"> </span>explanation
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>template<span class="w"> </span>list
+No<span class="w"> </span>templates<span class="w"> </span>saved<span class="w"> </span>yet.
+</code></pre></div>
+<p>Templates are stored per-directory in their own <code>.friction-log-templates.json</code> file — separate from <code>.friction-log.json</code> for the same reason <code>.friction-logrc.json</code> is separate: a template is a reusable shape for <em>future</em> entries, not itself a logged entry, and shouldn't be touched by <code>init --force</code> clearing the log.</p>
+<h3 id="friction-log-serve-port-port"><code>friction-log serve [--port &lt;port&gt;]</code><a class="headerlink" href="#friction-log-serve-port-port" title="Permanent link">&para;</a></h3>
+<p>Starts a minimal, dependency-free local HTTP server (Node's built-in <code>http</code> module — no Express, no framework, nothing else to <code>npm install</code>) that serves a single styled HTML page listing every entry in the current directory's <code>.friction-log.json</code>. The log file is <strong>re-read from disk on every request</strong> — no caching — so <code>friction-log add "..."</code> in one terminal shows up the moment you reload the page in the other, with no server restart. Defaults to port <code>4848</code>; pass <code>--port 0</code> to let the OS assign a free ephemeral port (useful for scripting/tests).</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>serve
+✓<span class="w"> </span>Friction<span class="w"> </span>log<span class="w"> </span>server<span class="w"> </span>running<span class="w"> </span>at<span class="w"> </span>http://localhost:4848/
+Press<span class="w"> </span>Ctrl-C<span class="w"> </span>to<span class="w"> </span>stop.
+</code></pre></div>
+<p>Visiting that URL renders a page with every entry (newest first), each showing its tag, timestamp, and note text. A <code>&lt;select&gt;</code> dropdown lets you filter by tag — it submits a plain GET form to <code>/?tag=friction</code>, so the filtering is entirely server-rendered (no client-side JavaScript required at all, though the dropdown auto-submits on change for convenience):</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>curl<span class="w"> </span>-s<span class="w"> </span><span class="s2">"http://localhost:4848/?tag=friction"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-A1<span class="w"> </span><span class="nv">class</span><span class="o">=</span><span class="se">\"</span>note<span class="se">\"</span>
+&lt;p<span class="w"> </span><span class="nv">class</span><span class="o">=</span><span class="s2">"note"</span>&gt;Alexa+<span class="w"> </span>skill<span class="w"> </span>manifest<span class="w"> </span>schema<span class="w"> </span>errors<span class="w"> </span>gave<span class="w"> </span>no<span class="w"> </span>line<span class="w"> </span>numbers&lt;/p&gt;
+&lt;p<span class="w"> </span><span class="nv">class</span><span class="o">=</span><span class="s2">"note"</span>&gt;OAuth<span class="w"> </span>token<span class="w"> </span>refresh<span class="w"> </span>docs<span class="w"> </span>were<span class="w"> </span>split<span class="w"> </span>across<span class="w"> </span>three<span class="w"> </span>pages&lt;/p&gt;
+</code></pre></div>
+<p>Stop it the same way as any other long-running CLI server — <strong>Ctrl-C</strong>. The process shuts the server down and exits cleanly (<code>SIGINT</code> is handled explicitly rather than left to Node's default).</p>
+<p>An invalid <code>--port</code> (non-integer, negative, or above 65535) fails clearly instead of trying to bind a bogus port. <code>serve</code> requires a log to already exist (<code>friction-log init</code> first), same as <code>list</code>/<code>export</code>/<code>stats</code>.</p>
+<h3 id="friction-log-watch"><code>friction-log watch</code><a class="headerlink" href="#friction-log-watch" title="Permanent link">&para;</a></h3>
+<p>An interactive, prompt-log-prompt REPL for rapid-fire logging: type a line, press Enter, it's logged immediately — then it prompts again, with no need to re-invoke <code>friction-log add "..." --tag ...</code> (flags and all) for every single thought as it happens.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>watch
+friction-log<span class="w"> </span>watch<span class="w"> </span>—<span class="w"> </span>one<span class="w"> </span>line<span class="w"> </span>per<span class="w"> </span>note,<span class="w"> </span>Enter<span class="w"> </span>to<span class="w"> </span>log<span class="w"> </span>it.
+End<span class="w"> </span>a<span class="w"> </span>line<span class="w"> </span>with<span class="w"> </span><span class="s2">"#tagname"</span><span class="w"> </span>to<span class="w"> </span>tag<span class="w"> </span>it,<span class="w"> </span>e.g.<span class="w"> </span><span class="s2">"Docs 404 on first click #friction"</span>.
+Blank<span class="w"> </span>line,<span class="w"> </span><span class="s2">"exit"</span>,<span class="w"> </span>or<span class="w"> </span><span class="s2">"quit"</span><span class="w"> </span>to<span class="w"> </span>stop.
+
+&gt;<span class="w"> </span>Docs<span class="w"> </span>page<span class="w"> </span><span class="m">404</span><span class="s1">'d on the first click #friction</span>
+<span class="s1">✓ Logged [friction] Docs page 404'</span>d<span class="w"> </span>on<span class="w"> </span>the<span class="w"> </span>first<span class="w"> </span>click
+&gt;<span class="w"> </span>Ring<span class="w"> </span>OAuth<span class="w"> </span>sandbox<span class="w"> </span>credentials<span class="w"> </span>worked<span class="w"> </span>first<span class="w"> </span>try<span class="w"> </span><span class="c1">#worked-well</span>
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>worked-well<span class="o">]</span><span class="w"> </span>Ring<span class="w"> </span>OAuth<span class="w"> </span>sandbox<span class="w"> </span>credentials<span class="w"> </span>worked<span class="w"> </span>first<span class="w"> </span>try
+&gt;<span class="w"> </span><span class="nb">exit</span>
+
+Stopped.<span class="w"> </span>Run<span class="w"> </span><span class="s2">"friction-log list"</span><span class="w"> </span>to<span class="w"> </span>see<span class="w"> </span>everything<span class="w"> </span>you<span class="w"> </span>logged.
+</code></pre></div>
+<p><strong>Inline tag syntax</strong>: end a line with a trailing <code>#tagname</code> (a <code>#</code> immediately followed by letters/digits/<code>-</code>/<code>_</code>, at the very end of the line) to tag that entry without ever touching a <code>--tag</code> flag. It's stripped from the saved note text. With no trailing <code>#tag</code>, <code>add</code>'s normal default chain applies (a configured <code>defaultTag</code>, then the auto-tag heuristic, then <code>"note"</code>).</p>
+<p><strong>Auto-tag confirmation</strong>: unlike a non-interactive <code>add</code> (which applies the heuristic's suggestion automatically), <code>watch</code> stops and asks first whenever a line has no inline <code>#tag</code> and the heuristic finds a keyword match — press <strong>Enter</strong> to accept the suggestion, or type a different tag and press Enter to use that instead:</p>
+<div class="highlight"><pre><span></span><code>&gt;<span class="w"> </span>The<span class="w"> </span>build<span class="w"> </span>broke<span class="w"> </span>halfway<span class="w"> </span>through<span class="w"> </span>the<span class="w"> </span>demo
+Suggested<span class="w"> </span>tag:<span class="w"> </span>friction<span class="w"> </span><span class="o">(</span>Enter<span class="w"> </span>to<span class="w"> </span>accept,<span class="w"> </span>or<span class="w"> </span><span class="nb">type</span><span class="w"> </span>a<span class="w"> </span>different<span class="w"> </span>tag<span class="o">)</span>
+&gt;
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>The<span class="w"> </span>build<span class="w"> </span>broke<span class="w"> </span>halfway<span class="w"> </span>through<span class="w"> </span>the<span class="w"> </span>demo
+</code></pre></div>
+<p>No keyword match at all (or an inline <code>#tag</code>, which always short-circuits the suggestion) skips the confirmation step entirely and logs immediately, exactly as before this feature existed. See <a href="#auto-tag-suggestion">Auto-tag suggestion</a> below for the exact keyword lists.</p>
+<p>A <strong>blank line</strong>, or typing <strong><code>exit</code></strong>/<strong><code>quit</code></strong> (either case), ends the loop cleanly — nothing is logged for that final line. <code>watch</code> requires a log to already exist first (<code>friction-log init</code>).</p>
+<p>Since it's built on Node's <code>readline</code>, it works the same whether stdin is a real terminal or a pipe — so it's also scriptable:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'First rapid note\nSecond note #feature-request\n\n'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>friction-log<span class="w"> </span>watch
+</code></pre></div>
+<h3 id="friction-log-export-out-file-title-title-format-jsonmdtxt-since-date-until-date"><code>friction-log export [--out &lt;file&gt;] [--title &lt;title&gt;] [--format json|md|txt] [--since &lt;date&gt;] [--until &lt;date&gt;]</code><a class="headerlink" href="#friction-log-export-out-file-title-title-format-jsonmdtxt-since-date-until-date" title="Permanent link">&para;</a></h3>
+<p>Renders the log as Markdown (default), plain text, or raw JSON, either to stdout or to a file. This is the command you run right before writing your hackathon submission's own <code>FRICTION_LOG.md</code> — or, with <code>--format json</code>, before feeding your friction log into some other script or CI check.</p>
+<p><strong>Date-range filtering</strong> — see <a href="#date-range-filtering---since--until">Date-range filtering</a> below.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--out<span class="w"> </span>FRICTION_LOG.md<span class="w"> </span>--title<span class="w"> </span><span class="s2">"Team Rocket — Friction Log"</span>
+✓<span class="w"> </span>Exported<span class="w"> </span>friction<span class="w"> </span>log<span class="w"> </span>to<span class="w"> </span>FRICTION_LOG.md
+</code></pre></div>
+<p><code>--format json</code> exports the raw structured entries as an array of objects — nothing summarized or reshaped, so it round-trips cleanly with <code>merge</code> and is easy to pipe into <code>jq</code> or a script:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--format<span class="w"> </span>json
+<span class="o">[</span>
+<span class="w">  </span><span class="o">{</span>
+<span class="w">    </span><span class="s2">"id"</span>:<span class="w"> </span><span class="s2">"a1b2c3d4"</span>,
+<span class="w">    </span><span class="s2">"timestamp"</span>:<span class="w"> </span><span class="s2">"2026-09-02T09:14:03.112Z"</span>,
+<span class="w">    </span><span class="s2">"note"</span>:<span class="w"> </span><span class="s2">"OAuth token refresh docs were split across three pages"</span>,
+<span class="w">    </span><span class="s2">"tag"</span>:<span class="w"> </span><span class="s2">"friction"</span>,
+<span class="w">    </span><span class="s2">"gitBranch"</span>:<span class="w"> </span><span class="s2">"main"</span>,
+<span class="w">    </span><span class="s2">"gitCommit"</span>:<span class="w"> </span><span class="s2">"4dc9d98"</span>
+<span class="w">  </span><span class="o">}</span>
+<span class="o">]</span>
+</code></pre></div>
+<p><code>--format txt</code> renders the same grouped sections as the Markdown export, but as plain text (no <code>#</code> headings, no <code>_..._</code> emphasis) — for pasting somewhere that doesn't render Markdown:</p>
+<div class="highlight"><pre><span></span><code>Friction Log
+============
+
+FRICTION ENCOUNTERED
+--------------------
+1. OAuth token refresh docs were split across three pages (2026-09-02 09:14 UTC)
+</code></pre></div>
+<p>Sample Markdown output (the default, <code>--format md</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="gh"># Team Rocket — Friction Log</span>
+
+<span class="ge">_Generated by friction-log-toolkit on 2026-09-02 12:28:15 UTC. 5 entries logged since 2026-09-02 09:14:02 UTC._</span>
+
+<span class="gu">## What worked well</span>
+
+<span class="k">-</span><span class="w"> </span>Ring OAuth sandbox credentials worked first try, no waiting on approval <span class="ge">_(2026-09-02 12:28:15 UTC)_</span>
+
+<span class="gu">## Friction encountered</span>
+
+<span class="k">1.</span> Alexa+ skill manifest schema errors gave no line numbers, just a generic 400 <span class="ge">_(2026-09-02 12:28:15 UTC)_</span>
+<span class="k">2.</span> Docs for Bee webhook signing are split across two pages <span class="ge">_(2026-09-02 12:28:15 UTC)_</span>
+
+<span class="gu">## Feature requests</span>
+
+<span class="k">-</span><span class="w"> </span>Wish the Fire TV emulator had a --reset flag <span class="ge">_(2026-09-02 12:28:15 UTC)_</span>
+
+<span class="gu">## Other notes</span>
+
+<span class="k">-</span><span class="w"> </span><span class="gs">**[note]**</span> Random thought: should track time-of-day too <span class="ge">_(2026-09-02 12:28:15 UTC)_</span>
+</code></pre></div>
+<h3 id="date-range-filtering-since-until">Date-range filtering (<code>--since</code>/<code>--until</code>)<a class="headerlink" href="#date-range-filtering-since-until" title="Permanent link">&para;</a></h3>
+<p><code>list</code>, <code>export</code>, and <code>stats</code> all accept <code>--since &lt;date&gt;</code> and/or <code>--until &lt;date&gt;</code>, narrowing to entries in that range <strong>before</strong> any tag filtering, grouping, or aggregation runs. Either flag can be used alone. Both accept anything JavaScript's <code>Date.parse</code> can read — a bare <code>"2026-09-01"</code>, a full ISO-8601 timestamp like <code>"2026-09-01T14:00:00Z"</code>, or anything else <code>Date.parse</code> understands.</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>list<span class="w"> </span>--since<span class="w"> </span><span class="m">2026</span>-09-02
+<span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>a1b2c3d4<span class="w">  </span><span class="m">2026</span>-09-02T09:14:03.112Z<span class="w">  </span>OAuth<span class="w"> </span>token<span class="w"> </span>refresh<span class="w"> </span>docs<span class="w"> </span>were<span class="w"> </span>split<span class="w"> </span>across<span class="w"> </span>three<span class="w"> </span>pages
+<span class="o">[</span>worked-well<span class="o">]</span><span class="w"> </span>f9e8d7c6<span class="w">  </span><span class="m">2026</span>-09-02T12:28:15.045Z<span class="w">  </span>Ring<span class="w"> </span>OAuth<span class="w"> </span>sandbox<span class="w"> </span>credentials<span class="w"> </span>worked<span class="w"> </span>first<span class="w"> </span>try
+
+$<span class="w"> </span>friction-log<span class="w"> </span>stats<span class="w"> </span>--since<span class="w"> </span><span class="m">2026</span>-09-01<span class="w"> </span>--until<span class="w"> </span><span class="m">2026</span>-09-01
+Friction<span class="w"> </span>Log<span class="w"> </span>Stats
+-------------------
+Total<span class="w"> </span>entries:<span class="w"> </span><span class="m">3</span>
+By<span class="w"> </span>tag:
+<span class="w">  </span>friction:<span class="w"> </span><span class="m">2</span>
+<span class="w">  </span>worked-well:<span class="w"> </span><span class="m">1</span>
+Date<span class="w"> </span>range:<span class="w"> </span><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">09</span>:02<span class="w"> </span>UTC<span class="w"> </span>-&gt;<span class="w"> </span><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">18</span>:44<span class="w"> </span>UTC
+Busiest<span class="w"> </span>day:<span class="w"> </span><span class="m">2026</span>-09-01<span class="w"> </span><span class="o">(</span><span class="m">3</span><span class="w"> </span>entries<span class="o">)</span>
+
+$<span class="w"> </span>friction-log<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>--since<span class="w"> </span><span class="m">2026</span>-09-02<span class="w"> </span>--out<span class="w"> </span>today.json
+✓<span class="w"> </span>Exported<span class="w"> </span>friction<span class="w"> </span>log<span class="w"> </span>to<span class="w"> </span>today.json
+</code></pre></div>
+<p><strong>A bare date-only <code>--until</code> means the end of that day, not its first instant</strong> — <code>--until 2026-09-01</code> includes everything logged through <code>2026-09-01T23:59:59.999Z</code>, not just entries at exactly midnight. This is specifically so <code>--since 2026-09-02 --until 2026-09-02</code> reads naturally as "just today's session" on a multi-day hackathon, rather than an empty range. <code>--since</code> needs no equivalent adjustment: a bare date there already means "from the start of that day onward", which is what you want.</p>
+<p>An unparseable date fails clearly rather than silently matching (or excluding) everything:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>list<span class="w"> </span>--since<span class="w"> </span><span class="s2">"not-a-real-date"</span>
+Error:<span class="w"> </span>Could<span class="w"> </span>not<span class="w"> </span>parse<span class="w"> </span>--since<span class="w"> </span><span class="s2">"not-a-real-date"</span><span class="w"> </span>as<span class="w"> </span>a<span class="w"> </span>date.
+</code></pre></div>
+<h3 id="auto-tag-suggestion">Auto-tag suggestion<a class="headerlink" href="#auto-tag-suggestion" title="Permanent link">&para;</a></h3>
+<p>When <code>add</code> (or a line in <code>watch</code>) has no explicit <code>--tag</code> <strong>and</strong> no configured <code>defaultTag</code>, a small keyword heuristic (<code>src/autotag.ts</code>, no NLP, no dependency) suggests a tag by checking the note's text (case-insensitive) against three fixed keyword lists, in this order — the first list with a match wins:</p>
+<table>
+<thead>
+<tr>
+<th>Suggested tag</th>
+<th>Keywords checked</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>friction</code></td>
+<td>bug, broke, broken, breaks, error, errors, errored, crash, crashed, crashes, fail, failed, failing, confusing, confused, stuck</td>
+</tr>
+<tr>
+<td><code>worked-well</code></td>
+<td>worked, works, nice, clean, smooth, smoothly, great, easy, painless</td>
+</tr>
+<tr>
+<td><code>feature-request</code></td>
+<td>should, would be nice, wish, wished, could use, want</td>
+</tr>
+</tbody>
+</table>
+<p>A single-word keyword matches on a <code>\b</code> word boundary against the note, lowercased (<code>"fail"</code> matches <code>"the build failed"</code> via <code>"failed"</code> containing <code>"fail"</code> followed by more word characters — word-boundary matching finds the keyword as a substring of a longer word too, it's not whole-word-only); a multi-word phrase (<code>"would be nice"</code>, <code>"could use"</code>) matches as a plain substring. This is intentionally simple — a keyword list, not a tokenizer or classifier. No match at all falls through to whatever the normal default would have been anyway (a configured <code>defaultTag</code>, else <code>"note"</code>).</p>
+<p><strong><code>add</code> applies the suggestion automatically</strong> and says so in its confirmation line, so it's never a silent surprise:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>add<span class="w"> </span><span class="s2">"The build broke halfway through the demo"</span>
+✓<span class="w"> </span>Logged<span class="w"> </span><span class="o">[</span>friction<span class="o">]</span><span class="w"> </span>The<span class="w"> </span>build<span class="w"> </span>broke<span class="w"> </span>halfway<span class="w"> </span>through<span class="w"> </span>the<span class="w"> </span>demo<span class="w"> </span><span class="o">(</span>auto-tagged<span class="w"> </span><span class="s2">"friction"</span><span class="w"> </span>based<span class="w"> </span>on<span class="w"> </span>the<span class="w"> </span>note<span class="w"> </span>text<span class="w"> </span>—<span class="w"> </span>override<span class="w"> </span>any<span class="w"> </span><span class="nb">time</span><span class="w"> </span>with<span class="w"> </span>--tag<span class="o">)</span>
+</code></pre></div>
+<p><strong><code>watch</code> asks for confirmation instead</strong> — see <a href="#friction-log-watch">the <code>watch</code> section</a> above. An explicit <code>--tag</code> (on <code>add</code>) or an inline <code>#tag</code> (in <code>watch</code>) always short-circuits the heuristic entirely; it's only ever consulted when nothing else already decided the tag.</p>
+<h3 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h3>
+<p>Running <code>add</code>, <code>list</code>, or <code>export</code> before <code>init</code> gives a clear, actionable message instead of a stack trace:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>add<span class="w"> </span><span class="s2">"too early"</span>
+Error:<span class="w"> </span>No<span class="w"> </span>friction<span class="w"> </span>log<span class="w"> </span>found<span class="w"> </span><span class="k">in</span><span class="w"> </span>/home/you/my-hackathon-project<span class="w"> </span><span class="o">(</span>missing<span class="w"> </span>.friction-log.json<span class="o">)</span>.
+Run<span class="w"> </span><span class="s2">"friction-log init"</span><span class="w"> </span>first<span class="w"> </span>to<span class="w"> </span>create<span class="w"> </span>one.
+</code></pre></div>
+<p>An unknown command prints usage help and exits non-zero:</p>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>friction-log<span class="w"> </span>frobnicate
+Error:<span class="w"> </span>Unknown<span class="w"> </span><span class="nb">command</span><span class="w"> </span><span class="s2">"frobnicate"</span>.
+
+friction-log<span class="w"> </span>—<span class="w"> </span>capture<span class="w"> </span>friction<span class="w"> </span>points<span class="w"> </span><span class="k">in</span><span class="w"> </span>the<span class="w"> </span>moment,<span class="w"> </span><span class="nb">export</span><span class="w"> </span>them<span class="w"> </span>as<span class="w"> </span>a<span class="w"> </span>Markdown<span class="w"> </span>report.
+...
+</code></pre></div>
+<h2 id="config-file-friction-logrcjson">Config file: <code>.friction-logrc.json</code><a class="headerlink" href="#config-file-friction-logrcjson" title="Permanent link">&para;</a></h2>
+<p>An optional file, read from the current directory, for team-wide defaults. CLI flags always win when both are given.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"defaultTag"</span><span class="p">:</span><span class="w"> </span><span class="s2">"friction"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"export"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"title"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Team Rocket — Friction Log"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"out"</span><span class="p">:</span><span class="w"> </span><span class="s2">"FRICTION_LOG.md"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"format"</span><span class="p">:</span><span class="w"> </span><span class="s2">"md"</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><code>defaultTag</code> — used by <code>add</code> whenever <code>--tag</code> is omitted, instead of the hardcoded <code>"note"</code>.</li>
+<li><code>export.title</code> / <code>export.out</code> / <code>export.format</code> — used by <code>export</code> whenever the matching flag (<code>--title</code> / <code>--out</code> / <code>--format</code>) is omitted.</li>
+</ul>
+<p><strong>Why a separate file instead of a block inside <code>.friction-log.json</code></strong>: <code>.friction-log.json</code> is per-machine working state — it fills up with personal in-the-moment notes and is usually gitignored — while an rc file holding team-wide defaults (a shared default tag, a standard export title everyone should use) is exactly the kind of thing you <em>do</em> want checked into the repo. Keeping them separate also means a config choice never gets clobbered by <code>init --force</code>, and <code>readConfig</code> only has to run for <code>add</code>/<code>export</code>, not for every command that touches the log.</p>
+<p>It's entirely optional — every command works fine with no <code>.friction-logrc.json</code> present at all.</p>
+<h2 id="project-layout">Project layout<a class="headerlink" href="#project-layout" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>friction-log-toolkit/
+  package.json        type: module, bin: friction-log -&gt; dist/cli.js
+  tsconfig.json        ES2022 / NodeNext / strict
+  src/
+    types.ts            LogEntry, LogFile shapes (id, gitBranch/gitCommit are optional/additive)
+    store.ts             read/write .friction-log.json (or any log-shaped file, for merge), id backfill for older files
+    config.ts             reads the optional .friction-logrc.json
+    git.ts                 best-effort current branch + short commit hash, no-ops outside a git repo
+    autotag.ts              the auto-tag keyword heuristic (suggestTag), shared by add and watch
+    templates.ts             reusable {placeholder} note templates, own .friction-log-templates.json file
+    chart.ts                 the "stats" ASCII bar chart renderer, no dependency
+    sync.ts                   push/pull against a remote over the sync HTTP contract, reuses mergeEntries
+    commands.ts             init/add/list/search/export/stats/edit/remove/merge/useTemplate logic (+ mergeEntries,
+                             shared by merge and sync) + --since/--until filtering, decoupled from argv parsing
+    exporter.ts              Markdown/plain-text/JSON report generation from a LogFile
+    server.ts                 the "serve" HTTP server: dependency-free node:http, re-reads the log file per request
+    watch.ts                   the "watch" REPL: pure handleWatchLine/resolveWatchTag (testable directly) + the
+                                readline-driven loop (with the auto-tag confirmation step) around them
+    cli.ts                       argv parsing + dispatch (the bin entry point, has the shebang)
+  test/
+    smoke.test.ts             real end-to-end test, subprocess + temp dirs, no mocks
+  README.md
+  FRICTION_LOG.md              this project's own friction log about building it
+</code></pre></div>
+<p>The <code>commands.ts</code> functions take a working directory explicitly and are fully decoupled from <code>process.argv</code> and process I/O (aside from the file writes they're meant to do), so they're testable directly, and <code>cli.ts</code> stays a thin, easily-audited translation layer between flags and those functions.</p>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span><span class="nb">test</span>
+</code></pre></div>
+<p>This runs <code>npm run build</code> followed by <code>test/smoke.test.ts</code> (via <code>tsx</code>, using Node's built-in <code>assert/strict</code>). The test is a genuine end-to-end test: it invokes the <strong>compiled</strong> CLI (<code>node dist/cli.js ...</code>) as a real child process against a fresh temporary directory (<code>node:fs.mkdtempSync</code> + <code>node:os.tmpdir()</code>), created and cleaned up per scenario — no mocking of the filesystem or of <code>commands.ts</code>. As of this round, that's <strong>137 passing checks</strong>.</p>
+<p>It covers:</p>
+<ul>
+<li><strong>Golden path</strong> — <code>init</code> → <code>add</code> five entries across all four tag categories → <code>list</code> (all, and filtered by tag) → <code>export --out</code> → the resulting Markdown has the right headings with the right entries filed under each one, in the right order.</li>
+<li><strong><code>add</code>/<code>list</code> before <code>init</code></strong> — both fail with a non-zero exit and a clear message; no <code>.friction-log.json</code> is created by a failed <code>add</code>.</li>
+<li><strong><code>init</code> twice without <code>--force</code></strong> — the second call fails and leaves the original log byte-for-byte unchanged; <code>init --force</code> then succeeds.</li>
+<li><strong>Exporting an empty log</strong> — produces valid Markdown with all four section headings present and a friendly "no entries yet" placeholder under each, rather than throwing.</li>
+<li><strong><code>stats</code></strong> — correct total, per-tag breakdown, date range, and busiest day, both with entries and on an empty log.</li>
+<li><strong>Config-file defaults</strong> — <code>.friction-logrc.json</code>'s <code>defaultTag</code> and <code>export.title</code>/<code>export.format</code> are honored when the matching flag is omitted, and a CLI flag always overrides the config value when both are given.</li>
+<li><strong>Multiple export formats</strong> — <code>--format json</code> round-trips the raw entry objects (ids, tags, git fields included); <code>--format txt</code> renders the same grouped sections with no Markdown syntax; an unrecognized <code>--format</code> fails clearly; the no-flag default is still Markdown.</li>
+<li><strong>Git-aware tagging</strong> — inside a real temp git repo (created with <code>git init -b &lt;branch&gt;</code> + an actual commit as part of the test setup), <code>add</code> records the true branch name and short commit hash, and the CLI's confirmation line surfaces them; in a second, plain (non-git) temp directory, <code>add</code> still succeeds and simply omits <code>gitBranch</code>/<code>gitCommit</code> — a genuine no-op, not a caught error.</li>
+<li><strong><code>edit</code>/<code>remove</code></strong> — editing a note/tag by id persists and preserves the id; editing or removing an unknown id fails clearly; removing an entry actually deletes it (and removing it again then fails).</li>
+<li><strong><code>merge</code></strong> — merging two logs that share one entry id and each have unique entries de-duplicates the shared one instead of doubling it up, reports accurate added/duplicate/total counts, and fails clearly when the source file doesn't exist.</li>
+<li><strong><code>search</code></strong> — finds a known entry by a case-insensitive substring, excludes non-matching entries, and <code>--tag</code> narrows results to (and excludes a textual match outside of) one tag.</li>
+<li><strong><code>--since</code>/<code>--until</code></strong> on <code>list</code>/<code>export</code>/<code>stats</code> — entries are backdated/future-dated directly in the log file to give the filter real boundaries to respect (rather than a mocked clock), confirming in-range entries are kept, out-of-range entries on both sides are excluded, filtering happens before grouping in <code>export</code>, and an unparseable date fails clearly instead of silently matching everything.</li>
+<li><strong><code>watch</code></strong> — both the pure <code>handleWatchLine</code> function directly (plain lines default to <code>"note"</code>, a trailing <code>#tag</code> is parsed off and applied, a blank line and <code>"exit"</code>/<code>"quit"</code> end the loop without logging) <em>and</em> the real <code>friction-log watch</code> subprocess end-to-end, piping input at its stdin and checking both the console output and the persisted entries.</li>
+<li><strong><code>serve</code></strong> — spawned as a real child process on an ephemeral port (<code>--port 0</code>, port read back from its printed URL), then hit with real <code>fetch()</code> calls: the response is 200 with HTML containing known entries' text, the <code>?tag=</code> filter narrows what's rendered, and a <code>friction-log add</code> run <em>while the server is still up</em> shows up on the next request with no restart — proving there's no caching.</li>
+<li><strong>Auto-tag suggestion</strong> — <code>suggestTag</code> unit-tested directly for representative friction/worked-well/feature-request note text and text matching nothing; a non-interactive <code>add</code> with no <code>--tag</code> on the same kinds of text confirms the tag is actually applied, persisted, <em>and</em> announced in the CLI's output (never silently), that an explicit <code>--tag</code> always overrides the heuristic, and that plain text with no keyword match still carries no auto-tag notice; <code>watch</code> is tested piping input where a suggested tag is accepted with a blank confirmation line, overridden with a typed tag, and skipped entirely for text with no suggestion — plus direct unit tests of <code>handleWatchLine</code>'s <code>needs-tag</code> result and <code>resolveWatchTag</code>.</li>
+<li><strong><code>stats</code> ASCII bar chart</strong> — six entries backdated (directly in the log file, real boundaries) across three days with counts 1/3/2, confirming the chart renders one line per day with a raw block-character count matching each day's total exactly, and that bar lengths are proportional (the 3-entry day's bar is longest) — plus that an empty log prints no "Daily activity" section at all.</li>
+<li><strong>Entry templates</strong> — <code>template add</code>/<code>list</code>/<code>use</code> end to end: a template with a <code>{placeholder}</code> fills in correctly and logs with the template's own tag; <code>--tag</code> on <code>use</code> overrides that tag; a missing <code>--set</code> for a required placeholder and an unknown template name both fail clearly; re-adding an existing template name replaces it instead of duplicating; a template with no tag at all falls through to <code>add</code>'s normal default chain.</li>
+<li><strong><code>sync</code> push/pull</strong> — a genuine round-trip against a real <code>node:http</code> server standing in for "the remote" (spun up in-process on an ephemeral port, reusing the exact same <code>mergeEntries</code> the real CLI's <code>merge</code> uses for its own dedup): pushing from one directory, pulling into a fresh second directory, confirming both directions report accurate added/duplicate/total counts, that re-running either is fully idempotent (<code>+0 new</code> the second time), and that entries genuinely round-trip both ways through the remote (B's new entry reaches A via a second pull) — plus that <code>sync</code> with neither or both of <code>--push</code>/<code>--pull</code>, and a genuinely unreachable URL, all fail clearly instead of hanging.</li>
+</ul>
+<h2 id="judging-criteria-alignment">Judging-criteria alignment<a class="headerlink" href="#judging-criteria-alignment" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Tech Implementation</strong> — A real, typed, strict-mode TypeScript CLI with zero runtime dependencies beyond Node itself (the local web dashboard and <code>sync</code>'s remote contract are Node's built-in <code>http</code>/<code>fetch</code>, not Express or axios; the REPL is Node's built-in <code>readline</code>), a clean layered architecture (<code>store</code>/<code>config</code>/<code>git</code>/<code>autotag</code>/<code>templates</code>/<code>chart</code> → <code>commands</code>/<code>server</code>/<code>watch</code>/<code>sync</code> → <code>cli</code>), and a genuine subprocess-level end-to-end test suite (<strong>137 checks</strong>) covering the golden path, edge cases, and every feature added across all four rounds — including a real git repo spun up in a temp directory for git-aware tagging, a real HTTP server hit with real <code>fetch()</code> calls on an ephemeral port for <code>serve</code>, a <em>second</em> real HTTP server standing in for a sync remote (reusing the exact same dedup logic <code>merge</code> uses, so both are provably safe to run repeatedly), and both a direct unit test of the exact functions <code>watch</code> uses and a full piped-stdin subprocess run for <code>watch</code> (including its interactive auto-tag confirmation step). <code>npx tsc --noEmit</code> passes with zero errors.</li>
+<li><strong>Design</strong> — The whole point of the tool is near-zero friction to use: one short command to log a thought the moment it happens, with a sensible default tag — now guessed for you from the note's own wording when you don't have one in mind — so you never have to stop and think about taxonomy mid-flow. <code>watch</code> pushes that further — no flags at all once it's running, just typing and Enter, with an inline <code>#tag</code> convention for when a tag matters, and a confirmable (not silently-applied) suggestion the rest of the time. Errors are actionable, not stack traces. The exported Markdown is a drop-in match for the <code>FRICTION_LOG.md</code> structure judges are already reading elsewhere in this repo, <code>serve</code> gives a shareable, always-current dashboard view with zero setup, and templates turn a friction point you keep re-describing (a flaky endpoint, a recurring doc gap) into one command instead of retyping the shape of it every time.</li>
+<li><strong>Potential Impact</strong> — Every team in this hackathon (and Amazon's own developer-experience team, reading the resulting friction logs as structured feedback) benefits from more accurate, more complete friction logs, captured as things actually happen instead of reconstructed from memory at 11pm before the deadline. <code>sync</code> extends that from a single machine to an actual team — everyone's <code>watch</code> sessions converging into one shared friction log without anyone hand-merging JSON files. It's equally usable on any track — Fire TV, Alexa+, Bee, Ring — since it has no dependency on any Amazon SDK at all.</li>
+<li><strong>Quality of Idea</strong> — This submission satisfies the Open Source mini-challenge's required tech (<strong>"a new public repository"</strong>) directly and completely, on its own, regardless of what primary track a team pairs it with. It's also self-referential in a way that's memorable: the tool that helps you write your friction log has its own friction log (see <code>FRICTION_LOG.md</code>), written using the exact section structure the tool itself produces.</li>
+</ul>
+<h2 id="scope-boundaries-next-steps-for-real-open-source-adoption">Scope boundaries / next steps for real open-source adoption<a class="headerlink" href="#scope-boundaries-next-steps-for-real-open-source-adoption" title="Permanent link">&para;</a></h2>
+<p>This is a hackathon-scoped submission. Genuine next steps toward real adoption, intentionally left out of scope here:</p>
+<ul>
+<li>Publish to npm as a real package so <code>npm install -g friction-log-toolkit</code> works without cloning the repo.</li>
+<li>Add a <code>LICENSE</code> file (MIT, matching the rest of this monorepo) at the package root once it's split into its own repository.</li>
+<li>Add a GitHub Actions CI workflow running <code>npm ci &amp;&amp; npm run build &amp;&amp; npm test</code> on push/PR.</li>
+<li>Shell tab-completion (bash/zsh) for tag names and entry ids.</li>
+<li><code>stats --json</code> for feeding the summary into a script or CI check the same way <code>export --format json</code> does today.</li>
+<li><code>serve</code>'s dashboard is read-only today (viewing + filtering only) — a real next step would be letting it accept new entries or edits from the browser too, not just the CLI.</li>
+<li><code>search</code> is a plain substring match by design (see the README's note on why); a real fuzzy/ranked search would be a bigger, separate feature.</li>
+<li><code>sync</code> has no authentication story at all — the contract is plain unauthenticated JSON over HTTP, fine for a hackathon team's own trusted endpoint but not something to point at anything public; a real next step would be an <code>Authorization</code> header (a token from an env var or <code>.friction-logrc.json</code>) the client sends and the remote contract documents checking.</li>
+<li>The auto-tag heuristic's keyword lists are hardcoded in <code>autotag.ts</code>; letting a team extend or override them (e.g. via <code>.friction-logrc.json</code>) instead of editing source would make it useful for vocabulary specific to a given SDK or platform.</li>
+<li>Templates are per-directory only, same as the log itself — sharing a team's template set the way <code>sync</code> shares entries (or just checking <code>.friction-log-templates.json</code> into the repo, since it's already git-friendly plain JSON) is a natural next step, just not automated yet.</li>
+</ul>
+<p><strong>Backward compatibility note</strong>: <code>id</code>, <code>gitBranch</code>, and <code>gitCommit</code> are additive, optional fields on <code>LogEntry</code> — an existing <code>.friction-log.json</code> written by v1 (no <code>id</code>s at all) still loads and works with every command. The first time such a file is read, missing ids are backfilled and the file is rewritten once to persist them (so <code>edit</code>/<code>remove</code>/<code>merge</code> have something stable to reference); no other field is touched, and nothing is required to be present that wasn't already.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "content.code.copy", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
