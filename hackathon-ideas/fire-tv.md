@@ -39,6 +39,28 @@
 - **Potential Impact:** Solves real content-discovery pain across any content library; extensible to any catalog.
 - **Quality of Idea:** Strong computer-vision + AI-enhanced viewing combination.
 
+## Idea 4: "SignScreen" — AI Audio-Description & Accessibility Companion
+
+**Problem:** Blind, low-vision, deaf, and hard-of-hearing viewers get inconsistent or nonexistent accessibility support across most streaming content — audio description and captioning quality vary wildly by title and provider.
+
+**Solution:** A Fire TV companion layer that generates real-time AI audio description (narrating key visual action during natural dialogue pauses) for any video feed lacking it, and a synchronized rich-caption overlay (speaker labels, non-speech sound cues) for deaf/hard-of-hearing viewers — both driven by computer vision and generative narration on top of whatever's already playing.
+
+- **Tech Implementation:** Computer vision on the video feed detects scene changes/action and dialogue gaps; a Bedrock-based generation layer produces natural-language description text-to-speech'd into the gaps; captions render as a Fire TV overlay independent of the source app's native subtitle support.
+- **Design:** Fully voice/remote-controllable settings (description verbosity, caption style) designed for screen-reader-first navigation, not a buried settings menu.
+- **Potential Impact:** Addresses a legally and socially significant accessibility gap across the entire content catalog at once, rather than title-by-title — a rare "every existing show benefits" pitch.
+- **Quality of Idea:** Directly hits AI-enhanced viewing, multi-modal UX, and computer vision simultaneously, with an accessibility angle most competing submissions won't attempt.
+
+## Idea 5: "RecipeRemote" — Synced Cooking Companion
+
+**Problem:** Following a cooking video on TV means constantly pausing/rewinding to keep pace, since every cook moves at a different speed than the video's fixed timeline.
+
+**Solution:** A Fire TV app that plays a cooking video alongside a step tracker that adapts pacing to the actual cook — using optional camera-based visual cues (or simple remote/voice "next step" control) to hold or advance the video, with voice Q&A for ingredient substitutions mid-recipe.
+
+- **Tech Implementation:** Fire OS app with a step-segmented video player; optional on-device computer vision for pace detection; a Bedrock-backed Q&A layer grounded in the specific recipe's ingredients/steps for substitution questions.
+- **Design:** Big, glanceable step-and-timer UI meant to be read from across a kitchen, not up close; voice-first interaction since hands are typically full or messy.
+- **Potential Impact:** A concrete, everyday household use case with clear before/after value (fewer burnt dishes, less rewinding) and obvious extensibility to any existing cooking-content catalog.
+- **Quality of Idea:** Combines AI-enhanced viewing, family entertainment, and computer vision in a genuinely different content category than sports or trivia, broadening the submission set's range.
+
 ## Why these win
 
-All three map to at least two of the six prioritized Fire TV categories, use required device input modalities (remote/voice/companion), and are demoable in under 3 minutes on real Fire OS/Vega hardware or emulator. Recommend building idea 1 or 2 as the primary submission and stacking the **AWS Builder mini-challenge** on top (near-zero extra scope since AI backends already use AWS services).
+All five map to at least two of the six prioritized Fire TV categories, use required device input modalities (remote/voice/companion), and are demoable in under 3 minutes on real Fire OS/Vega hardware or emulator. Recommend building idea 1 or 2 as the primary submission and stacking the **AWS Builder mini-challenge** on top (near-zero extra scope since AI backends already use AWS services). Idea 4 is worth serious consideration for "Potential Impact" specifically — an accessibility feature that benefits the entire existing content catalog is a harder story to beat than a single new app.

@@ -37,6 +37,28 @@
 - **Potential Impact:** Shows engineering maturity — using the right-sized model for the job is a real production consideration judges will recognize.
 - **Quality of Idea:** Differentiates from submissions that only call Bedrock, since it demonstrates SageMaker specifically.
 
+## Idea 4: "Guardian Rails" — Bedrock Guardrails Observability Layer
+
+**Problem:** AI-powered features across every track (commentary generation, ambient-transcript summarization, household-assistant replies) can drift, hallucinate, or leak unintended content, but most hackathon submissions add an LLM call with no safety or observability layer at all.
+
+**Solution:** Bolt a responsible-AI layer onto any primary track's existing AI feature using **Bedrock Guardrails** (content filtering, PII redaction, topic denial) plus CloudWatch/X-Ray tracing on every model call — surfacing a simple "guardrail interventions this week" report as part of the submission.
+
+- **Tech Implementation:** Bedrock Guardrails policy attached to the primary track's existing model calls; CloudWatch metrics/X-Ray traces recording latency, cost, and any guardrail trigger per request.
+- **Design:** Invisible during normal operation; a small admin-facing report showing what the guardrail caught, framed as a trust-building feature.
+- **Potential Impact:** A production-readiness concern most submissions skip entirely — genuinely differentiates on engineering maturity for judges evaluating "AWS service depth."
+- **Quality of Idea:** Surfaces a distinct Bedrock capability (Guardrails) not covered by ideas 1–3, which focus on orchestration (AgentCore/Strands), codegen (Kiro), and custom models (SageMaker).
+
+## Idea 5: "Grounded Memory" — Bedrock Knowledge Bases RAG Layer
+
+**Problem:** A primary track's AI feature (commentary, household narratives, study summaries) is often ungrounded — answers come from the model's general knowledge rather than the project's own accumulated real data, leading to generic or inconsistent responses.
+
+**Solution:** Index a primary track's own domain data (e.g., a season's worth of game events, a household's task/expense history, a student's flashcard corpus) into a **Bedrock Knowledge Base**, and ground the track's existing AI answers in retrieval over that real, project-specific data instead of the model's general knowledge alone.
+
+- **Tech Implementation:** Bedrock Knowledge Bases ingesting the primary track's own stored data (via S3 sync or direct API); retrieval-augmented prompts feeding the track's existing generation calls.
+- **Design:** End users see more specific, consistent answers ("that's the third time this month you've been over budget in groceries") rather than generic responses — the RAG layer is felt, not seen.
+- **Potential Impact:** Demonstrably improves answer quality/specificity in a way judges can directly compare against the ungrounded version.
+- **Quality of Idea:** Surfaces Bedrock Knowledge Bases specifically, a distinct AWS capability from the orchestration/codegen/custom-model angles in ideas 1–3.
+
 ## Why these win
 
-The AWS Builder mini-challenge is judged on genuine, well-architected AWS usage rather than a standalone idea — so the strongest strategy is to fold one of these patterns directly into whichever primary track submission a team is already building, maximizing shared demo time and effort while still meeting the "meaningfully incorporate AWS services" bar.
+The AWS Builder mini-challenge is judged on genuine, well-architected AWS usage rather than a standalone idea — so the strongest strategy is to fold one of these patterns directly into whichever primary track submission a team is already building, maximizing shared demo time and effort while still meeting the "meaningfully incorporate AWS services" bar. Ideas 4 and 5 are the lowest-effort adds of the five — both are a thin layer on top of an AI feature a primary track submission already has, rather than a new architecture to build from scratch, making them good choices for a team that's short on remaining time.
