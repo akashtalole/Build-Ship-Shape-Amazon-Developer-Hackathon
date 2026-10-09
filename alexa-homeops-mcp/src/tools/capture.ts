@@ -5,15 +5,15 @@ import { RESOURCE_URIS, type NotifyFn } from "../resources.js";
 import { logEvent } from "../logging.js";
 import { applyExpenseFollowUps } from "./expenses.js";
 import { DATE_PATTERN } from "./tasks.js";
+import { generateText } from "../llm.js";
 
 /**
  * capture_note is the freeform front door to everything else this server
  * does: a household member shouldn't need to know that "we're almost out of
  * coffee" is a shopping-list operation while "pick up dry cleaning by
- * Friday" is a task, or which tool name maps to which. This asks the
- * connected client's own model (the same MCP-sampling pattern
- * generate_weekly_narrative already uses — no bundled model key here either)
- * to classify one sentence into shopping/task/expense and dispatches into
+ * Friday" is a task, or which tool name maps to which. This asks a language
+ * model (see src/llm.ts: the client's own via sampling, else Claude on
+ * Bedrock) to classify one sentence into shopping/task/expense and dispatches into
  * the corresponding existing store function, rather than adding a fourth,
  * competing way to create any of those records.
  */
@@ -46,36 +46,23 @@ function extractJson(text: string): unknown | undefined {
   }
 }
 
-async function classifyNote(server: McpServer, text: string): Promise<Classification | undefined> {
-  try {
-    const result = await server.server.createMessage({
-      messages: [
-        {
-          role: "user",
-          content: {
-            type: "text",
-            text:
-              "Classify this one household note into exactly one of three categories, and respond with ONLY " +
-              "strict JSON (no prose, no code fence) in one of these exact shapes:\n" +
-              '  {"type":"shopping","item":"<item name, singular>"}\n' +
-              '  {"type":"task","title":"<short task title>","dueDate":"<YYYY-MM-DD, omit if not mentioned>","assignee":"<name, omit if not mentioned>"}\n' +
-              '  {"type":"expense","description":"<what it was for>","amount":<number>,"category":"<one-word category>"}\n' +
-              'Use "shopping" only when something is running low or needs to be bought. Use "expense" only when a ' +
-              'specific amount of money is mentioned. Use "task" for everything else that needs doing.\n\n' +
-              `Note: "${text}"`,
-          },
-        },
-      ],
-      maxTokens: 200,
-    });
-    if (result.content.type !== "text") return undefined;
-    const parsed = classificationSchema.safeParse(extractJson(result.content.text));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    // Client hasn't declared the sampling capability (or the request
-    // otherwise failed) — the caller falls back to treating this as a task.
-    return undefined;
-  }
+type ClassifiedBy = "sampling" | "bedrock" | "fallback";
+
+async function classifyNote(server: McpServer, text: string): Promise<{ classification: Classification; by: ClassifiedBy } | undefined> {
+  const generated = await generateText(
+    server,
+    "Classify this one household note into exactly one of three categories, and respond with ONLY " +
+      "strict JSON (no prose, no code fence) in one of these exact shapes:\n" +
+      '  {"type":"shopping","item":"<item name, singular>"}\n' +
+      '  {"type":"task","title":"<short task title>","dueDate":"<YYYY-MM-DD, omit if not mentioned>","assignee":"<name, omit if not mentioned>"}\n' +
+      '  {"type":"expense","description":"<what it was for>","amount":<number>,"category":"<one-word category>"}\n' +
+      'Use "shopping" only when something is running low or needs to be bought. Use "expense" only when a ' +
+      'specific amount of money is mentioned. Use "task" for everything else that needs doing.\n\n' +
+      `Note: "${text}"`
+  );
+  if (!generated) return undefined;
+  const parsed = classificationSchema.safeParse(extractJson(generated.text));
+  return parsed.success ? { classification: parsed.data, by: generated.source } : undefined;
 }
 
 function defaultDueDate(): string {
@@ -90,18 +77,18 @@ export function registerCaptureTools(server: McpServer, notify: NotifyFn, househ
     {
       description:
         "Capture one freeform sentence a household member might say — 'we're almost out of coffee and I need to " +
-        "pick up dry cleaning by Friday' — without the caller needing to know which tool handles it. Uses MCP " +
-        "sampling to classify the note as a shopping-list item, a task (with a due date if one was mentioned), or " +
+        "pick up dry cleaning by Friday' — without the caller needing to know which tool handles it. Uses a " +
+        "language model (the client's own via MCP sampling, else Claude on Amazon Bedrock) to classify the note as a shopping-list item, a task (with a due date if one was mentioned), or " +
         "an expense to log, then routes it into the matching existing tool's own storage. Prefer this over " +
         "add_task/reorder_item/add_expense directly when the input is an unstructured sentence rather than " +
-        "already-separated fields. Falls back to treating the whole sentence as a task if the connected client " +
-        "doesn't support sampling.",
+        "already-separated fields. Falls back to treating the whole sentence as a task if no model is available.",
       inputSchema: {
         text: z.string().min(1).describe("One freeform sentence to capture and route, verbatim."),
       },
       outputSchema: {
         routedTo: z.enum(["shopping", "task", "expense"]),
         usedSampling: z.boolean(),
+        classifiedBy: z.enum(["sampling", "bedrock", "fallback"]),
         itemId: z.string().optional(),
         itemName: z.string().optional(),
         taskId: z.string().optional(),
@@ -116,9 +103,10 @@ export function registerCaptureTools(server: McpServer, notify: NotifyFn, househ
       annotations: { title: "Capture note", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ text }) => {
-      const sampled = await classifyNote(server, text);
-      const usedSampling = sampled !== undefined;
-      const classification: Classification = sampled ?? { type: "task", title: text.trim() };
+      const classified = await classifyNote(server, text);
+      const classifiedBy: ClassifiedBy = classified?.by ?? "fallback";
+      const usedSampling = classifiedBy === "sampling";
+      const classification: Classification = classified?.classification ?? { type: "task", title: text.trim() };
 
       if (classification.type === "shopping") {
         const itemName = classification.item?.trim() || text.trim();
@@ -127,7 +115,7 @@ export function registerCaptureTools(server: McpServer, notify: NotifyFn, househ
         await logEvent(server, "info", "Note captured as shopping item", { itemId: item.id, itemName: item.name, usedSampling });
         return {
           content: [{ type: "text", text: `Got it — added "${item.name}" to the shopping/low-stock list.` }],
-          structuredContent: { routedTo: "shopping", usedSampling, itemId: item.id, itemName: item.name },
+          structuredContent: { routedTo: "shopping", usedSampling, classifiedBy, itemId: item.id, itemName: item.name },
         };
       }
 
@@ -149,6 +137,7 @@ export function registerCaptureTools(server: McpServer, notify: NotifyFn, househ
           structuredContent: {
             routedTo: "expense",
             usedSampling,
+            classifiedBy,
             expenseId: expense.id,
             description: expense.description,
             amount: expense.amount,
@@ -188,6 +177,7 @@ export function registerCaptureTools(server: McpServer, notify: NotifyFn, househ
         structuredContent: {
           routedTo: "task",
           usedSampling,
+          classifiedBy,
           taskId: task.id,
           title: task.title,
           dueDate: task.dueDate,

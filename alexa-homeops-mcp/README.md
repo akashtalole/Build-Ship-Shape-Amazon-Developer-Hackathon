@@ -185,6 +185,35 @@ every other tool already shares (no shadow data model, no stubs).
   reordered at all) without being restocked. `export_household_digest` reuses the identical detection function for
   its own "WORTH ATTENTION" section rather than a second copy.
 
+## Language models: MCP sampling first, Claude on Amazon Bedrock second
+
+Four tools need a language model: `generate_weekly_narrative`, `run_morning_briefing`, `export_household_digest`
+(narration) and `capture_note` (classifying a freeform sentence). They all go through one function,
+`generateText()` in [`src/llm.ts`](./src/llm.ts), which tries in order:
+
+1. **The connected client's own model via MCP sampling.** It costs this server nothing and is the protocol's
+   preferred path, so it always wins when the client declares the `sampling` capability.
+2. **Claude on Amazon Bedrock** (`anthropic.claude-opus-5-5` by default), when `HOMEOPS_USE_BEDROCK=true`. This
+   matters because not every MCP client supports sampling. Without it, every one of those tools would fall back to
+   templated text. Calls go through the Bedrock Mantle client (`@anthropic-ai/bedrock-sdk`) with standard AWS
+   credentials, a 20-second timeout (a voice turn can't wait longer), and `effort: "low"` (these are short tasks).
+   A refusal is retried on `anthropic.claude-opus-4-8` via the SDK's refusal-fallback middleware.
+3. **A templated answer** built from the same data, so the tool still responds if neither model is available or
+   Bedrock errors.
+
+`capture_note`'s structured output reports which path classified the note (`classifiedBy`:
+`sampling` / `bedrock` / `fallback`).
+
+## Voice tool profile
+
+The full server exposes 25 tools, including admin and setup tools (tokens, webhooks, bulk import, budgets,
+allowance rules). Every extra tool an agent has to choose between makes a wrong pick likelier, so
+`HOMEOPS_TOOL_PROFILE=voice` exposes only the 12 a household member would ask a voice assistant for
+(`src/toolProfile.ts`): `run_morning_briefing`, `capture_note`, `list_upcoming_tasks`, `add_task`,
+`mark_task_done`, `add_recurring_task`, `list_low_stock_items`, `reorder_item`, `add_expense`,
+`get_budget_status`, `get_proactive_alerts`, `suggest_meal_plan`. The other tools are registered but disabled, so
+they don't appear in `tools/list` and can't be called. The deploy script sets this profile for the Alexa+ endpoint.
+
 ## Persistence
 
 Household data lives in `data/<householdId>.json` (gitignored; created on first use). Every store function reads
@@ -229,8 +258,11 @@ src/
                    issueToken() (round 5's role-aware lookup + a small on-disk token registry)
   rbac.ts          restrictToReadOnlyTools() — wraps McpServer#registerTool so a read-only session's write
                    tools reject with a clear error, without touching any individual tool file
-  server.ts        createHomeOpsServer(householdId, role) factory — wires resources, prompts, and all tools
-                   onto a fresh McpServer scoped to one household (and access role), logging capability declared
+  server.ts        createHomeOpsServer(householdId, role, profile) factory — wires resources, prompts, and all
+                   tools onto a fresh McpServer scoped to one household (and access role), logging capability declared
+  llm.ts           generateText() — MCP sampling first, then Claude on Amazon Bedrock (BedrockTextModel, with
+                   refusal fallback), else undefined so callers use their templated answer
+  toolProfile.ts   applyToolProfile() — the "voice" profile disables admin/setup tools for Alexa+
   store.ts         File-backed household data (tasks, shopping, expenses, budgets, alert webhook registration),
                    one JSON file per household ID under data/ (HOMEOPS_DATA_DIR-overridable), atomic
                    write-then-rename + fair-rotation/budget/idempotency logic + bulk import + recurring-task
@@ -256,13 +288,13 @@ src/
                    the shared over-budget-check/log/webhook logic add_expense and capture_note's expense branch
                    both call, so that behavior lives in exactly one place
     insights.ts    generate_weekly_narrative, run_morning_briefing, get_proactive_alerts, export_household_digest
-                   (MCP sampling + compound orchestration + anomaly detection + combined report, sharing one
-                   sampleNarrative() helper and one computeHouseholdAnomalies() call)
+                   (model-backed narration via llm.ts + compound orchestration + anomaly detection + combined
+                   report, sharing one sampleNarrative() helper and one computeHouseholdAnomalies() call)
     access.ts      issue_household_token — mint a full-access or read-only token for this household
     webhooks.ts    register_alert_webhook, get_alert_webhook_status
     mealPlan.ts    suggest_meal_plan — thin tool wrapper around mealPlanner.ts's buildMealPlan()
     allowance.ts   set_task_reward, get_allowance_balance, record_allowance_payout (the chore-to-allowance ledger)
-    capture.ts     capture_note — sampling-backed classification + dispatch into shopping/task/expense, reusing
+    capture.ts     capture_note — model-backed classification + dispatch into shopping/task/expense, reusing
                    reportLowStock/addTask/addExpense and expenses.ts's applyExpenseFollowUps rather than a new path
 data/              JSON-file-backed household storage, one file per household ID, plus _tokens.json (the
                    role-aware token registry) — gitignored, created on first use
@@ -276,7 +308,9 @@ test/
                    HMAC-signed webhook delivery against a real local HTTP listener, the chore-to-allowance
                    ledger, capture_note's shopping/task/expense routing (plus its two fallback paths),
                    suggest_meal_plan's budget/low-stock/busy-day cross-referencing, and proactive anomaly
-                   detection (task pileup, spending-pace trend, stale low stock)
+                   detection (task pileup, spending-pace trend, stale low stock), Claude on Bedrock behind
+                   the model-backed tools (real SDK requests to a fake Mantle endpoint, including the
+                   refusal fallback and error degradation), and the voice tool profile
 ```
 
 ## Running it
@@ -296,6 +330,18 @@ npm run dev
 
 By default household data is written to `data/` under the current working directory; set `HOMEOPS_DATA_DIR` to
 point it elsewhere (the test suite uses this to isolate itself into a scratch directory).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PORT` | `3333` | HTTP port |
+| `HOMEOPS_DATA_DIR` | `./data` | Where household JSON files are stored |
+| `HOMEOPS_TOOL_PROFILE` | `full` | `voice` exposes only the 12 household tools (see "Voice tool profile") |
+| `HOMEOPS_USE_BEDROCK` | unset | `true` enables Claude on Amazon Bedrock for clients that can't sample |
+| `HOMEOPS_BEDROCK_MODEL` | `anthropic.claude-opus-5-5` | Bedrock model ID to call |
+| `AWS_REGION` | — | Bedrock region; AWS credentials come from the standard AWS chain (env, profile, or an ECS task role) |
+
+The Bedrock caller needs the `bedrock-mantle:CreateInference` permission (the AWS managed policy
+`AmazonBedrockMantleInferenceAccess` covers it) and access to the model in that region.
 
 ### Connecting with a bearer token (multi-household)
 
@@ -426,7 +472,10 @@ npx @modelcontextprotocol/inspector
 
 ## Wiring it up to Alexa+
 
-1. Run the server somewhere reachable over HTTPS (a tunnel like `ngrok http 3333` works for local demos).
+1. Run the server somewhere reachable over HTTPS. `../deploy/deploy.sh alexa-homeops-mcp` from AWS CloudShell
+   gives you a public HTTPS endpoint on Amazon ECS Express Mode, already configured with the voice tool profile and
+   Bedrock (see [`../deploy/README.md`](../deploy/README.md)). For a quick local demo, a tunnel like
+   `ngrok http 3333` with `HOMEOPS_TOOL_PROFILE=voice` also works.
 2. In the Alexa+ Agent Skill / web app simulator, register the MCP server endpoint (`https://<host>/mcp`), passing
    whatever bearer token identifies that user's household (see above) if you want per-user isolation rather than
    the shared default household.
@@ -490,7 +539,8 @@ curl -N http://localhost:3333/mcp -H "Accept: text/event-stream" -H "mcp-session
   webhooks, applied in the opposite (outbound) direction. Round 6 adds a fifth genuine MCP-sampling consumer
   (`capture_note`, classifying freeform text into strict JSON rather than just narrating data), and two modules
   (`mealPlanner.ts`, `anomalies.ts`) that orchestrate *across* the existing store instead of adding a new isolated
-  data domain.
+  data domain. Claude on Amazon Bedrock backs the model-dependent tools for clients that can't sample, with
+  refusal fallback and a hard timeout, deployed with a least-privilege task role (AWS Builder mini-challenge).
 - **Design:** Tools are scoped and composable so the agent can chain them (check → decide → act), with
   `run_morning_briefing` collapsing the common four-tool chain into one round trip for latency-sensitive voice
   interactions, `import_tasks` collapsing a whole batch of adds into one round trip and one notification, and

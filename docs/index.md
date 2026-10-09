@@ -7,6 +7,12 @@ research behind them and the tooling used to ship and demo them.
 [:octicons-mark-github-16: View the repo](https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon){ .md-button .md-button--primary }
 [Devpost submission draft](devpost-submission.md){ .md-button }
 
+!!! tip "Judges: start here"
+    The submitted project is **[HomeOps](projects/homeops.md)** for the Alexa+ track, with the AWS Builder
+    mini-challenge (Claude on Amazon Bedrock, deployed on Amazon ECS Express Mode). The other projects below are
+    prototypes that don't yet meet their tracks' hardware requirements. See the
+    [Devpost submission](devpost-submission.md) for why.
+
 ## Prize categories
 
 | Category | Project | Track prize |

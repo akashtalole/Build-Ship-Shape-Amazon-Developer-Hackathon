@@ -5,8 +5,12 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createHomeOpsServer } from "./server.js";
 import { InMemoryEventStore } from "./eventStore.js";
 import { extractBearerToken, resolveAccess } from "./auth.js";
+import { configureTextModelFromEnv } from "./llm.js";
+import { resolveToolProfile } from "./toolProfile.js";
 
 const PORT = Number(process.env.PORT ?? 3333);
+const textModel = configureTextModelFromEnv();
+const toolProfile = resolveToolProfile();
 
 const app = express();
 app.use(express.json());
@@ -53,7 +57,7 @@ async function handleMcpRequest(req: Request, res: Response): Promise<void> {
       if (transport.sessionId) transports.delete(transport.sessionId);
     };
 
-    const server = createHomeOpsServer(householdId, role);
+    const server = createHomeOpsServer(householdId, role, toolProfile);
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
     return;
@@ -85,4 +89,5 @@ app.get("/healthz", (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`HomeOps MCP server listening on http://localhost:${PORT}/mcp`);
+  console.log(`Tool profile: ${toolProfile}; Bedrock fallback model: ${textModel ? textModel.model : "disabled"}`);
 });

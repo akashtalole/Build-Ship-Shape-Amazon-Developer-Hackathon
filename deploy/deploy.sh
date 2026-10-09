@@ -92,6 +92,17 @@ EXEC_ROLE_ARN="$(aws iam get-role --role-name "$EXEC_ROLE_NAME" --query 'Role.Ar
 INFRA_ROLE_ARN="$(aws iam get-role --role-name "$INFRA_ROLE_NAME" --query 'Role.Arn' --output text)"
 
 PRIMARY_CONTAINER="image=$ECR_URI:latest,containerPort=$PORT"
+ENV_SPEC="$(service_environment "$SERVICE_DIR" "$REGION")"
+[ -n "$ENV_SPEC" ] && PRIMARY_CONTAINER="$PRIMARY_CONTAINER,$ENV_SPEC"
+
+TASK_ROLE_ARGS=()
+TASK_ROLE_NAME="$(service_task_role "$SERVICE_DIR")"
+if [ -n "$TASK_ROLE_NAME" ]; then
+  echo "==> Ensuring task role '$TASK_ROLE_NAME' (lets the container call Claude on Amazon Bedrock)"
+  ensure_role "$TASK_ROLE_NAME" "ecs-tasks.amazonaws.com" "$BEDROCK_INFERENCE_POLICY_ARN" \
+    "Lets the HomeOps container call Claude on Amazon Bedrock at runtime"
+  TASK_ROLE_ARGS=(--task-role-arn "$(aws iam get-role --role-name "$TASK_ROLE_NAME" --query 'Role.Arn' --output text)")
+fi
 RESULT_JSON="$(mktemp)"
 
 # Express Mode services are still ordinary ECS services under the hood, so
@@ -109,6 +120,7 @@ if [ "$EXISTING_ARN" = "None" ] || [ -z "$EXISTING_ARN" ] || [ "$EXISTING_ARN" =
     --cluster "$CLUSTER_NAME" \
     --execution-role-arn "$EXEC_ROLE_ARN" \
     --infrastructure-role-arn "$INFRA_ROLE_ARN" \
+    ${TASK_ROLE_ARGS[@]+"${TASK_ROLE_ARGS[@]}"} \
     --primary-container "$PRIMARY_CONTAINER" \
     --health-check-path "/healthz" \
     --scaling-target "minTaskCount=1,maxTaskCount=1" \
@@ -119,6 +131,7 @@ else
   aws ecs update-express-gateway-service \
     --region "$REGION" \
     --service-arn "$EXISTING_ARN" \
+    ${TASK_ROLE_ARGS[@]+"${TASK_ROLE_ARGS[@]}"} \
     --primary-container "$PRIMARY_CONTAINER" \
     --monitor-mode TEXT-ONLY \
     > "$RESULT_JSON"

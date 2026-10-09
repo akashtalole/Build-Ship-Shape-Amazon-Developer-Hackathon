@@ -36,7 +36,8 @@ run behind a URL. See its own README for installation instead.
 - The IAM identity CloudShell is using needs permission to manage ECR repositories, ECS (including
   `create-express-gateway-service`/`delete-express-gateway-service`), and (once, the first time you deploy
   anything) create two IAM roles. `AdministratorAccess`, or a policy covering `ecr:*`, `ecs:*`, and
-  `iam:CreateRole`/`GetRole`/`AttachRolePolicy`, is enough.
+  `iam:CreateRole`/`GetRole`/`AttachRolePolicy` (plus `iam:PassRole` for the roles it creates, and
+  `iam:DetachRolePolicy`/`DeleteRole` for teardown), is enough.
 - Docker, `jq`, and the AWS CLI v2 are all preinstalled in CloudShell — nothing else to install. (`jq` is used
   only to make reading the deploy response nicer; the scripts fall back to plain `grep` if it's ever missing.)
 
@@ -74,6 +75,13 @@ An optional second argument sets the AWS region (defaults to whatever `aws confi
 | IAM role `ecsTaskExecutionRole` | shared, **AWS's standard name** | Lets ECS pull images and write logs for task startup |
 | IAM role `ecsInfrastructureRoleForExpressServices` | shared, **AWS's standard name** | Lets Express Mode provision/manage the ALB, target groups, and auto scaling |
 | Auto scaling target `minTaskCount=1, maxTaskCount=1` | per-service | Pins each service to exactly **1** running task |
+| IAM role `hackathon-homeops-bedrock-task-role` | HomeOps only | Task role with the AWS managed policy `AmazonBedrockMantleInferenceAccess`, so the container can call Claude on Amazon Bedrock. Repo-specific name, so `teardown.sh alexa-homeops-mcp` deletes it |
+
+**HomeOps runtime config:** `deploy.sh alexa-homeops-mcp` also passes `HOMEOPS_TOOL_PROFILE=voice` (only the 12
+household tools are visible to Alexa+), `HOMEOPS_USE_BEDROCK=true`, and `AWS_REGION` to the container. Claude on
+Bedrock is only used when the connected MCP client can't sample, and the service still works (with templated
+narration) if the account doesn't have access to the model in that region — see
+[`alexa-homeops-mcp/README.md`](../alexa-homeops-mcp/README.md#language-models-mcp-sampling-first-claude-on-amazon-bedrock-second).
 
 **Why pinned to 1 instance:** every service in this repo keeps its demo data (passes, game state, flashcards,
 routing metrics) in an in-memory store, the same simplification each service's own README documents. Scaling out

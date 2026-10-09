@@ -39,16 +39,15 @@ That's the protocol-correct way to gate a spending action — not a hidden confi
 <break time="500ms"/>
 
 <mark name="feature_budget"/>
-Log an expense that pushes a category over its weekly budget,
+Log an expense that puts a category on pace to blow its weekly budget,
 <break time="200ms"/>
-and HomeOps flags it immediately.
+and HomeOps flags it before it goes over, not after.
 <break time="300ms"/>
-Ask for the week's story instead of raw numbers,
+Ask whether there's anything you should know about,
 <break time="200ms"/>
-and it generates a natural-language summary
-using <say-as interpret-as="characters">MCP</say-as> sampling
-— asking the connected model to write it, with no
-<say-as interpret-as="characters">API</say-as> key of its own.
+and it surfaces what nobody asked:
+one person carrying most of the chores,
+or groceries that have been low for days.
 
 <break time="500ms"/>
 
@@ -58,23 +57,22 @@ And this is the compound tool:
 <emphasis level="moderate">run morning briefing</emphasis>
 chains tasks, fair assignment, low stock, and budget status into a single call,
 <break time="200ms"/>
-then narrates all of it back in one breath.
+then narrates all of it back in one breath,
+using Alexa's own model when it can,
+<break time="150ms"/>
+or Claude on Amazon Bedrock when it can't.
 <break time="300ms"/>
 One request. One conversation turn. The whole household, handled.
 
 <break time="600ms"/>
 
-<mark name="opensource_start"/>
-For the open source mini-challenge, we built
-<emphasis level="reduced">friction-log-toolkit</emphasis>
+<mark name="aws_start"/>
+For the <say-as interpret-as="characters">AWS</say-as> Builder mini-challenge,
 <break time="200ms"/>
-— a tiny command-line tool that captures a friction point the moment it happens,
+HomeOps deploys from <say-as interpret-as="characters">AWS</say-as> CloudShell to Amazon <say-as interpret-as="characters">ECS</say-as> Express Mode with one command,
 <break time="200ms"/>
-instead of trying to remember it an hour before a deadline.
-<break time="300ms"/>
-One command while you build.
-<break time="200ms"/>
-One export at submission time.
+and calls Claude on Amazon Bedrock through a least-privilege role,
+with a fallback model if a request is refused.
 
 <break time="600ms"/>
 
