@@ -1166,10 +1166,10 @@
 </div>
 <h1 id="demo-video-narration-amazon-polly">Demo video narration (Amazon Polly)<a class="headerlink" href="#demo-video-narration-amazon-polly" title="Permanent link">&para;</a></h1>
 <p><code>narration.ssml</code> is the voiceover script for the Devpost demo video, sized to run well under the
-hackathon's 3-minute cap (~313 words plus pauses — roughly 2:00–2:30 spoken by Polly, leaving room
+hackathon's 3-minute cap (~330 words plus pauses — roughly 2:00–2:30 spoken by Polly, leaving room
 for a silent title card and closing card). It covers the recommended primary
 submission from <code>../DEVPOST_SUBMISSION.md</code>: <strong>HomeOps (Alexa+ track)</strong> plus the
-<strong>friction-log-toolkit (Open Source mini-challenge)</strong>.</p>
+<strong>AWS Builder mini-challenge</strong> (Claude on Amazon Bedrock, deployed on Amazon ECS Express Mode).</p>
 <h2 id="rendering-it-with-polly">Rendering it with Polly<a class="headerlink" href="#rendering-it-with-polly" title="Permanent link">&para;</a></h2>
 <p>Requires the AWS CLI configured with Polly access (works from AWS CloudShell with no extra setup,
 same as <code>../deploy/</code>).</p>
@@ -1225,23 +1225,23 @@ instant that mark's timestamp passes.</p>
 </tr>
 <tr>
 <td><code>feature_budget</code></td>
-<td>Budget alert + <code>generate_weekly_narrative</code> via sampling</td>
-<td>An expense pushing a category over budget, then the generated narrative text appearing</td>
+<td>Spending-pace alert + <code>get_proactive_alerts</code></td>
+<td>An expense putting a category on pace to go over, then "anything I should know about?" surfacing the alerts</td>
 </tr>
 <tr>
 <td><code>feature_briefing</code></td>
-<td>The <code>run_morning_briefing</code> compound tool</td>
+<td>The <code>run_morning_briefing</code> compound tool, narrated by sampling or Claude on Bedrock</td>
 <td>One call to <code>run_morning_briefing</code>, then the combined tasks/budget/stock narration it returns</td>
 </tr>
 <tr>
-<td><code>opensource_start</code></td>
-<td>friction-log-toolkit pitch</td>
-<td><code>friction-log add "..." --tag friction</code> in a terminal, then <code>friction-log export</code> producing the Markdown report</td>
+<td><code>aws_start</code></td>
+<td>AWS Builder pitch</td>
+<td><code>./deploy/deploy.sh alexa-homeops-mcp</code> in CloudShell printing the service URL, then the ECS console showing the running service</td>
 </tr>
 <tr>
 <td><code>close_start</code></td>
 <td>Closing line</td>
-<td>Repo README or the six-project folder listing</td>
+<td>The HomeOps README, or the test run passing</td>
 </tr>
 </tbody>
 </table>
@@ -1250,7 +1250,7 @@ instant that mark's timestamp passes.</p>
 <li>Wrapped in <code>&lt;amazon:domain name="conversational"&gt;</code> for a natural, non-robotic delivery — supported
   by Polly's neural engine on voices like Matthew, Joanna, and Matthew-Neural equivalents in other
   locales.</li>
-<li><code>MCP</code>, <code>API</code>, and similar acronyms use <code>&lt;say-as interpret-as="characters"&gt;</code> so Polly spells them
+<li><code>MCP</code>, <code>AWS</code>, <code>ECS</code>, and similar acronyms use <code>&lt;say-as interpret-as="characters"&gt;</code> so Polly spells them
   out (<code>M-C-P</code>) instead of trying to pronounce them as a word.</li>
 <li>Only SSML tags supported by Polly's <strong>neural</strong> engine are used (<code>speak</code>, <code>amazon:domain</code>, <code>break</code>,
   <code>emphasis</code>, <code>say-as</code>, <code>mark</code>) — no <code>&lt;prosody pitch&gt;</code> or <code>&lt;amazon:effect name="whispered"&gt;</code>, which

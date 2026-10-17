@@ -1273,7 +1273,8 @@ of truth — please open an issue/PR if you hit a mismatch.</p>
 <li>The IAM identity CloudShell is using needs permission to manage ECR repositories, ECS (including
   <code>create-express-gateway-service</code>/<code>delete-express-gateway-service</code>), and (once, the first time you deploy
   anything) create two IAM roles. <code>AdministratorAccess</code>, or a policy covering <code>ecr:*</code>, <code>ecs:*</code>, and
-  <code>iam:CreateRole</code>/<code>GetRole</code>/<code>AttachRolePolicy</code>, is enough.</li>
+  <code>iam:CreateRole</code>/<code>GetRole</code>/<code>AttachRolePolicy</code> (plus <code>iam:PassRole</code> for the roles it creates, and
+  <code>iam:DetachRolePolicy</code>/<code>DeleteRole</code> for teardown), is enough.</li>
 <li>Docker, <code>jq</code>, and the AWS CLI v2 are all preinstalled in CloudShell — nothing else to install. (<code>jq</code> is used
   only to make reading the deploy response nicer; the scripts fall back to plain <code>grep</code> if it's ever missing.)</li>
 </ul>
@@ -1334,8 +1335,18 @@ service, mostly Express Mode's own provisioning time (the ALB, target group, and
 <td>per-service</td>
 <td>Pins each service to exactly <strong>1</strong> running task</td>
 </tr>
+<tr>
+<td>IAM role <code>hackathon-homeops-bedrock-task-role</code></td>
+<td>HomeOps only</td>
+<td>Task role with the AWS managed policy <code>AmazonBedrockMantleInferenceAccess</code>, so the container can call Claude on Amazon Bedrock. Repo-specific name, so <code>teardown.sh alexa-homeops-mcp</code> deletes it</td>
+</tr>
 </tbody>
 </table>
+<p><strong>HomeOps runtime config:</strong> <code>deploy.sh alexa-homeops-mcp</code> also passes <code>HOMEOPS_TOOL_PROFILE=voice</code> (only the 12
+household tools are visible to Alexa+), <code>HOMEOPS_USE_BEDROCK=true</code>, and <code>AWS_REGION</code> to the container. Claude on
+Bedrock is only used when the connected MCP client can't sample, and the service still works (with templated
+narration) if the account doesn't have access to the model in that region — see
+<a href="https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon/blob/main/alexa-homeops-mcp/README.md#language-models-mcp-sampling-first-claude-on-amazon-bedrock-second"><code>alexa-homeops-mcp/README.md</code></a>.</p>
 <p><strong>Why pinned to 1 instance:</strong> every service in this repo keeps its demo data (passes, game state, flashcards,
 routing metrics) in an in-memory store, the same simplification each service's own README documents. Scaling out
 to multiple tasks would make requests land on inconsistent copies of that in-memory state — fine for a real,
