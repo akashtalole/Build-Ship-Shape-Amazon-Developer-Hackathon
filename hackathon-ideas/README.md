@@ -2,7 +2,7 @@
 
 Source material: [Rules](https://amazonappdev2026.devpost.com/rules) · [Overview](https://amazonappdev2026.devpost.com/) · [Resources](https://amazonappdev2026.devpost.com/resources)
 
-This folder distills the hackathon's judging criteria into a set of **top candidate winning ideas per prize category**. Each file covers one track/mini-challenge and proposes 3 concepts, scored against the four equally-weighted judging criteria:
+This folder distills the hackathon's judging criteria into a set of **top candidate winning ideas per prize category**. Each file covers one track/mini-challenge and proposes 5 concepts (the top 3 recommended picks, plus 2 additional ideas for teams wanting more range to choose from), scored against the four equally-weighted judging criteria:
 
 1. **Tech Implementation** — effective use of required APIs/SDKs/device capabilities
 2. **Design** — a complete, coherent, intuitive product experience for the target device

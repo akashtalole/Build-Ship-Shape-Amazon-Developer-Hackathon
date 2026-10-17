@@ -37,6 +37,28 @@
 - **Potential Impact:** Clear education-category fit with a distinctive "real life is the textbook" angle.
 - **Quality of Idea:** Creative reuse of ambient capture for a use case beyond note-taking/productivity, showing ecosystem understanding.
 
+## Idea 4: "SocialRecap" — Ambient Personal-Context Memory Aid
+
+**Problem:** People mention meaningful personal details in conversation — a friend's upcoming surgery, a colleague's kid's name, a promise to send an article — that get forgotten by the next time it matters, straining relationships in small but real ways.
+
+**Solution:** A Bee-powered tool that extracts personal-context mentions (names, plans, preferences, promises) from ambient conversation and surfaces a private, per-person briefing right before the next likely interaction with that person (e.g., a calendar event with them, or a detected voice-match), so nothing important slips.
+
+- **Tech Implementation:** Bee MCP server/CLI transcript pull; an extraction pass tags person-linked facts and stores them in a simple per-contact log; a briefing generator surfaces relevant, still-fresh facts tied to upcoming calendar events.
+- **Design:** Explicit, granular consent per contact (people can be excluded entirely); briefings are short and private, never shared or exported without action.
+- **Potential Impact:** A universal, non-technical use case — hits "productivity" through a genuinely different lens than task/calendar tools: relationship maintenance.
+- **Quality of Idea:** A creative, non-obvious use of ambient capture distinct from note-taking or journaling — it's about other people, not the wearer's own tasks.
+
+## Idea 5: "SkillDrill" — Ambient Communication Coach
+
+**Problem:** Professionals rarely get concrete feedback on soft communication skills (filler words, interruptions, how often they speak up in meetings) — the kind of thing a mentor might notice but rarely has time to point out consistently.
+
+**Solution:** A Bee-based coach that reviews ambient meeting/conversation audio (with consent) and privately surfaces gentle, specific communication feedback — filler-word frequency trends, speaking-time balance, a weekly "one thing to try" suggestion — as a personal development tool, not a surveillance one.
+
+- **Tech Implementation:** Bee ambient transcript pull via MCP; a lightweight analysis pass computing speech-pattern metrics (filler words, interruption count, turn-taking balance) per session, aggregated into a private weekly trend.
+- **Design:** Strictly private and self-directed — no manager-facing reports, ever; framed as self-improvement coaching, with clear opt-out per meeting.
+- **Potential Impact:** Hits both "productivity" and "education" (professional development) with a recurring, personally motivating use case distinct from academic study or language learning.
+- **Quality of Idea:** A fresh angle on ambient self-improvement that avoids the two most obvious Bee pitches (notes, language drilling) already covered by ideas 1 and 3.
+
 ## Why these win
 
-All three lean into what makes Bee unique — ambient, always-on capture — rather than treating it as just another dictation tool, and each maps cleanly to one of the three explicitly prioritized categories (education, developer experience, productivity). Idea 1 or 2 is the safer bet for judged "Potential Impact," since both address large, recurring audiences (students, developers).
+All five lean into what makes Bee unique — ambient, always-on capture — rather than treating it as just another dictation tool, and each maps cleanly to one of the three explicitly prioritized categories (education, developer experience, productivity). Idea 1 or 2 is the safer bet for judged "Potential Impact," since both address large, recurring audiences (students, developers). Ideas 4 and 5 trade some of that audience size for genuine novelty — neither "remember what people told you" nor ambient communication coaching is an obvious first pitch for a wearable, which can help on "Quality of Idea" if a team wants to differentiate from the likely flood of note-taking submissions.
