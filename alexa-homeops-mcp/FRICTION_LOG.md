@@ -182,3 +182,27 @@ Notes captured while building the Alexa+ HomeOps submission, for the hackathon's
     correct behavior) — the fix was in the test — but the friction is real: any test that destructures a tool
     result's `structuredContent` without first checking `isError` will fail this way, one call removed from the
     actual bug, for *any* tool with a bounded `inputSchema`.
+
+## Submission prep: Claude on Amazon Bedrock, voice tool profile
+
+20. **Four features depended on a client capability nobody had confirmed Alexa+ supports.** The narration tools
+    and `capture_note` all used MCP sampling, and every one silently fell back to templated text when the client
+    didn't declare it. The tests covered the fallback, so nothing looked broken, but a demo against a client
+    without sampling would never have shown the model-backed behavior at all. Adding Claude on Amazon Bedrock as
+    a second path (sampling still wins when available) fixed this. The general lesson: a graceful fallback that's
+    well tested can hide that the main path never runs in the target environment.
+21. **The IAM permission for Bedrock's Messages endpoint was hard to find.** The Anthropic Bedrock SDK's Mantle
+    client signs requests for the `bedrock-mantle` service, not the classic `bedrock:InvokeModel` action that most
+    Bedrock examples show. The AWS user guide pages for inference mostly use `bedrock:*` actions; the answer turned
+    out to be the AWS managed policy `AmazonBedrockMantleInferenceAccess` (`bedrock-mantle:CreateInference`).
+    Feature request: show the required IAM action next to each Bedrock API's code sample.
+22. **The refusal-fallback middleware's credit token isn't the shape the docs' prose suggests.** The test first
+    asserted the retried request carried `fallback_credit_token: "<token>"`; the middleware actually sends
+    `{ mode: "best_effort", token: "<token>" }`. Only a test against a fake HTTP endpoint (not a mocked SDK
+    method) caught it. The SDK also logs a warning when no `BetaFallbackState` is passed, and a shared state would
+    have pinned every later narration to the fallback model after one refusal, so each one-shot call now gets
+    its own state.
+23. **Hiding tools without forking registration code.** The voice profile needed to remove 13 tools from what
+    Alexa+ sees without touching nine tool modules. Wrapping `McpServer#registerTool` (the same seam the RBAC
+    wrapper already uses) and calling `.disable()` on the returned tool keeps them out of `tools/list` and
+    uncallable, while the full profile and its tests stay unchanged.

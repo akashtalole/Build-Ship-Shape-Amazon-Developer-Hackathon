@@ -8,7 +8,10 @@
  * a real local HTTP listener), recurring tasks, the household digest
  * export, a smart meal planner cross-referencing shopping/budget/tasks, a
  * chore-to-allowance ledger, a sampling-backed freeform capture/dispatcher
- * tool, and proactive anomaly-flag detection. Run with `npm test`.
+ * tool, proactive anomaly-flag detection, Claude on Amazon Bedrock as the
+ * model behind those tools when a client can't sample (against a fake HTTP
+ * endpoint, through the real Bedrock SDK), and the trimmed voice tool
+ * profile. Run with `npm test`.
  */
 import assert from "node:assert/strict";
 import { createHmac, randomUUID } from "node:crypto";
@@ -31,6 +34,8 @@ import {
 import { createHomeOpsServer } from "../src/server.js";
 import { InMemoryEventStore } from "../src/eventStore.js";
 import { extractBearerToken, resolveAccess } from "../src/auth.js";
+import { BEDROCK_FALLBACK_MODEL, BedrockTextModel, DEFAULT_BEDROCK_MODEL, setTextModel } from "../src/llm.js";
+import { VOICE_PROFILE_TOOLS, type ToolProfile } from "../src/toolProfile.js";
 
 // Isolate this test run's persisted household data from real usage and from
 // any previous test run, and confirm it before any server/store code (which
@@ -68,7 +73,7 @@ function testEventStore() {
  * (bearer token → household ID → one McpServer per session) so the smoke
  * test exercises the real multi-tenancy path rather than a shortcut.
  */
-function startServer(): { httpServer: HttpServer; baseUrl: URL } {
+function startServer(profile: ToolProfile = "full"): { httpServer: HttpServer; baseUrl: URL } {
   const app = express();
   app.use(express.json());
 
@@ -90,7 +95,7 @@ function startServer(): { httpServer: HttpServer; baseUrl: URL } {
       eventStore,
       onsessioninitialized: (id) => transports.set(id, transport),
     });
-    await createHomeOpsServer(householdId, role).connect(transport);
+    await createHomeOpsServer(householdId, role, profile).connect(transport);
     await transport.handleRequest(req, res, req.body);
   });
 
@@ -236,6 +241,74 @@ async function connectClient(baseUrl: URL, token?: string, opts: { sampling?: bo
   );
 
   return { client, resourceUpdates, logMessages };
+}
+
+type FakeBedrockMode = "normal" | "refuse-primary" | "error";
+
+/**
+ * Stands in for the Bedrock Mantle HTTP endpoint so the real
+ * AnthropicBedrockMantle client (request building, refusal-fallback
+ * middleware, retries) runs end to end without AWS credentials.
+ */
+function fakeBedrock() {
+  const requests: { url: string; body: any; headers: Headers }[] = [];
+  let mode: FakeBedrockMode = "normal";
+
+  const message = (model: string, text: string | null, extra: Record<string, unknown> = {}) => ({
+    id: `msg_${randomUUID()}`,
+    type: "message",
+    role: "assistant",
+    model,
+    content: text === null ? [] : [{ type: "text", text }],
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    usage: { input_tokens: 10, output_tokens: 10 },
+    ...extra,
+  });
+
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    requests.push({ url, body, headers: new Headers(init?.headers) });
+
+    if (mode === "error") {
+      return new Response(JSON.stringify({ type: "error", error: { type: "api_error", message: "boom" } }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    let payload: unknown;
+    if (mode === "refuse-primary" && body.model === DEFAULT_BEDROCK_MODEL) {
+      payload = message(body.model, null, {
+        stop_reason: "refusal",
+        stop_details: {
+          type: "refusal",
+          category: null,
+          explanation: null,
+          fallback_credit_token: "credit-token-1",
+          fallback_has_prefill_claim: false,
+        },
+      });
+    } else {
+      const prompt = String(body.messages?.[0]?.content ?? "");
+      const text = prompt.includes("Classify this one household note")
+        ? '{"type":"shopping","item":"dish soap"}'
+        : body.model === BEDROCK_FALLBACK_MODEL
+          ? "Fallback digest: a quiet day at home."
+          : "Bedrock digest: nothing due and the pantry is fine.";
+      payload = message(body.model, text);
+    }
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+
+  return {
+    fetch: fetchImpl,
+    requests,
+    setMode(next: FakeBedrockMode) {
+      mode = next;
+    },
+  };
 }
 
 async function main() {
@@ -740,6 +813,74 @@ async function main() {
   console.log("✓ export_household_digest's WORTH ATTENTION section reuses the same anomaly detection, not a duplicate copy");
 
   await client.close();
+
+  // --- Claude on Amazon Bedrock behind the sampling-dependent tools ---
+  const bedrock = fakeBedrock();
+  setTextModel(new BedrockTextModel({ awsRegion: "us-east-1", skipAuth: true, fetch: bedrock.fetch }));
+
+  const { client: bedrockClient } = await connectClient(baseUrl, `bedrock-${randomUUID()}`, { sampling: false });
+  const bedrockNarrative = await bedrockClient.callTool({ name: "generate_weekly_narrative", arguments: {} });
+  assert.equal((bedrockNarrative.content as any)[0].text, "Bedrock digest: nothing due and the pantry is fine.");
+  assert.equal(bedrock.requests.length, 1);
+  const narrativeRequest = bedrock.requests[0];
+  assert.match(narrativeRequest.url, /^https:\/\/bedrock-mantle\.us-east-1\.api\.aws\/anthropic\/v1\/messages/);
+  assert.equal(narrativeRequest.body.model, DEFAULT_BEDROCK_MODEL);
+  assert.equal(narrativeRequest.body.output_config.effort, "low");
+  assert.match(String(narrativeRequest.body.messages[0].content), /"lowStock"/);
+  console.log("✓ generate_weekly_narrative uses Claude on Bedrock (real SDK request to the Mantle endpoint) when the client can't sample");
+
+  const bedrockCapture = await bedrockClient.callTool({ name: "capture_note", arguments: { text: "We're out of dish soap" } });
+  const bedrockCaptureData = bedrockCapture.structuredContent as any;
+  assert.equal(bedrockCaptureData.routedTo, "shopping");
+  assert.equal(bedrockCaptureData.classifiedBy, "bedrock");
+  assert.equal(bedrockCaptureData.usedSampling, false);
+  assert.equal(bedrockCaptureData.itemName, "dish soap");
+  console.log("✓ capture_note classifies via Claude on Bedrock when the client can't sample");
+
+  const requestsBeforeSampling = bedrock.requests.length;
+  const { client: samplingClient } = await connectClient(baseUrl, `sampling-${randomUUID()}`);
+  const sampledNarrative = await samplingClient.callTool({ name: "generate_weekly_narrative", arguments: {} });
+  assert.equal((sampledNarrative.content as any)[0].text, "Mock digest: everything looks under control this week.");
+  assert.equal(bedrock.requests.length, requestsBeforeSampling);
+  await samplingClient.close();
+  console.log("✓ MCP sampling is still preferred over Bedrock when the client supports it (no Bedrock call made)");
+
+  bedrock.setMode("refuse-primary");
+  const requestsBeforeRefusal = bedrock.requests.length;
+  const fallbackBriefing = await bedrockClient.callTool({ name: "run_morning_briefing", arguments: {} });
+  assert.match((fallbackBriefing.content as any)[0].text, /^Fallback digest/);
+  const refusalHops = bedrock.requests.slice(requestsBeforeRefusal);
+  assert.equal(refusalHops.length, 2);
+  assert.equal(refusalHops[0].body.model, DEFAULT_BEDROCK_MODEL);
+  assert.equal(refusalHops[1].body.model, BEDROCK_FALLBACK_MODEL);
+  assert.equal(refusalHops[1].body.fallback_credit_token?.token, "credit-token-1");
+  console.log(`✓ a refusal from ${DEFAULT_BEDROCK_MODEL} is retried on ${BEDROCK_FALLBACK_MODEL} with the fallback credit token`);
+
+  bedrock.setMode("error");
+  const degradedBriefing = await bedrockClient.callTool({ name: "run_morning_briefing", arguments: {} });
+  assert.notEqual(degradedBriefing.isError, true);
+  assert.match((degradedBriefing.content as any)[0].text, /\(Templated digest — no language model available\.\)$/);
+  console.log("✓ a failing Bedrock endpoint degrades to the templated briefing instead of erroring the tool call");
+
+  await bedrockClient.close();
+  setTextModel(null);
+
+  // --- Voice tool profile ---
+  const voiceServer = startServer("voice");
+  const { client: voiceClient } = await connectClient(voiceServer.baseUrl, `voice-${randomUUID()}`);
+  const voiceTools = (await voiceClient.listTools()).tools.map((t) => t.name).sort();
+  assert.deepEqual(voiceTools, [...VOICE_PROFILE_TOOLS].sort());
+  let adminToolRejected = false;
+  try {
+    const result = await voiceClient.callTool({ name: "issue_household_token", arguments: { role: "read-only" } });
+    adminToolRejected = result.isError === true;
+  } catch {
+    adminToolRejected = true;
+  }
+  assert.ok(adminToolRejected, "expected a tool outside the voice profile to be uncallable");
+  await voiceClient.close();
+  voiceServer.httpServer.close();
+  console.log(`✓ the voice profile exposes only ${voiceTools.length} household tools and hides admin/setup tools`);
 
   // --- Bearer-token multi-household isolation ---
   const tokenA = `alice-${randomUUID()}`;

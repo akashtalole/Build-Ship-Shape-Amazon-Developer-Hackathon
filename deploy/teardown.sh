@@ -55,6 +55,14 @@ else
   echo "    no ECR repository named '$ECR_REPO' found — skipping"
 fi
 
+TASK_ROLE_NAME="$(service_task_role "$SERVICE_DIR")"
+if [ -n "$TASK_ROLE_NAME" ] && aws iam get-role --role-name "$TASK_ROLE_NAME" >/dev/null 2>&1; then
+  echo "==> Deleting this service's own task role '$TASK_ROLE_NAME'"
+  aws iam detach-role-policy --role-name "$TASK_ROLE_NAME" --policy-arn "$BEDROCK_INFERENCE_POLICY_ARN" >/dev/null 2>&1 || true
+  aws iam delete-role --role-name "$TASK_ROLE_NAME" >/dev/null
+  echo "    deleted"
+fi
+
 echo ""
 echo "==> Done. No further charges accrue for '$SERVICE_DIR' specifically."
 echo "    (The shared 'hackathon-express' ECS cluster and the ecsTaskExecutionRole /"

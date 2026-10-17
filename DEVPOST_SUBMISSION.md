@@ -1,360 +1,117 @@
-# Devpost Submission Draft — Build, Ship, Shape: Amazon Developer Hackathon
+# Devpost Submission Draft: HomeOps
 
-This is a draft of the text to paste into the Devpost submission form(s) at
-https://amazonappdev2026.devpost.com/. Everything below is drawn from what's actually built and
-tested in this repo — nothing invented. Two things Devpost requires that can't be produced in this
-environment are flagged inline: the **demo video** and, if you choose to record it, live testing
-against real Amazon hardware/APIs (Ring devices, a Bee wearable, a Fire TV/Vega device, Bedrock
-credentials).
+Text to paste into the Devpost form at https://amazonappdev2026.devpost.com/. Everything below describes code that
+exists and is tested in [`alexa-homeops-mcp/`](./alexa-homeops-mcp). Items still to do before submitting are
+listed at the end.
 
----
+| Field | Value |
+|---|---|
+| **Project** | HomeOps |
+| **Track** | Alexa+ (self-hosted MCP server, spec 2025-11-25, Streamable HTTP) |
+| **Mini-challenge** | AWS Builder (Claude on Amazon Bedrock, deployed on Amazon ECS Express Mode). Alternative: Open Source, once the repo is public |
+| **Repo** | `akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon`, folder `alexa-homeops-mcp/` |
 
-## Read this first: how to actually submit (prize eligibility)
+## Why only HomeOps
 
-Per the hackathon rules (`hackathon-ideas/README.md`): **a project may win at most one track prize
-+ one mini-challenge prize.** This repo contains six standalone implementations — one per track
-(Fire TV, Alexa+, Bee, Ring) plus both mini-challenges (AWS Builder, Open Source) — because you
-asked for full coverage of every category. For actual submission, that means picking:
-
-- **One track** as your primary entry (the strongest, most complete one), and
-- **One mini-challenge** layered on top, "nearly free to add" per the rules' own advice.
-
-**Recommendation:** submit **HomeOps (Alexa+)** as the primary track — it's the deepest
-implementation (5 rounds: elicitation, sampling, resources/notifications, resumable transport,
-RBAC, webhooks) and Alexa+ is one of the two $25k top-prize tracks — paired with the
-**Open Source mini-challenge** (`friction-log-toolkit`, a genuinely useful standalone tool, not a
-throwaway script). The other four implementations (PorchPass, CourtSide, StudyLoop, the model
-router) are fully working and can each be submitted as **separate Devpost projects** if you want
-to be eligible for their tracks too — Devpost allows one account to submit multiple projects to
-the same hackathon; each one just needs its own project page, since a single project's prize is
-capped at one track + one mini-challenge.
-
-The sections below are written so each one is a complete, self-contained Devpost project
-description — copy the one(s) you're submitting.
+The repo also contains projects for Fire TV, Bee, Ring, and both mini-challenges. They aren't submitted because
+they don't meet their tracks' hardware requirements yet: CourtSide is a backend with no Fire OS/Vega app, StudyLoop
+has no data from a real Bee device, and PorchPass uses its own simulator rather than Ring's. Each project can win at
+most one track prize and one mini-challenge prize, so the effort goes into the one entry that fully qualifies.
 
 ---
 
-## Project 1 — HomeOps (Alexa+ track)
+**Tagline:** A self-hosted MCP server that lets Alexa+ run the household (tasks, shopping, budget, meals) in one
+conversation instead of one command at a time.
 
-**Tagline:** A self-hosted MCP server that lets Alexa+ actually run your household — tasks,
-shopping, budget — instead of handling one command at a time.
+## Inspiration
 
-**Try it out:** [`alexa-homeops-mcp/`](./alexa-homeops-mcp) · repo: `akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon`
+Alexa+ is built for multi-step, agentic requests, but most skills still handle one isolated command. We wanted
+"what's due today, is anything running low, and are we on budget?" to be one turn, which means giving Alexa+ real
+tools it can chain, plus the judgment to ask before spending money.
 
-### Inspiration
-Alexa+ is built to orchestrate agentic, multi-step requests — but most skills still only handle one
-isolated command. We wanted to answer "what's due this week, and can you reorder anything running
-low?" in one turn, which means giving Alexa+ real tools to chain together, not a single intent.
+## What it does
 
-### What it does
-HomeOps is a self-hosted MCP server (2025-11-25 spec, Streamable HTTP transport) exposing:
-tasks (list/add/complete/fair auto-assignment), a shopping/low-stock list with elicitation-gated
-reordering, expense tracking with budget alerts, a natural-language weekly digest generated via
-MCP **sampling** (no bundled LLM key — it asks the connected client's own model), calendar sync
-with streamed progress notifications, and a compound `run_morning_briefing` tool that chains all of
-the above into one call. Round 4–5 additions add multi-household Bearer-token auth, role-based
-access control (full-access vs. read-only tokens), durable file-backed persistence, MCP logging
-notifications, outbound alert webhooks (HMAC-signed), and recurring task templates.
+HomeOps exposes household tools over MCP that Alexa+ chains together:
 
-### How we built it
-TypeScript + `@modelcontextprotocol/sdk`, Express for the Streamable HTTP transport, a custom
-resumable `EventStore` for reconnect support, file-backed JSON persistence with atomic
-write-then-rename. Every feature was built test-first against a real MCP client over real HTTP —
-no mocked protocol calls.
+- **Morning briefing in one call.** `run_morning_briefing` combines today's tasks, who's next for chores, low stock,
+  and budget status, then narrates them. One round trip instead of four matters for voice.
+- **Say it however you like.** `capture_note` takes a sentence like "we're almost out of coffee and I need to pick
+  up dry cleaning by Friday" and routes it to the shopping list, a task with a due date, or an expense, so nobody
+  has to know which tool does what.
+- **Asks before spending.** `reorder_item` uses MCP elicitation, so Alexa+ asks the user to confirm before an order
+  goes through. Retries are safe because of an idempotency key.
+- **Notices problems on its own.** `get_proactive_alerts` flags one person carrying most of the chores, a budget
+  category on pace to go over (before it does), and items that have been low for days without being reordered.
+- **Plans meals from what's running low.** `suggest_meal_plan` uses low-stock items, the remaining grocery budget,
+  and busy days on the calendar (busy days get quick meals).
+- Fair chore rotation, recurring tasks, an allowance ledger for kids, and a weekly digest.
 
-### Challenges we ran into
-Getting elicitation right: `reorder_item` calls the client's own `elicitInput()` to get real user
-confirmation before spending, but not every MCP client declares that capability — it had to
-gracefully fall back to a preview-then-confirm flow instead of erroring. We also hit a genuine
-protocol bug ourselves: an early `outputSchema` for `run_morning_briefing` didn't match the actual
-`Task` shape (missing a `done: boolean` field), caught only because the smoke test used a real
-schema-validating client instead of asserting on raw text.
+Under the hood: per-household data isolation via bearer tokens, read-only tokens, file-backed persistence,
+resumable Streamable HTTP sessions, HMAC-signed alert webhooks, and MCP resources with live update notifications.
 
-### Accomplishments we're proud of
-Five rounds of real, tested features (not stubs) — elicitation, sampling, resumable transport,
-idempotent writes, multi-tenancy, RBAC, and webhooks — all verified via `npm test` + `tsc --noEmit`
-+ `npm run build` before every commit, with zero shortcuts.
+## How we built it
 
-### What we learned
-MCP's newer primitives (elicitation, sampling, resource templates with completion, structured
-output) let a server delegate exactly the parts that need a human or an LLM back to the client,
-instead of the server needing its own model key or a hand-rolled confirmation flag.
+- TypeScript, `@modelcontextprotocol/sdk` (negotiates protocol version 2025-11-25), Express for Streamable HTTP.
+- **Claude on Amazon Bedrock** for the model-backed tools. HomeOps asks the client's own model first (MCP sampling).
+  If the client can't sample, it calls Claude on Bedrock through the Bedrock Mantle client, retries refusals on a
+  second model, and times out after 20 seconds with a templated answer as the last resort.
+- A **voice tool profile** that shows Alexa+ only the 12 tools a household member would ask for. The admin and
+  setup tools stay available in the full profile.
+- **Deployed from AWS CloudShell** to Amazon ECS Express Mode with one script: container image in ECR, HTTPS
+  endpoint, and a least-privilege IAM task role for Bedrock.
+- Every feature tested end to end with a real MCP client over HTTP: 41 checks, including Bedrock requests through
+  the real SDK against a fake endpoint (normal, refusal-then-fallback, and error paths).
 
-### What's next
-Deploy behind a real Alexa+ Agent Skill registration; swap the file-backed store for DynamoDB for
-true multi-instance durability; wire real push notifications (SNS) instead of the in-repo
-notifier stub.
+## Challenges we ran into
 
-**Built with:** typescript, node.js, express, model-context-protocol, mcp-sdk, server-sent-events,
-json, docker, amazon-ecs
+- **Hidden dependence on a client capability.** Four features used MCP sampling and quietly fell back to templates
+  when the client lacked it. Tests passed, but a client without sampling would never have shown the model-backed
+  behavior. Adding Claude on Bedrock as the second path fixed it.
+- **Too many tools for a voice agent.** After six feature rounds the server had 25 tools. More choices make an
+  agent likelier to pick the wrong one, so we added the voice profile rather than deleting capability.
+- **App Runner closed to new customers mid-build.** The deploy scripts were rewritten for Amazon ECS Express Mode.
+- Details, including IAM and SDK surprises, are in [`alexa-homeops-mcp/FRICTION_LOG.md`](./alexa-homeops-mcp/FRICTION_LOG.md).
 
----
+## Accomplishments we're proud of
 
-## Project 2 — PorchPass (Ring track)
+- Uses MCP features most servers don't touch: elicitation, sampling, resource templates with completion, progress
+  and logging notifications, structured output, resumable transport.
+- Degrades instead of failing: no sampling → Bedrock; Bedrock refusal → second model; Bedrock down → templated
+  answer; no elicitation support → preview-then-confirm.
+- 41 end-to-end checks, all passing, plus typecheck and build before every commit.
 
-**Tagline:** Time-boxed, no-app-required access passes for Ring doorbells — a dog walker or
-delivery driver taps a link, not a shared code.
+## What we learned
 
-**Try it out:** [`ring-porchpass/`](./ring-porchpass)
+A good fallback can hide that the main path never runs in the target environment. Testing against the real client's
+capabilities matters as much as testing the code.
 
-### Inspiration
-Homeowners need to grant one-off access (a dog walker, a contractor) but sharing a permanent door
-code or app login is both insecure and awkward. PorchPass issues single-use or time-boxed passes,
-correlates the visitor's arrival with a real Ring doorbell/motion event, and notifies the homeowner
-— with zero app or account required on the visitor's side.
+## What's next
 
-### What it does
-Homeowner issues a pass (visitor, validity window, use limit) → visitor taps a magic link, no login
-→ PorchPass correlates the check-in with the nearest Ring doorbell/motion event within a 5-minute
-window and attaches the snapshot → homeowner is notified → full audit trail. Round 2–4 additions:
-recurring passes, HMAC-signed webhook ingress from Ring, a live SSE dashboard feed, quiet hours,
-rate limiting, outbound signed webhooks with retry, bulk/template pass issuance, grace-period
-extensions, checkout/visit-duration tracking, a traffic analytics report, household member roles,
-and AES-256-GCM encryption of visitor phone numbers at rest.
+DynamoDB instead of JSON files for multi-instance durability, push notifications for proactive alerts, and grocery
+reordering against a real retailer API.
 
-### How we built it
-TypeScript + Express, an interface-isolated `RingClient` (real integration point) backed by a
-`SimulatedRingClient` for full demoability without Ring hardware or partner credentials, HMAC-SHA256
-for both inbound webhook verification and outbound delivery signing, an in-memory pub/sub
-`eventBus` feeding the SSE stream.
-
-### Challenges we ran into
-No Ring hardware or partner API access in this environment — solved by isolating the entire Ring
-integration behind one interface (`src/ringClient.ts`) so swapping in the real Ring API is a
-single-file change, documented explicitly in the README. Also: auditing every response path to make
-sure a masked phone number is genuinely never exposed once encryption was added — one raw-store
-read in the test suite confirms no plaintext PII ever touches disk.
-
-### Accomplishments we're proud of
-A full, real access-control lifecycle (issue → arrive → correlate → notify → expire/revoke) with
-~50 end-to-end HTTP checks, plus production concerns (webhooks, rate limiting, encryption, quiet
-hours) most hackathon demos skip entirely.
-
-### What we learned
-Designing the Ring integration seam *first* — before any business logic — made every later round
-(recurring passes, bulk issuance, analytics) drop in without touching `ringClient.ts` at all.
-
-### What's next
-Swap `SimulatedRingClient` for the real Ring Partner API; replace the demo key derivation for PII
-encryption with AWS KMS envelope encryption (flagged explicitly as a gap in `FRICTION_LOG.md`).
-
-**Built with:** typescript, node.js, express, server-sent-events, hmac, webhooks, aes-256-gcm,
-docker, amazon-ecs
+**Built with:** typescript, node.js, express, model-context-protocol, alexa, amazon-bedrock, claude, amazon-ecs,
+amazon-ecr, aws-iam, docker
 
 ---
 
-## Project 3 — CourtSide (Fire TV track)
+## Product feedback (Devpost "feedback" fields)
 
-**Tagline:** An AI co-commentator that narrates live sports in plain language and answers "why was
-that a foul?" without leaving the video.
+- **What worked:** The MCP SDK's elicitation and sampling made it possible to keep spending confirmations and LLM
+  calls protocol-native. ECS Express Mode gave a public HTTPS endpoint from one CLI call.
+- **What didn't:** It was hard to find which IAM action Bedrock's Messages endpoint needs (`bedrock-mantle:*`, not
+  the `bedrock:InvokeModel` most examples show). App Runner closing to new customers forced a mid-build migration.
+- **Feature requests:** Document which MCP client capabilities (sampling, elicitation) Alexa+ supports; show the
+  required IAM action next to each Bedrock code sample.
+- **Friction log:** [`alexa-homeops-mcp/FRICTION_LOG.md`](./alexa-homeops-mcp/FRICTION_LOG.md) (23 entries).
 
-**Try it out:** [`firetv-courtside/`](./firetv-courtside)
+## Still needed before submitting
 
-### Inspiration
-Casual viewers tune out of unfamiliar or lower-profile games for lack of context — not lack of
-interest. CourtSide sits alongside a live broadcast, narrating plays and answering spoken or typed
-questions grounded in the game's actual current state.
-
-### What it does
-Tracks live game state (score/clock/period), ingests play-by-play events and immediately produces
-plain-language commentary, answers free-form viewer questions grounded in current state and recent
-plays, and (round 3–4) adds a live SSE commentary push, outbound alert webhooks for
-watched-team/player events, a personalized-per-viewer watchlist, season-long stats aggregation,
-auto-generated game recaps, and multi-sport support.
-
-### How we built it
-TypeScript + Express, a `CommentaryProvider` interface (the seam a real Bedrock call would sit
-behind) backed by a deterministic `TemplateCommentaryProvider` so the whole pipeline is testable
-headlessly without a Fire TV device or a computer-vision feed.
-
-### Challenges we ran into
-This environment can't run a Fire OS/Vega app or a physical Fire TV — so the submission is scoped
-honestly to the backend commentary service a real overlay app would call, with the exact shape of
-that integration (`GET /games/:id/commentary` polling, `POST /games/:id/ask` for both D-pad and
-voice input) spelled out in the README rather than glossed over.
-
-### Accomplishments we're proud of
-51/51 automated checks passing across four feature rounds, including a resumable SSE stream and
-signed outbound webhooks — genuinely production-shaped, not a scripted demo.
-
-### What we learned
-Separating "what's testable headlessly" from "what needs the real device" up front kept the scope
-honest and let every round ship fully verified instead of half-stubbed.
-
-### What's next
-A real Vega/Fire OS overlay app; a computer-vision or official play-by-play data feed wired into
-`POST /games/:id/events`; swap `TemplateCommentaryProvider` for a real Bedrock-backed provider.
-
-**Built with:** typescript, node.js, express, server-sent-events, webhooks, docker, amazon-ecs
-
----
-
-## Project 4 — StudyLoop (Bee track)
-
-**Tagline:** Turns an ambient study session into spaced-repetition flashcards automatically — no
-manual note-taking.
-
-**Try it out:** [`bee-studyloop/`](./bee-studyloop)
-
-### Inspiration
-Students lose track of what they actually covered in a study session, and turning ambient
-conversation into structured review material is friction people skip. StudyLoop automates that
-conversion end to end.
-
-### What it does
-Ingests a session transcript, generates a summary plus flashcards (Q&A pairing, definition
-extraction, cloze-deletion fallback), schedules review via a real SM-2 spaced-repetition algorithm,
-and (round 2–4) adds quiz mode, shared decks, reminders, adaptive difficulty bias, study streaks
-with permanent badges, a cross-deck daily review-session planner, TSV import/export round-tripping,
-and on-demand card regeneration.
-
-### How we built it
-TypeScript + Express, transcript ingestion isolated behind one `normalizeTranscript` function —
-documented as the exact seam where Bee's transcript-retrieval MCP tool would plug in, since it
-already returns the same `{speaker, text, timestampMs}` shape this repo defines independently.
-
-### Challenges we ran into
-No physical Bee device or Apple Watch in this environment. Rather than fake a device integration,
-we designed the ingestion contract to match Bee's actual documented output shape, so the "todo"
-for a real integration is a single sync job, not a rewrite.
-
-### Accomplishments we're proud of
-68/68 checks passing across four rounds, including a full spaced-repetition scheduler implemented
-as pure, independently-testable functions.
-
-### What we learned
-An accurate, real spaced-repetition algorithm (SM-2) is not meaningfully harder to implement
-correctly than a fake one — so there was no reason to stub it.
-
-### What's next
-Wire a real Bee MCP `get_transcript` call into `normalizeTranscript`'s existing array branch;
-swap `TemplateFlashcardGenerator` for an LLM-backed generator behind the same interface.
-
-**Built with:** typescript, node.js, express, sm-2-algorithm, docker, amazon-ecs
-
----
-
-## Project 5 — Model Router (AWS Builder mini-challenge)
-
-**Tagline:** A SageMaker-sidecar-in-front-of-Bedrock routing pattern: cheap and fast for the common
-case, escalate to a full foundation model only when confidence is low.
-
-**Try it out:** [`aws-builder-model-router/`](./aws-builder-model-router)
-
-### Inspiration
-Off-the-shelf foundation models are often overkill in cost and latency for narrow, well-defined
-classification tasks. This is a reusable pattern, demoed via urgency triage for
-household-automation-style messages (urgent / routine / informational).
-
-### What it does
-Runs a deterministic, explainable sidecar classifier first; if its confidence clears a threshold
-(default 0.7), returns immediately at sidecar cost/latency; otherwise escalates to a
-foundation-model-shaped provider. Rounds 2–4 add response caching, a circuit breaker with fallback,
-shadow evaluation, an adaptive confidence threshold, streaming responses, rate limiting, a
-three-tier cascade, cost budgets (global and per-caller), canary/A-B sidecar routing, outbound
-alert webhooks, and Prometheus-format metrics export.
-
-### How we built it
-TypeScript + Express, both the sidecar and the foundation model behind interfaces shaped exactly
-like the real SageMaker/Bedrock SDKs, backed by mock providers — documented so the swap to real AWS
-services touches only two files.
-
-### Challenges we ran into
-No AWS credentials available in this environment, so proving the *pattern* (not the API call) is
-correct meant building an honest cost/latency model for each path and verifying routing decisions
-and budget/circuit-breaker behavior deterministically in tests, rather than trusting a live call.
-
-### Accomplishments we're proud of
-78/78 checks passing through four rounds of genuinely production-shaped concerns — canary rollout,
-per-caller budgets, Prometheus export — on top of the core routing pattern.
-
-### What we learned
-A routing decision's correctness (confidence-based escalation, budget enforcement, circuit-breaker
-tripping) is fully testable without ever calling a real model, as long as the provider interface
-is honest about what a real call would cost and how long it would take.
-
-### What's next
-Swap `MockSidecarClassifier`/`MockBedrockProvider` for real SageMaker endpoint + Bedrock
-`InvokeModel` calls behind the same interfaces; persist metrics to CloudWatch instead of the local
-JSON file.
-
-**Built with:** typescript, node.js, express, aws, sagemaker, bedrock, prometheus, docker,
-amazon-ecs
-
----
-
-## Project 6 — friction-log-toolkit (Open Source mini-challenge)
-
-**Tagline:** A CLI that makes capturing a hackathon friction log as cheap as one terminal command,
-in the moment it happens — not reconstructed from memory an hour before the deadline.
-
-**Try it out:** [`friction-log-toolkit/`](./friction-log-toolkit)
-
-### Inspiration
-This hackathon's own rules reward a well-written friction log with up to a 10% judging bonus — but
-in practice, friction logs get written from memory right before submission, after the specific
-error messages and dead-end docs pages are already forgotten. This tool exists to fix that
-process gap for every team, not just this one.
-
-### What it does
-`friction-log init` / `add "..." --tag friction` / `list` / `export` turns captured points into a
-structured Markdown report in the exact "what worked / friction / feature requests" shape used by
-every other project in this repo. Rounds 2–4 add stats, config, git-aware auto-tagging, multi-format
-export, entry merge/edit/remove, full-text search, a local dashboard server, a `watch` mode REPL,
-push/pull sync between two instances, reusable entry templates, an ASCII stats chart, and
-keyword-based auto-tag suggestions.
-
-### How we built it
-TypeScript CLI (`node:http` for the dashboard — no framework dependency), a portable TSV/JSON
-export format for interop with the Bee track's flashcard import.
-
-### Challenges we ran into
-A genuine bug surfaced while testing `sync`: driving the test via a blocking `execFileSync` against
-a fake remote server hosted in the *same* test process deadlocks, since the blocking call freezes
-the event loop the remote handler itself needs — fixed with a `spawn`-based async test helper, and
-documented in `FRICTION_LOG.md` as a real lesson for anyone testing loopback HTTP calls this way.
-
-### Accomplishments we're proud of
-137/137 checks across four rounds, plus genuine dogfooding — this tool's own `FRICTION_LOG.md`
-entries were captured with itself while building it.
-
-### What we learned
-The most valuable open-source contribution here isn't a huge feature — it's removing the specific
-five seconds of friction (context-switching to write something down) that causes documentation to
-never get written at all.
-
-### What's next
-Publish to npm; add a GitHub Action that opens a PR comment summarizing captured friction points
-automatically at PR time.
-
-**Built with:** typescript, node.js, cli, git
-
----
-
-## Cross-cutting notes for every project (paste into "Product feedback" fields)
-
-- **Tools used:** Node.js/TypeScript throughout; `@modelcontextprotocol/sdk` for HomeOps; Express
-  for every HTTP service; no external LLM/cloud calls anywhere (all AI- and AWS-shaped seams are
-  interfaces backed by deterministic mocks, documented per-project as the exact swap-in point).
-- **What worked well:** isolating every hardware/cloud dependency (Ring, Bee, Fire TV, Bedrock,
-  SageMaker) behind a single interface let every feature round ship fully tested without ever
-  needing real credentials or hardware.
-- **What didn't / platform friction:** AWS App Runner closed to new customers on 2026-04-30 mid-way
-  through building the deploy tooling — the CloudShell deploy scripts in `deploy/` were rewritten
-  to target Amazon ECS Express Mode instead once this was confirmed, and that migration itself is
-  documented as a friction-log-worthy platform change.
-- **Onboarding:** every project's own `README.md` has copy-pasteable curl examples and a
-  `npm install && npm test && npm run build` verification sequence; `deploy/README.md` covers
-  taking any of the five backend services live from AWS CloudShell with zero local setup.
-- **Full friction logs:** see each project's own `FRICTION_LOG.md` for the complete, dated list of
-  friction points, feature requests, and design trade-offs encountered while building it.
-
-## Still needed before you actually submit
-
-- [ ] **Demo video** (< 3 minutes, YouTube/Vimeo) — not something this session can produce; record
-      a walkthrough of whichever project(s) you submit.
-- [ ] **Decide the track + mini-challenge pairing** per project (see the recommendation at the top).
-- [ ] **Merge or link to the specific PRs** you want judged — `main` currently has v1 + one
-      "advanced features" round per project merged; rounds 3–5 are open PRs (#9–#20) not yet
-      merged. Decide whether to merge more of them in before the Oct 23, 2026 deadline, and link
-      the exact commit/branch you're submitting if you leave any unmerged.
+- [ ] **Make the repo public** (Settings → General → Change visibility). Required for every track and for the
+      Open Source mini-challenge.
+- [ ] **Deploy and connect to the Alexa+ web simulator:** `./deploy/deploy.sh alexa-homeops-mcp` from CloudShell,
+      then register `https://<service-url>/mcp`. Record anything that breaks in the friction log.
+- [ ] **Confirm Bedrock model access** for `anthropic.claude-opus-5-5` in the deploy region.
+- [ ] **Record the demo video** (under 3 minutes) on the Alexa+ simulator. Narration script: [`demo/narration.ssml`](./demo/narration.ssml).
+- [ ] **Pick the mini-challenge:** AWS Builder (Bedrock + ECS) or Open Source (public repo). Only one can be won.
+- [ ] Submit before **Oct 23, 2026, 12:00 PM PDT**.

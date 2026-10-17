@@ -1,10 +1,10 @@
 # Demo video narration (Amazon Polly)
 
 `narration.ssml` is the voiceover script for the Devpost demo video, sized to run well under the
-hackathon's 3-minute cap (~313 words plus pauses — roughly 2:00–2:30 spoken by Polly, leaving room
+hackathon's 3-minute cap (~330 words plus pauses — roughly 2:00–2:30 spoken by Polly, leaving room
 for a silent title card and closing card). It covers the recommended primary
 submission from `../DEVPOST_SUBMISSION.md`: **HomeOps (Alexa+ track)** plus the
-**friction-log-toolkit (Open Source mini-challenge)**.
+**AWS Builder mini-challenge** (Claude on Amazon Bedrock, deployed on Amazon ECS Express Mode).
 
 ## Rendering it with Polly
 
@@ -50,17 +50,17 @@ instant that mark's timestamp passes.
 | `intro_start` | The one-command-at-a-time problem, then HomeOps's pitch | Title card, or Alexa+ device idle |
 | `feature_tasks` | Adding a task with fair auto-assignment | Terminal/client calling `add_task`, showing the assignee it picked |
 | `feature_reorder` | Elicitation-gated reorder | `reorder_item` triggering a real elicitation prompt the user approves |
-| `feature_budget` | Budget alert + `generate_weekly_narrative` via sampling | An expense pushing a category over budget, then the generated narrative text appearing |
-| `feature_briefing` | The `run_morning_briefing` compound tool | One call to `run_morning_briefing`, then the combined tasks/budget/stock narration it returns |
-| `opensource_start` | friction-log-toolkit pitch | `friction-log add "..." --tag friction` in a terminal, then `friction-log export` producing the Markdown report |
-| `close_start` | Closing line | Repo README or the six-project folder listing |
+| `feature_budget` | Spending-pace alert + `get_proactive_alerts` | An expense putting a category on pace to go over, then "anything I should know about?" surfacing the alerts |
+| `feature_briefing` | The `run_morning_briefing` compound tool, narrated by sampling or Claude on Bedrock | One call to `run_morning_briefing`, then the combined tasks/budget/stock narration it returns |
+| `aws_start` | AWS Builder pitch | `./deploy/deploy.sh alexa-homeops-mcp` in CloudShell printing the service URL, then the ECS console showing the running service |
+| `close_start` | Closing line | The HomeOps README, or the test run passing |
 
 ## Notes on the SSML
 
 - Wrapped in `<amazon:domain name="conversational">` for a natural, non-robotic delivery — supported
   by Polly's neural engine on voices like Matthew, Joanna, and Matthew-Neural equivalents in other
   locales.
-- `MCP`, `API`, and similar acronyms use `<say-as interpret-as="characters">` so Polly spells them
+- `MCP`, `AWS`, `ECS`, and similar acronyms use `<say-as interpret-as="characters">` so Polly spells them
   out (`M-C-P`) instead of trying to pronounce them as a word.
 - Only SSML tags supported by Polly's **neural** engine are used (`speak`, `amazon:domain`, `break`,
   `emphasis`, `say-as`, `mark`) — no `<prosody pitch>` or `<amazon:effect name="whispered">`, which

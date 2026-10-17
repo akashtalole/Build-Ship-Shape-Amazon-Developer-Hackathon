@@ -11,6 +11,7 @@ import { registerCaptureTools } from "./tools/capture.js";
 import { registerResources } from "./resources.js";
 import { registerPrompts } from "./prompts.js";
 import { restrictToReadOnlyTools } from "./rbac.js";
+import { applyToolProfile, type ToolProfile } from "./toolProfile.js";
 import { DEFAULT_HOUSEHOLD_ID } from "./store.js";
 import type { AccessRole } from "./types.js";
 
@@ -31,14 +32,17 @@ import type { AccessRole } from "./types.js";
  */
 export function createHomeOpsServer(
   householdId: string = DEFAULT_HOUSEHOLD_ID,
-  role: AccessRole = "full-access"
+  role: AccessRole = "full-access",
+  profile: ToolProfile = "full"
 ): McpServer {
   const server = new McpServer(
-    { name: "homeops-mcp", version: "0.4.0" },
+    { name: "homeops-mcp", version: "0.5.0" },
     // Declaring the logging capability is what makes server.server.sendLoggingMessage(...)
     // actually emit notifications/message instead of silently no-op'ing.
     { capabilities: { logging: {} } }
   );
+
+  applyToolProfile(server, profile);
 
   // Must happen before any tool is registered below: it wraps
   // server.registerTool itself, so every subsequent registerTool call

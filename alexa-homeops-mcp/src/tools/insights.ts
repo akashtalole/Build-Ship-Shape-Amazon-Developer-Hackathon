@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getBudgetStatus, itemsRunningLow, listUpcomingTasks, openTaskCounts, suggestAssignee } from "../store.js";
 import { computeHouseholdAnomalies, type HouseholdAnomaly } from "../anomalies.js";
+import { generateText } from "../llm.js";
 
 const anomalyShape = {
   type: z.enum(["task_pileup", "spending_trend", "stale_low_stock"]),
@@ -14,27 +15,9 @@ function formatAnomalies(anomalies: HouseholdAnomaly[]): string[] {
   return anomalies.map((a) => `  - [${a.severity}] ${a.message}`);
 }
 
-/**
- * Asks the connected client's model (via MCP sampling) to turn a prompt +
- * raw facts into natural language. Returns undefined if the client hasn't
- * declared the sampling capability, so callers can fall back gracefully
- * instead of erroring.
- */
 async function sampleNarrative(server: McpServer, instruction: string, facts: unknown): Promise<string | undefined> {
-  try {
-    const result = await server.server.createMessage({
-      messages: [
-        {
-          role: "user",
-          content: { type: "text", text: `${instruction}\n\n${JSON.stringify(facts, null, 2)}` },
-        },
-      ],
-      maxTokens: 200,
-    });
-    return result.content.type === "text" ? result.content.text : undefined;
-  } catch {
-    return undefined;
-  }
+  const generated = await generateText(server, `${instruction}\n\n${JSON.stringify(facts, null, 2)}`);
+  return generated?.text;
 }
 
 export function registerInsightTools(server: McpServer, householdId: string): void {
@@ -43,7 +26,8 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
     {
       description:
         "Generate a short, natural-language weekly household digest (tasks, low stock, budget) " +
-        "by asking the connected model to narrate the raw data, via MCP sampling.",
+        "by asking a language model to narrate the raw data: the connected client's own model via MCP sampling, " +
+        "or Claude on Amazon Bedrock when the client doesn't support sampling.",
       inputSchema: {},
       annotations: { title: "Generate weekly narrative", readOnlyHint: true, openWorldHint: true },
     },
@@ -61,8 +45,8 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
         return { content: [{ type: "text", text: narrated }] };
       }
 
-      // Client doesn't support sampling — fall back to a templated digest
-      // built directly from the same data.
+      // No model available — fall back to a templated digest built directly
+      // from the same data.
       const dueSoon = tasks.length ? `${tasks.length} task(s) due this week` : "nothing due this week";
       const stock = lowStock.length ? `${lowStock.map((i) => i.name).join(", ")} running low` : "everything stocked";
       const overBudget = budgets.filter((b) => b.overBudget);
@@ -73,7 +57,7 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
         content: [
           {
             type: "text",
-            text: `This week: ${dueSoon}, ${stock}, and ${spend}. (Templated digest — client has no sampling support.)`,
+            text: `This week: ${dueSoon}, ${stock}, and ${spend}. (Templated digest — no language model available.)`,
           },
         ],
       };
@@ -123,7 +107,7 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
           `${suggestedAssignee} is next up for chores`,
           lowStock.length ? `${lowStock.length} item(s) running low` : "shopping list is fine",
           overBudget.length ? `over budget on ${overBudget.map((b) => b.category).join(", ")}` : "spending on track",
-        ].join(", ") + ". (Templated digest — client has no sampling support.)";
+        ].join(", ") + ". (Templated digest — no language model available.)";
 
       return {
         content: [{ type: "text", text }],
@@ -167,8 +151,8 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
         "Export one combined household digest report — upcoming tasks, budget status, low-stock items, and " +
         "proactive anomaly flags (task pileup, a spending category trending over budget, stale low-stock items) " +
         "— as a single text report a household member can read at a glance, or save/share/print. Reuses the " +
-        "same sampling-backed narrative as generate_weekly_narrative for the summary paragraph (falling back " +
-        "to a templated one if the client doesn't support MCP sampling), and the same anomaly detection as " +
+        "same model-backed narrative as generate_weekly_narrative for the summary paragraph (falling back " +
+        "to a templated one if no model is available), and the same anomaly detection as " +
         "get_proactive_alerts, rather than duplicating either.",
       inputSchema: {
         withinDays: z
@@ -219,7 +203,7 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
         narrated ??
         `${tasks.length} task(s) due in the next ${withinDays} day(s), ${lowStock.length} item(s) running low, ` +
           `${overBudget.length} categor${overBudget.length === 1 ? "y" : "ies"} over budget. ` +
-          `(Templated summary — client has no sampling support.)`;
+          `(Templated summary — no language model available.)`;
 
       const reportLines = [
         `HOUSEHOLD DIGEST — generated ${generatedAt}`,
