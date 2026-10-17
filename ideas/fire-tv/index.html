@@ -592,6 +592,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#idea-4-signscreen-ai-audio-description-accessibility-companion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Idea 4: "SignScreen" — AI Audio-Description &amp; Accessibility Companion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#idea-5-reciperemote-synced-cooking-companion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Idea 5: "RecipeRemote" — Synced Cooking Companion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-these-win" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1126,6 +1148,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#idea-4-signscreen-ai-audio-description-accessibility-companion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Idea 4: "SignScreen" — AI Audio-Description &amp; Accessibility Companion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#idea-5-reciperemote-synced-cooking-companion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Idea 5: "RecipeRemote" — Synced Cooking Companion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-these-win" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1190,8 +1234,26 @@
 <li><strong>Potential Impact:</strong> Solves real content-discovery pain across any content library; extensible to any catalog.</li>
 <li><strong>Quality of Idea:</strong> Strong computer-vision + AI-enhanced viewing combination.</li>
 </ul>
+<h2 id="idea-4-signscreen-ai-audio-description-accessibility-companion">Idea 4: "SignScreen" — AI Audio-Description &amp; Accessibility Companion<a class="headerlink" href="#idea-4-signscreen-ai-audio-description-accessibility-companion" title="Permanent link">&para;</a></h2>
+<p><strong>Problem:</strong> Blind, low-vision, deaf, and hard-of-hearing viewers get inconsistent or nonexistent accessibility support across most streaming content — audio description and captioning quality vary wildly by title and provider.</p>
+<p><strong>Solution:</strong> A Fire TV companion layer that generates real-time AI audio description (narrating key visual action during natural dialogue pauses) for any video feed lacking it, and a synchronized rich-caption overlay (speaker labels, non-speech sound cues) for deaf/hard-of-hearing viewers — both driven by computer vision and generative narration on top of whatever's already playing.</p>
+<ul>
+<li><strong>Tech Implementation:</strong> Computer vision on the video feed detects scene changes/action and dialogue gaps; a Bedrock-based generation layer produces natural-language description text-to-speech'd into the gaps; captions render as a Fire TV overlay independent of the source app's native subtitle support.</li>
+<li><strong>Design:</strong> Fully voice/remote-controllable settings (description verbosity, caption style) designed for screen-reader-first navigation, not a buried settings menu.</li>
+<li><strong>Potential Impact:</strong> Addresses a legally and socially significant accessibility gap across the entire content catalog at once, rather than title-by-title — a rare "every existing show benefits" pitch.</li>
+<li><strong>Quality of Idea:</strong> Directly hits AI-enhanced viewing, multi-modal UX, and computer vision simultaneously, with an accessibility angle most competing submissions won't attempt.</li>
+</ul>
+<h2 id="idea-5-reciperemote-synced-cooking-companion">Idea 5: "RecipeRemote" — Synced Cooking Companion<a class="headerlink" href="#idea-5-reciperemote-synced-cooking-companion" title="Permanent link">&para;</a></h2>
+<p><strong>Problem:</strong> Following a cooking video on TV means constantly pausing/rewinding to keep pace, since every cook moves at a different speed than the video's fixed timeline.</p>
+<p><strong>Solution:</strong> A Fire TV app that plays a cooking video alongside a step tracker that adapts pacing to the actual cook — using optional camera-based visual cues (or simple remote/voice "next step" control) to hold or advance the video, with voice Q&amp;A for ingredient substitutions mid-recipe.</p>
+<ul>
+<li><strong>Tech Implementation:</strong> Fire OS app with a step-segmented video player; optional on-device computer vision for pace detection; a Bedrock-backed Q&amp;A layer grounded in the specific recipe's ingredients/steps for substitution questions.</li>
+<li><strong>Design:</strong> Big, glanceable step-and-timer UI meant to be read from across a kitchen, not up close; voice-first interaction since hands are typically full or messy.</li>
+<li><strong>Potential Impact:</strong> A concrete, everyday household use case with clear before/after value (fewer burnt dishes, less rewinding) and obvious extensibility to any existing cooking-content catalog.</li>
+<li><strong>Quality of Idea:</strong> Combines AI-enhanced viewing, family entertainment, and computer vision in a genuinely different content category than sports or trivia, broadening the submission set's range.</li>
+</ul>
 <h2 id="why-these-win">Why these win<a class="headerlink" href="#why-these-win" title="Permanent link">&para;</a></h2>
-<p>All three map to at least two of the six prioritized Fire TV categories, use required device input modalities (remote/voice/companion), and are demoable in under 3 minutes on real Fire OS/Vega hardware or emulator. Recommend building idea 1 or 2 as the primary submission and stacking the <strong>AWS Builder mini-challenge</strong> on top (near-zero extra scope since AI backends already use AWS services).</p>
+<p>All five map to at least two of the six prioritized Fire TV categories, use required device input modalities (remote/voice/companion), and are demoable in under 3 minutes on real Fire OS/Vega hardware or emulator. Recommend building idea 1 or 2 as the primary submission and stacking the <strong>AWS Builder mini-challenge</strong> on top (near-zero extra scope since AI backends already use AWS services). Idea 4 is worth serious consideration for "Potential Impact" specifically — an accessibility feature that benefits the entire existing content catalog is a harder story to beat than a single new app.</p>
 
 
 
