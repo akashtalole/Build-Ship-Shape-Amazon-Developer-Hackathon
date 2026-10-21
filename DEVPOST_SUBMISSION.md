@@ -35,9 +35,9 @@ HomeOps exposes household tools over MCP that Alexa+ chains together:
 
 - **Morning briefing in one call.** `run_morning_briefing` combines today's tasks, who's next for chores, low stock,
   and budget status, then narrates them. One round trip instead of four matters for voice.
-- **Say it however you like.** `capture_note` takes a sentence like "we're almost out of coffee and I need to pick
-  up dry cleaning by Friday" and routes it to the shopping list, a task with a due date, or an expense, so nobody
-  has to know which tool does what.
+- **Say it however you like.** `capture_note` takes one plain sentence ("we're almost out of coffee", "pick up
+  dry cleaning by Friday", "I just spent $120 on groceries") and routes it to the shopping list, a task with a due
+  date, or an expense, so nobody has to know which tool does what.
 - **Asks before spending.** `reorder_item` uses MCP elicitation, so Alexa+ asks the user to confirm before an order
   goes through. Retries are safe because of an idempotency key.
 - **Notices problems on its own.** `get_proactive_alerts` flags one person carrying most of the chores, a budget
@@ -112,6 +112,7 @@ amazon-ecr, aws-iam, docker
 - [ ] **Deploy and connect to the Alexa+ web simulator:** `./deploy/deploy.sh alexa-homeops-mcp` from CloudShell,
       then register `https://<service-url>/mcp`. Record anything that breaks in the friction log.
 - [ ] **Confirm Bedrock model access** for `anthropic.claude-opus-5-5` in the deploy region.
-- [ ] **Record the demo video** (under 3 minutes) on the Alexa+ simulator. Narration script: [`demo/narration.ssml`](./demo/narration.ssml).
+- [ ] **Record the four Alexa+ simulator clips** and run `./demo/assemble.sh`. Narration, cards and assembly are ready;
+      see [`demo/README.md`](./demo/README.md) for exactly what to say in each clip.
 - [ ] **Pick the mini-challenge:** AWS Builder (Bedrock + ECS) or Open Source (public repo). Only one can be won.
 - [ ] Submit before **Oct 23, 2026, 12:00 PM PDT**.

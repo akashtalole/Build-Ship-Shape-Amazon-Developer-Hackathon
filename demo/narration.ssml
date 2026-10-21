@@ -1,89 +1,37 @@
 <speak version="1.0" xml:lang="en-US" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:amazon="http://amazon.com/schemas/ssml-1.0">
 <amazon:domain name="conversational">
 
-<mark name="intro_start"/>
-Most smart-home skills handle one command at a time.
-<break time="300ms"/>
-Ask a real household assistant something bigger —
-<break time="200ms"/>
-<emphasis level="moderate">"what's due this week, and can you reorder anything running low?"</emphasis>
-<break time="300ms"/>
-and it falls apart.
-<break time="400ms"/>
-This is HomeOps: a self-hosted
-<say-as interpret-as="characters">MCP</say-as>
-server built for the Alexa+ track,
-that gives Alexa+ real household tools it can chain together in one turn.
+<mark name="s01_intro"/>
+It's seven in the morning in a busy home. What's due today? What's running low? Are we still on budget? HomeOps is a self-hosted <say-as interpret-as="characters">MCP</say-as> server that lets <sub alias="Alexa plus">Alexa+</sub> answer all of it, and act on it, in one conversation.
+<break time="700ms"/>
 
-<break time="500ms"/>
+<mark name="s02_briefing_lead"/>
+One question gets the whole morning: today's tasks, whose turn it is for chores, what's running low, and the budget, chained into a single tool call.
+<break time="700ms"/>
 
-<mark name="feature_tasks"/>
-Here's a household's open tasks.
-<break time="200ms"/>
-Ask HomeOps to add one, and it fairly assigns it based on who already has the lightest load
-<break time="200ms"/>
-— no one has to argue about whose turn it is.
+<mark name="s04_capture_lead"/>
+Nobody needs to know which tool does what. HomeOps sorts a plain sentence into the shopping list, a task, or an expense.
+<break time="700ms"/>
 
-<break time="500ms"/>
+<mark name="s06_reorder_lead"/>
+Before it spends anything, HomeOps asks. <sub alias="Alexa plus">Alexa+</sub> puts a real confirmation in front of you, and nothing is ordered without a yes.
+<break time="700ms"/>
 
-<mark name="feature_reorder"/>
-Now the shopping list is running low on a few items.
-<break time="300ms"/>
-When Alexa+ tries to reorder one, HomeOps doesn't just spend money silently.
-<break time="200ms"/>
-It uses <say-as interpret-as="characters">MCP</say-as> elicitation
-to have Alexa+ ask the user directly, in real time, before the order goes through.
-<break time="400ms"/>
-That's the protocol-correct way to gate a spending action — not a hidden confirm flag.
+<mark name="s08_alerts_lead"/>
+And it speaks up before problems happen. That grocery run puts the week on pace to blow far past its budget, so HomeOps flags it now, not at the end of the week.
+<break time="700ms"/>
 
-<break time="500ms"/>
+<mark name="s10_aws_arch"/>
+Under the hood, HomeOps runs on Amazon <say-as interpret-as="characters">ECS</say-as> Express Mode, deployed from <say-as interpret-as="characters">AWS</say-as> CloudShell with one command. When a client can't run its own model, it calls Claude on Amazon Bedrock through a least-privilege role.
+<break time="700ms"/>
 
-<mark name="feature_budget"/>
-Log an expense that puts a category on pace to blow its weekly budget,
-<break time="200ms"/>
-and HomeOps flags it before it goes over, not after.
-<break time="300ms"/>
-Ask whether there's anything you should know about,
-<break time="200ms"/>
-and it surfaces what nobody asked:
-one person carrying most of the chores,
-or groceries that have been low for days.
+<mark name="s11_tests"/>
+Every tool is tested end to end against a real <say-as interpret-as="characters">MCP</say-as> client: forty-one checks, including the Bedrock path.
+<break time="700ms"/>
 
-<break time="500ms"/>
-
-<mark name="feature_briefing"/>
-And this is the compound tool:
-<break time="200ms"/>
-<emphasis level="moderate">run morning briefing</emphasis>
-chains tasks, fair assignment, low stock, and budget status into a single call,
-<break time="200ms"/>
-then narrates all of it back in one breath,
-using Alexa's own model when it can,
-<break time="150ms"/>
-or Claude on Amazon Bedrock when it can't.
-<break time="300ms"/>
-One request. One conversation turn. The whole household, handled.
-
-<break time="600ms"/>
-
-<mark name="aws_start"/>
-For the <say-as interpret-as="characters">AWS</say-as> Builder mini-challenge,
-<break time="200ms"/>
-HomeOps deploys from <say-as interpret-as="characters">AWS</say-as> CloudShell to Amazon <say-as interpret-as="characters">ECS</say-as> Express Mode with one command,
-<break time="200ms"/>
-and calls Claude on Amazon Bedrock through a least-privilege role,
-with a fallback model if a request is refused.
-
-<break time="600ms"/>
-
-<mark name="close_start"/>
-Every tool here is real and tested end to end —
-<break time="200ms"/>
-no stubs, no mocked protocol calls.
-<break time="300ms"/>
-HomeOps, for the Alexa+ track.
-<break time="200ms"/>
-Built, shipped, and shaped for the household that actually runs itself.
+<mark name="s12_close"/>
+HomeOps. A household agent that asks before it spends, and speaks up before problems happen.
+<break time="700ms"/>
 
 </amazon:domain>
 </speak>
