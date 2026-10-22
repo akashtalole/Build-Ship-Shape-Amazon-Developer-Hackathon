@@ -27,7 +27,7 @@ export function registerInsightTools(server: McpServer, householdId: string): vo
       description:
         "Generate a short, natural-language weekly household digest (tasks, low stock, budget) " +
         "by asking a language model to narrate the raw data: the connected client's own model via MCP sampling, " +
-        "or Claude on Amazon Bedrock when the client doesn't support sampling.",
+        "or Claude (on Amazon Bedrock or via the Anthropic API) when the client doesn't support sampling.",
       inputSchema: {},
       annotations: { title: "Generate weekly narrative", readOnlyHint: true, openWorldHint: true },
     },

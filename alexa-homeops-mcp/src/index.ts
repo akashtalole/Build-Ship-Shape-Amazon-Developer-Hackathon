@@ -89,5 +89,5 @@ app.get("/healthz", (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`HomeOps MCP server listening on http://localhost:${PORT}/mcp`);
-  console.log(`Tool profile: ${toolProfile}; Bedrock fallback model: ${textModel ? textModel.model : "disabled"}`);
+  console.log(`Tool profile: ${toolProfile}; model fallback: ${textModel ? `${textModel.source} ${textModel.model}` : "disabled"}`);
 });

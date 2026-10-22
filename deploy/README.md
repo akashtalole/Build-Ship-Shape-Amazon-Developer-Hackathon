@@ -76,13 +76,30 @@ An optional second argument sets the AWS region (defaults to whatever `aws confi
 | IAM role `ecsTaskExecutionRole` | shared, **AWS's standard name** | Lets ECS pull images and write logs for task startup |
 | IAM role `ecsInfrastructureRoleForExpressServices` | shared, **AWS's standard name** | Lets Express Mode provision/manage the ALB, target groups, and auto scaling |
 | Auto scaling target `minTaskCount=1, maxTaskCount=1` | per-service | Pins each service to exactly **1** running task |
-| IAM role `hackathon-homeops-bedrock-task-role` | HomeOps only | Task role with the AWS managed policy `AmazonBedrockMantleInferenceAccess`, so the container can call Claude on Amazon Bedrock. Repo-specific name, so `teardown.sh alexa-homeops-mcp` deletes it |
+| IAM role `hackathon-homeops-bedrock-task-role` | HomeOps, Bedrock provider | Task role with the AWS managed policy `AmazonBedrockMantleInferenceAccess`, so the container can call Claude on Amazon Bedrock. Repo-specific name, so `teardown.sh alexa-homeops-mcp` deletes it |
+| IAM role `hackathon-homeops-exec-role` | HomeOps, Anthropic provider | Execution role that can also read the Anthropic API key secret (and nothing else). Deleted by `teardown.sh alexa-homeops-mcp` |
 
 **HomeOps runtime config:** `deploy.sh alexa-homeops-mcp` also passes `HOMEOPS_TOOL_PROFILE=voice` (only the 12
-household tools are visible to Alexa+), `HOMEOPS_USE_BEDROCK=true`, and `AWS_REGION` to the container. Claude on
-Bedrock is only used when the connected MCP client can't sample, and the service still works (with templated
-narration) if the account doesn't have access to the model in that region — see
-[`alexa-homeops-mcp/README.md`](../alexa-homeops-mcp/README.md#language-models-mcp-sampling-first-claude-on-amazon-bedrock-second).
+household tools are visible to Alexa+), `HOMEOPS_LLM_PROVIDER`, and `AWS_REGION` to the container. Claude is only
+called when the connected MCP client can't sample, and the service still works (with templated narration) if the
+provider isn't usable — see
+[`alexa-homeops-mcp/README.md`](../alexa-homeops-mcp/README.md#language-models-mcp-sampling-first-then-claude).
+
+**Using an Anthropic API key instead of Bedrock.** Store the key in AWS Secrets Manager, then deploy with
+`HOMEOPS_LLM_PROVIDER=anthropic`. ECS injects the key into the container as `ANTHROPIC_API_KEY`, so it never
+appears in the task definition, the repo, or your shell history:
+
+```bash
+read -rs -p 'Anthropic API key: ' KEY && echo        # paste the key; it isn't echoed
+aws secretsmanager create-secret --region us-east-1 \
+  --name hackathon/homeops/anthropic-api-key --secret-string "$KEY"
+unset KEY
+HOMEOPS_LLM_PROVIDER=anthropic ./deploy/deploy.sh alexa-homeops-mcp us-east-1
+```
+
+To rotate the key later: `aws secretsmanager put-secret-value --secret-id hackathon/homeops/anthropic-api-key
+--secret-string "$KEY"`, then redeploy so a new task picks it up. `teardown.sh` leaves the secret in place and
+prints the command to delete it.
 
 **Why pinned to 1 instance:** every service in this repo keeps its demo data (passes, game state, flashcards,
 routing metrics) in an in-memory store, the same simplification each service's own README documents. Scaling out

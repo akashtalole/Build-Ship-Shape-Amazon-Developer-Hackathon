@@ -185,7 +185,7 @@ every other tool already shares (no shadow data model, no stubs).
   reordered at all) without being restocked. `export_household_digest` reuses the identical detection function for
   its own "WORTH ATTENTION" section rather than a second copy.
 
-## Language models: MCP sampling first, Claude on Amazon Bedrock second
+## Language models: MCP sampling first, then Claude
 
 Four tools need a language model: `generate_weekly_narrative`, `run_morning_briefing`, `export_household_digest`
 (narration) and `capture_note` (classifying a freeform sentence). They all go through one function,
@@ -193,16 +193,19 @@ Four tools need a language model: `generate_weekly_narrative`, `run_morning_brie
 
 1. **The connected client's own model via MCP sampling.** It costs this server nothing and is the protocol's
    preferred path, so it always wins when the client declares the `sampling` capability.
-2. **Claude on Amazon Bedrock** (`anthropic.claude-opus-5-5` by default), when `HOMEOPS_USE_BEDROCK=true`. This
-   matters because not every MCP client supports sampling. Without it, every one of those tools would fall back to
-   templated text. Calls go through the Bedrock Mantle client (`@anthropic-ai/bedrock-sdk`) with standard AWS
-   credentials, a 20-second timeout (a voice turn can't wait longer), and `effort: "low"` (these are short tasks).
-   A refusal is retried on `anthropic.claude-opus-4-8` via the SDK's refusal-fallback middleware.
-3. **A templated answer** built from the same data, so the tool still responds if neither model is available or
-   Bedrock errors.
+2. **Claude, through one configured provider** (`HOMEOPS_LLM_PROVIDER`). This matters because not every MCP
+   client supports sampling; without it, every one of those tools would fall back to templated text. Both providers
+   use a 20-second timeout (a voice turn can't wait longer) and `effort: "low"` (these are short tasks).
+   - `bedrock`: Claude on Amazon Bedrock (`anthropic.claude-opus-5-5` by default) through the Bedrock Mantle client
+     (`@anthropic-ai/bedrock-sdk`) with standard AWS credentials. A refusal is retried on
+     `anthropic.claude-opus-4-8` via the SDK's refusal-fallback middleware.
+   - `anthropic`: Claude through the Anthropic API (`claude-opus-5-5` by default) with `ANTHROPIC_API_KEY`. A refusal
+     is retried server-side (`fallbacks: "default"`) on the model Anthropic picks for that refusal category.
+3. **A templated answer** built from the same data, so the tool still responds if neither model is available or the
+   provider errors.
 
 `capture_note`'s structured output reports which path classified the note (`classifiedBy`:
-`sampling` / `bedrock` / `fallback`).
+`sampling` / `bedrock` / `anthropic` / `fallback`).
 
 ## Voice tool profile
 
@@ -336,12 +339,15 @@ point it elsewhere (the test suite uses this to isolate itself into a scratch di
 | `PORT` | `3333` | HTTP port |
 | `HOMEOPS_DATA_DIR` | `./data` | Where household JSON files are stored |
 | `HOMEOPS_TOOL_PROFILE` | `full` | `voice` exposes only the 12 household tools (see "Voice tool profile") |
-| `HOMEOPS_USE_BEDROCK` | unset | `true` enables Claude on Amazon Bedrock for clients that can't sample |
+| `HOMEOPS_LLM_PROVIDER` | unset (no model) | `bedrock` or `anthropic`: which Claude provider serves clients that can't sample. `HOMEOPS_USE_BEDROCK=true` is the older spelling of `bedrock` |
 | `HOMEOPS_BEDROCK_MODEL` | `anthropic.claude-opus-5-5` | Bedrock model ID to call |
 | `AWS_REGION` | — | Bedrock region; AWS credentials come from the standard AWS chain (env, profile, or an ECS task role) |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key, for `HOMEOPS_LLM_PROVIDER=anthropic` |
+| `HOMEOPS_ANTHROPIC_MODEL` | `claude-opus-5-5` | Anthropic API model to call |
 
 The Bedrock caller needs the `bedrock-mantle:CreateInference` permission (the AWS managed policy
-`AmazonBedrockMantleInferenceAccess` covers it) and access to the model in that region.
+`AmazonBedrockMantleInferenceAccess` covers it) and access to the model in that region. A misconfigured provider
+(no API key, no region) logs a warning at startup and disables the model fallback rather than stopping the server.
 
 ### Connecting with a bearer token (multi-household)
 

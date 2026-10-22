@@ -91,12 +91,48 @@ ensure_role "$INFRA_ROLE_NAME" "ecs.amazonaws.com" "$INFRA_ROLE_POLICY_ARN" \
 EXEC_ROLE_ARN="$(aws iam get-role --role-name "$EXEC_ROLE_NAME" --query 'Role.Arn' --output text)"
 INFRA_ROLE_ARN="$(aws iam get-role --role-name "$INFRA_ROLE_NAME" --query 'Role.Arn' --output text)"
 
+LLM_PROVIDER="${HOMEOPS_LLM_PROVIDER:-bedrock}"
+case "$LLM_PROVIDER" in
+  bedrock|anthropic) ;;
+  *) echo "HOMEOPS_LLM_PROVIDER must be 'bedrock' or 'anthropic', not '$LLM_PROVIDER'." >&2; exit 1 ;;
+esac
+
 PRIMARY_CONTAINER="image=$ECR_URI:latest,containerPort=$PORT"
-ENV_SPEC="$(service_environment "$SERVICE_DIR" "$REGION")"
+ENV_SPEC="$(service_environment "$SERVICE_DIR" "$REGION" "$LLM_PROVIDER")"
 [ -n "$ENV_SPEC" ] && PRIMARY_CONTAINER="$PRIMARY_CONTAINER,$ENV_SPEC"
 
+if [ "$SERVICE_DIR" = "alexa-homeops-mcp" ] && [ "$LLM_PROVIDER" = "anthropic" ]; then
+  echo "==> Using the Anthropic API key from Secrets Manager secret '$HOMEOPS_ANTHROPIC_SECRET_NAME'"
+  SECRET_ARN="$(aws secretsmanager describe-secret --region "$REGION" --secret-id "$HOMEOPS_ANTHROPIC_SECRET_NAME" \
+    --query ARN --output text 2>/dev/null || true)"
+  if [ -z "$SECRET_ARN" ] || [ "$SECRET_ARN" = "None" ]; then
+    echo "    Secret not found in $REGION. Create it first (the key is read without echoing it):" >&2
+    echo "      read -rs -p 'Anthropic API key: ' KEY && echo" >&2
+    echo "      aws secretsmanager create-secret --region $REGION --name $HOMEOPS_ANTHROPIC_SECRET_NAME --secret-string \"\$KEY\"" >&2
+    echo "      unset KEY" >&2
+    exit 1
+  fi
+  PRIMARY_CONTAINER="$PRIMARY_CONTAINER,secrets=[{name=ANTHROPIC_API_KEY,valueFrom=$SECRET_ARN}]"
+
+  ensure_role "$HOMEOPS_EXEC_ROLE_NAME" "ecs-tasks.amazonaws.com" "$EXEC_ROLE_POLICY_ARN" \
+    "HomeOps-only ECS execution role: pulls the image, writes logs, and reads the Anthropic API key secret"
+  POLICY_JSON="$(mktemp)"
+  cat > "$POLICY_JSON" <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "$SECRET_ARN" }
+  ]
+}
+POLICY
+  aws iam put-role-policy --role-name "$HOMEOPS_EXEC_ROLE_NAME" --policy-name "$HOMEOPS_SECRET_POLICY_NAME" \
+    --policy-document "file://$POLICY_JSON"
+  rm -f "$POLICY_JSON"
+  EXEC_ROLE_ARN="$(aws iam get-role --role-name "$HOMEOPS_EXEC_ROLE_NAME" --query 'Role.Arn' --output text)"
+fi
+
 TASK_ROLE_ARGS=()
-TASK_ROLE_NAME="$(service_task_role "$SERVICE_DIR")"
+TASK_ROLE_NAME="$(service_task_role "$SERVICE_DIR" "$LLM_PROVIDER")"
 if [ -n "$TASK_ROLE_NAME" ]; then
   echo "==> Ensuring task role '$TASK_ROLE_NAME' (lets the container call Claude on Amazon Bedrock)"
   ensure_role "$TASK_ROLE_NAME" "ecs-tasks.amazonaws.com" "$BEDROCK_INFERENCE_POLICY_ARN" \
@@ -137,6 +173,7 @@ else
   aws ecs update-express-gateway-service \
     --region "$REGION" \
     --service-arn "$EXISTING_ARN" \
+    --execution-role-arn "$EXEC_ROLE_ARN" \
     ${TASK_ROLE_ARGS[@]+"${TASK_ROLE_ARGS[@]}"} \
     --primary-container "$PRIMARY_CONTAINER" \
     > "$RESULT_JSON"
