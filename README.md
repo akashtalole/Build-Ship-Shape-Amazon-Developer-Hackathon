@@ -8,7 +8,7 @@ for a navigable version of everything below.
 
 **[`alexa-homeops-mcp/`](./alexa-homeops-mcp)** is this repo's submission: a self-hosted MCP server (spec
 2025-11-25, Streamable HTTP) that lets Alexa+ run a household in one conversation — morning briefing, freeform
-capture ("we're out of coffee and I need dry cleaning by Friday"), elicitation-gated reordering, proactive alerts,
+capture ("we're almost out of coffee"), elicitation-gated reordering, proactive alerts,
 and meal planning. Mini-challenge: **AWS Builder**, via Claude on Amazon Bedrock for clients that can't sample and a
 one-command deploy to Amazon ECS Express Mode.
 

@@ -168,7 +168,7 @@ every other tool already shares (no shadow data model, no stubs).
   `assignee` the moment it completes, into a running per-member balance that accumulates until explicitly paid out.
   Ties the chore-rotation system and the expense-tracking concept together in a way neither does alone.
 - **Freeform capture / dispatcher tool (`capture_note`).** The front door for one unstructured sentence a household
-  member might actually say to Alexa+ — "we're almost out of coffee and I need to pick up dry cleaning by Friday" —
+  member might actually say to Alexa+ — "we're almost out of coffee", "pick up dry cleaning by Friday" —
   instead of requiring the caller to already know which of `add_task`/`reorder_item`/`add_expense` to call. Uses the
   exact same MCP-sampling pattern `generate_weekly_narrative` already uses (no bundled model key) to ask the
   connected client's own model to classify the note as strict JSON (shopping/task/expense), then dispatches into the
@@ -427,7 +427,7 @@ secret.
 // tools/call get_allowance_balance {}                       // every member's balance
 // tools/call record_allowance_payout { "member": "Jordan" } // pays out (and zeroes) the full balance
 
-// tools/call capture_note { "text": "we're almost out of coffee and I need to pick up dry cleaning by Friday" }
+// tools/call capture_note { "text": "I need to pick up dry cleaning by Friday" }
 // -> classifies via MCP sampling and routes to reportLowStock/addTask/addExpense; structuredContent names
 //    which one (routedTo) and whether sampling was actually used (usedSampling)
 
@@ -500,8 +500,8 @@ npx @modelcontextprotocol/inspector
    - "What should we eat for the next few days?" (`suggest_meal_plan` — uses up what's running low, fits the budget)
    - "The trash chore is worth two dollars" → *(kid takes out the trash, marks it done)* → "How much have I earned?"
      (`set_task_reward` → `mark_task_done` credits it → `get_allowance_balance` / `record_allowance_payout` to settle up)
-   - "We're almost out of coffee and I need to pick up dry cleaning by Friday" (`capture_note` — one sentence, no
-     need to say which tool handles it)
+   - "We're almost out of coffee", then "I need to pick up dry cleaning by Friday" (`capture_note` — one note per
+     sentence, no need to say which tool handles it)
    - "Is there anything I should know about?" (`get_proactive_alerts` — surfaces what nobody explicitly asked about)
 
 ## Verifying resumability by hand
