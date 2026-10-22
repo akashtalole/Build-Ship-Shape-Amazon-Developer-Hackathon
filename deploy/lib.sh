@@ -27,28 +27,35 @@ INFRA_ROLE_NAME="ecsInfrastructureRoleForExpressServices"
 EXEC_ROLE_POLICY_ARN="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 INFRA_ROLE_POLICY_ARN="arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices"
 
-# Per-service runtime config. HomeOps runs the trimmed voice tool profile and
-# falls back to Claude on Amazon Bedrock when an MCP client can't sample, so it
-# needs container env vars plus a task role allowed to call Bedrock. Unlike the
-# two roles above, this role name is specific to this repo, so teardown.sh
-# removes it along with the service.
+# Per-service runtime config. HomeOps runs the trimmed voice tool profile and,
+# when an MCP client can't sample, falls back to Claude through one provider
+# (HOMEOPS_LLM_PROVIDER at deploy time):
+#   bedrock   (default) Claude on Amazon Bedrock, via a task role allowed to call it
+#   anthropic Claude via the Anthropic API; the key is read from Secrets Manager
+#             secret $HOMEOPS_ANTHROPIC_SECRET_NAME by a HomeOps-only execution role
+# These role names are specific to this repo, so teardown.sh removes them.
 HOMEOPS_TASK_ROLE_NAME="hackathon-homeops-bedrock-task-role"
+HOMEOPS_EXEC_ROLE_NAME="hackathon-homeops-exec-role"
+HOMEOPS_SECRET_POLICY_NAME="read-anthropic-api-key"
+HOMEOPS_ANTHROPIC_SECRET_NAME="hackathon/homeops/anthropic-api-key"
 BEDROCK_INFERENCE_POLICY_ARN="arn:aws:iam::aws:policy/AmazonBedrockMantleInferenceAccess"
 
 # Prints the --primary-container `environment=[...]` fragment for a service, or nothing.
 service_environment() {
-  local service_dir="$1" region="$2"
+  local service_dir="$1" region="$2" provider="$3"
   case "$service_dir" in
     alexa-homeops-mcp)
-      echo "environment=[{name=HOMEOPS_TOOL_PROFILE,value=voice},{name=HOMEOPS_USE_BEDROCK,value=true},{name=AWS_REGION,value=$region}]" ;;
+      echo "environment=[{name=HOMEOPS_TOOL_PROFILE,value=voice},{name=HOMEOPS_LLM_PROVIDER,value=$provider},{name=AWS_REGION,value=$region}]" ;;
   esac
 }
 
 # Prints the task role name a service's container needs at runtime, or nothing.
 service_task_role() {
-  case "$1" in
-    alexa-homeops-mcp) echo "$HOMEOPS_TASK_ROLE_NAME" ;;
+  local service_dir="$1" provider="$2"
+  case "$service_dir" in
+    alexa-homeops-mcp) [ "$provider" = "bedrock" ] && echo "$HOMEOPS_TASK_ROLE_NAME" ;;
   esac
+  return 0
 }
 
 require_cmd() {
@@ -98,13 +105,14 @@ EOF
 # JSON response. ECS Express Mode is a very new API (announced re:Invent
 # 2025) and its exact response field name for the assigned domain wasn't
 # consistently documented at the time this script was written, so this
-# scans for *any* key containing "url" (case-insensitive) rather than
-# hardcoding one field name that might not match your CLI version.
+# scans for an "endpoint" key (where the CLI reference documents it:
+# service.activeConfigurations[].ingressPaths[].endpoint) or any key
+# containing "url", rather than hardcoding one exact path.
 extract_url_field() {
   local json_file="$1"
   if command -v jq >/dev/null 2>&1; then
-    jq -r '.. | objects | to_entries[]? | select(.key | test("url"; "i")) | .value' "$json_file" 2>/dev/null | grep -v '^null$' | head -1
+    jq -r '.. | objects | to_entries[]? | select(.key | test("^endpoint$|url"; "i")) | .value | strings' "$json_file" 2>/dev/null | grep -v '^null$' | head -1 || true
   else
-    grep -oE '"[A-Za-z]*[Uu]rl"[[:space:]]*:[[:space:]]*"[^"]*"' "$json_file" | head -1 | sed -E 's/.*"([^"]*)"$/\1/'
+    grep -oE '"([A-Za-z]*[Uu]rl|endpoint)"[[:space:]]*:[[:space:]]*"[^"]*"' "$json_file" | head -1 | sed -E 's/.*"([^"]*)"$/\1/' || true
   fi
 }

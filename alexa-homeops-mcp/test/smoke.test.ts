@@ -34,7 +34,15 @@ import {
 import { createHomeOpsServer } from "../src/server.js";
 import { InMemoryEventStore } from "../src/eventStore.js";
 import { extractBearerToken, resolveAccess } from "../src/auth.js";
-import { BEDROCK_FALLBACK_MODEL, BedrockTextModel, DEFAULT_BEDROCK_MODEL, setTextModel } from "../src/llm.js";
+import {
+  AnthropicTextModel,
+  BEDROCK_FALLBACK_MODEL,
+  BedrockTextModel,
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_BEDROCK_MODEL,
+  configureTextModelFromEnv,
+  setTextModel,
+} from "../src/llm.js";
 import { VOICE_PROFILE_TOOLS, type ToolProfile } from "../src/toolProfile.js";
 
 // Isolate this test run's persisted household data from real usage and from
@@ -864,6 +872,42 @@ async function main() {
 
   await bedrockClient.close();
   setTextModel(null);
+
+  // --- Claude via the Anthropic API (API-key deployments) ---
+  const anthropicApi = fakeBedrock();
+  setTextModel(
+    new AnthropicTextModel({ apiKey: "sk-ant-test-key", baseURL: "https://anthropic.test", fetch: anthropicApi.fetch })
+  );
+  const { client: apiClient } = await connectClient(baseUrl, `anthropic-${randomUUID()}`, { sampling: false });
+  const apiCapture = await apiClient.callTool({ name: "capture_note", arguments: { text: "We're out of dish soap" } });
+  const apiCaptureData = apiCapture.structuredContent as any;
+  assert.equal(apiCaptureData.routedTo, "shopping");
+  assert.equal(apiCaptureData.classifiedBy, "anthropic");
+  const apiRequest = anthropicApi.requests[0];
+  assert.match(apiRequest.url, /^https:\/\/anthropic\.test\/v1\/messages/);
+  assert.equal(apiRequest.headers.get("x-api-key"), "sk-ant-test-key");
+  assert.match(apiRequest.headers.get("anthropic-beta") ?? "", /server-side-fallback-2026-07-01/);
+  assert.equal(apiRequest.body.model, DEFAULT_ANTHROPIC_MODEL);
+  assert.equal(apiRequest.body.fallbacks, "default");
+  assert.equal(apiRequest.body.output_config.effort, "low");
+  await apiClient.close();
+  setTextModel(null);
+  console.log("✓ capture_note classifies via Claude on the Anthropic API (API key, server-side refusal fallback) when configured");
+
+  const quiet = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal(configureTextModelFromEnv({ HOMEOPS_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "k" })?.source, "anthropic");
+    assert.equal(configureTextModelFromEnv({ HOMEOPS_LLM_PROVIDER: "anthropic" }), null);
+    assert.equal(configureTextModelFromEnv({ HOMEOPS_LLM_PROVIDER: "bedrock", AWS_REGION: "us-east-1" })?.source, "bedrock");
+    assert.equal(configureTextModelFromEnv({ HOMEOPS_USE_BEDROCK: "true", AWS_REGION: "us-east-1" })?.source, "bedrock");
+    assert.equal(configureTextModelFromEnv({ HOMEOPS_LLM_PROVIDER: "bedrock" }), null);
+    assert.equal(configureTextModelFromEnv({}), null);
+  } finally {
+    console.warn = quiet;
+    setTextModel(null);
+  }
+  console.log("✓ HOMEOPS_LLM_PROVIDER selects the Anthropic API or Bedrock, and a missing API key or region disables the fallback instead of crashing");
 
   // --- Voice tool profile ---
   const voiceServer = startServer("voice");

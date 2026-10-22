@@ -24,8 +24,8 @@ run behind a URL. See its own README for installation instead.
 
 > **A note on how new this is:** ECS Express Mode is a very new AWS API surface, and its exact CLI response shape
 > wasn't consistently documented everywhere at the time these scripts were written. `deploy.sh` extracts the
-> service URL defensively (scanning the response for any field that looks like a URL, rather than assuming one
-> exact key name) and always prints where to find the real service in the AWS Console as a fallback. If the AWS
+> service URL defensively (the `endpoint` field the CLI reference documents, or any field that looks like a URL)
+> and always prints where to find the real service in the AWS Console as a fallback. If the AWS
 > CLI's behavior has since diverged from what's here, `aws ecs create-express-gateway-service help` is the source
 > of truth — please open an issue/PR if you hit a mismatch.
 
@@ -55,8 +55,9 @@ cd Build-Ship-Shape-Amazon-Developer-Hackathon
 ```
 
 Each `deploy.sh` run builds the service's Docker image, pushes it to a per-service ECR repository, and creates (or
-updates) an ECS Express Mode service for it, printing the assigned URL when done — typically 3-5 minutes per
-service, mostly Express Mode's own provisioning time (the ALB, target group, and auto scaling policy it creates).
+updates) an ECS Express Mode service for it, waits for the service to become stable, then prints the assigned URL
+— typically 3-5 minutes per service, mostly Express Mode's own provisioning time (the ALB, target group, and auto
+scaling policy it creates). The shared `hackathon-express` cluster is created on the first run.
 
 An optional second argument sets the AWS region (defaults to whatever `aws configure get region` returns, or
 `us-east-1`):
@@ -75,13 +76,30 @@ An optional second argument sets the AWS region (defaults to whatever `aws confi
 | IAM role `ecsTaskExecutionRole` | shared, **AWS's standard name** | Lets ECS pull images and write logs for task startup |
 | IAM role `ecsInfrastructureRoleForExpressServices` | shared, **AWS's standard name** | Lets Express Mode provision/manage the ALB, target groups, and auto scaling |
 | Auto scaling target `minTaskCount=1, maxTaskCount=1` | per-service | Pins each service to exactly **1** running task |
-| IAM role `hackathon-homeops-bedrock-task-role` | HomeOps only | Task role with the AWS managed policy `AmazonBedrockMantleInferenceAccess`, so the container can call Claude on Amazon Bedrock. Repo-specific name, so `teardown.sh alexa-homeops-mcp` deletes it |
+| IAM role `hackathon-homeops-bedrock-task-role` | HomeOps, Bedrock provider | Task role with the AWS managed policy `AmazonBedrockMantleInferenceAccess`, so the container can call Claude on Amazon Bedrock. Repo-specific name, so `teardown.sh alexa-homeops-mcp` deletes it |
+| IAM role `hackathon-homeops-exec-role` | HomeOps, Anthropic provider | Execution role that can also read the Anthropic API key secret (and nothing else). Deleted by `teardown.sh alexa-homeops-mcp` |
 
 **HomeOps runtime config:** `deploy.sh alexa-homeops-mcp` also passes `HOMEOPS_TOOL_PROFILE=voice` (only the 12
-household tools are visible to Alexa+), `HOMEOPS_USE_BEDROCK=true`, and `AWS_REGION` to the container. Claude on
-Bedrock is only used when the connected MCP client can't sample, and the service still works (with templated
-narration) if the account doesn't have access to the model in that region — see
-[`alexa-homeops-mcp/README.md`](../alexa-homeops-mcp/README.md#language-models-mcp-sampling-first-claude-on-amazon-bedrock-second).
+household tools are visible to Alexa+), `HOMEOPS_LLM_PROVIDER`, and `AWS_REGION` to the container. Claude is only
+called when the connected MCP client can't sample, and the service still works (with templated narration) if the
+provider isn't usable — see
+[`alexa-homeops-mcp/README.md`](../alexa-homeops-mcp/README.md#language-models-mcp-sampling-first-then-claude).
+
+**Using an Anthropic API key instead of Bedrock.** Store the key in AWS Secrets Manager, then deploy with
+`HOMEOPS_LLM_PROVIDER=anthropic`. ECS injects the key into the container as `ANTHROPIC_API_KEY`, so it never
+appears in the task definition, the repo, or your shell history:
+
+```bash
+read -rs -p 'Anthropic API key: ' KEY && echo        # paste the key; it isn't echoed
+aws secretsmanager create-secret --region us-east-1 \
+  --name hackathon/homeops/anthropic-api-key --secret-string "$KEY"
+unset KEY
+HOMEOPS_LLM_PROVIDER=anthropic ./deploy/deploy.sh alexa-homeops-mcp us-east-1
+```
+
+To rotate the key later: `aws secretsmanager put-secret-value --secret-id hackathon/homeops/anthropic-api-key
+--secret-string "$KEY"`, then redeploy so a new task picks it up. `teardown.sh` leaves the secret in place and
+prints the command to delete it.
 
 **Why pinned to 1 instance:** every service in this repo keeps its demo data (passes, game state, flashcards,
 routing metrics) in an in-memory store, the same simplification each service's own README documents. Scaling out
@@ -152,6 +170,6 @@ Each deployable service also has its own `Dockerfile` and `.dockerignore` (a sta
   identity can't create roles, ask an account admin to create both once (trust policies and policy ARNs are in
   `deploy/lib.sh`'s `ensure_role` calls) and rerun `deploy.sh` — it will detect and reuse the existing roles.
 - **Can't find the service URL in the terminal output** — `deploy.sh` does a best-effort scan of the CLI response
-  for anything URL-shaped (see the note at the top of this file on why). If it comes up empty, check the AWS
+  for the `endpoint` field or anything URL-shaped (see the note at the top of this file on why). If it comes up empty, check the AWS
   Console: ECS → Clusters → `hackathon-express` → Services → the service name, or run
   `aws ecs describe-services --cluster hackathon-express --services <service-name>` yourself.

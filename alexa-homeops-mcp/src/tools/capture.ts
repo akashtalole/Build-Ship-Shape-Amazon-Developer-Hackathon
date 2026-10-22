@@ -46,7 +46,7 @@ function extractJson(text: string): unknown | undefined {
   }
 }
 
-type ClassifiedBy = "sampling" | "bedrock" | "fallback";
+type ClassifiedBy = "sampling" | "bedrock" | "anthropic" | "fallback";
 
 async function classifyNote(server: McpServer, text: string): Promise<{ classification: Classification; by: ClassifiedBy } | undefined> {
   const generated = await generateText(
@@ -78,7 +78,7 @@ export function registerCaptureTools(server: McpServer, notify: NotifyFn, househ
       description:
         "Capture one freeform sentence a household member might say — 'we're almost out of coffee and I need to " +
         "pick up dry cleaning by Friday' — without the caller needing to know which tool handles it. Uses a " +
-        "language model (the client's own via MCP sampling, else Claude on Amazon Bedrock) to classify the note as a shopping-list item, a task (with a due date if one was mentioned), or " +
+        "language model (the client's own via MCP sampling, else Claude on Amazon Bedrock or via the Anthropic API) to classify the note as a shopping-list item, a task (with a due date if one was mentioned), or " +
         "an expense to log, then routes it into the matching existing tool's own storage. Prefer this over " +
         "add_task/reorder_item/add_expense directly when the input is an unstructured sentence rather than " +
         "already-separated fields. Falls back to treating the whole sentence as a task if no model is available.",
@@ -88,7 +88,7 @@ export function registerCaptureTools(server: McpServer, notify: NotifyFn, househ
       outputSchema: {
         routedTo: z.enum(["shopping", "task", "expense"]),
         usedSampling: z.boolean(),
-        classifiedBy: z.enum(["sampling", "bedrock", "fallback"]),
+        classifiedBy: z.enum(["sampling", "bedrock", "anthropic", "fallback"]),
         itemId: z.string().optional(),
         itemName: z.string().optional(),
         taskId: z.string().optional(),

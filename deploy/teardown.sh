@@ -43,7 +43,7 @@ SERVICE_ARN="$(aws ecs describe-services --region "$REGION" --cluster "$CLUSTER_
 if [ "$SERVICE_ARN" != "None" ] && [ -n "$SERVICE_ARN" ] && [ "$SERVICE_ARN" != "null" ]; then
   echo "==> Deleting ECS Express service (this also removes its ALB target group, listener rule,"
   echo "    security group, and auto-scaling policy — usually a couple of minutes)"
-  aws ecs delete-express-gateway-service --region "$REGION" --service-arn "$SERVICE_ARN" --monitor-mode TEXT-ONLY
+  aws ecs delete-express-gateway-service --region "$REGION" --service-arn "$SERVICE_ARN" >/dev/null
 else
   echo "==> No ECS Express service named '$APP_NAME' found in cluster '$CLUSTER_NAME' — skipping"
 fi
@@ -55,12 +55,24 @@ else
   echo "    no ECR repository named '$ECR_REPO' found — skipping"
 fi
 
-TASK_ROLE_NAME="$(service_task_role "$SERVICE_DIR")"
-if [ -n "$TASK_ROLE_NAME" ] && aws iam get-role --role-name "$TASK_ROLE_NAME" >/dev/null 2>&1; then
-  echo "==> Deleting this service's own task role '$TASK_ROLE_NAME'"
-  aws iam detach-role-policy --role-name "$TASK_ROLE_NAME" --policy-arn "$BEDROCK_INFERENCE_POLICY_ARN" >/dev/null 2>&1 || true
-  aws iam delete-role --role-name "$TASK_ROLE_NAME" >/dev/null
-  echo "    deleted"
+if [ "$SERVICE_DIR" = "alexa-homeops-mcp" ]; then
+  if aws iam get-role --role-name "$HOMEOPS_TASK_ROLE_NAME" >/dev/null 2>&1; then
+    echo "==> Deleting this service's own task role '$HOMEOPS_TASK_ROLE_NAME'"
+    aws iam detach-role-policy --role-name "$HOMEOPS_TASK_ROLE_NAME" --policy-arn "$BEDROCK_INFERENCE_POLICY_ARN" >/dev/null 2>&1 || true
+    aws iam delete-role --role-name "$HOMEOPS_TASK_ROLE_NAME" >/dev/null
+    echo "    deleted"
+  fi
+  if aws iam get-role --role-name "$HOMEOPS_EXEC_ROLE_NAME" >/dev/null 2>&1; then
+    echo "==> Deleting this service's own execution role '$HOMEOPS_EXEC_ROLE_NAME'"
+    aws iam delete-role-policy --role-name "$HOMEOPS_EXEC_ROLE_NAME" --policy-name "$HOMEOPS_SECRET_POLICY_NAME" >/dev/null 2>&1 || true
+    aws iam detach-role-policy --role-name "$HOMEOPS_EXEC_ROLE_NAME" --policy-arn "$EXEC_ROLE_POLICY_ARN" >/dev/null 2>&1 || true
+    aws iam delete-role --role-name "$HOMEOPS_EXEC_ROLE_NAME" >/dev/null
+    echo "    deleted"
+  fi
+  if aws secretsmanager describe-secret --region "$REGION" --secret-id "$HOMEOPS_ANTHROPIC_SECRET_NAME" >/dev/null 2>&1; then
+    echo "==> Left the Anthropic API key secret '$HOMEOPS_ANTHROPIC_SECRET_NAME' in place. Delete it with:"
+    echo "    aws secretsmanager delete-secret --region $REGION --secret-id $HOMEOPS_ANTHROPIC_SECRET_NAME --force-delete-without-recovery"
+  fi
 fi
 
 echo ""
