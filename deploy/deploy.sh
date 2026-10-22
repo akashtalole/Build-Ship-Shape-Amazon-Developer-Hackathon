@@ -77,10 +77,15 @@ aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com" >/dev/null
 
 echo "==> Building image (this reads $SERVICE_DIR/Dockerfile)"
-docker build -t "$ECR_REPO:latest" "$SERVICE_PATH"
-docker tag "$ECR_REPO:latest" "$ECR_URI:latest"
+# A unique tag per deploy: re-using one tag (e.g. :latest) leaves the service config
+# unchanged after a code-only change, so ECS may never roll out the new image.
+IMAGE_TAG="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo build)-$(date -u +%Y%m%d%H%M%S)"
+docker build -t "$ECR_REPO:$IMAGE_TAG" "$SERVICE_PATH"
+docker tag "$ECR_REPO:$IMAGE_TAG" "$ECR_URI:$IMAGE_TAG"
+docker tag "$ECR_REPO:$IMAGE_TAG" "$ECR_URI:latest"
 
 echo "==> Pushing image to ECR"
+docker push "$ECR_URI:$IMAGE_TAG"
 docker push "$ECR_URI:latest"
 
 echo "==> Ensuring the two IAM roles ECS Express Mode requires exist"
@@ -97,7 +102,7 @@ case "$LLM_PROVIDER" in
   *) echo "HOMEOPS_LLM_PROVIDER must be 'bedrock' or 'anthropic', not '$LLM_PROVIDER'." >&2; exit 1 ;;
 esac
 
-PRIMARY_CONTAINER="image=$ECR_URI:latest,containerPort=$PORT"
+PRIMARY_CONTAINER="image=$ECR_URI:$IMAGE_TAG,containerPort=$PORT"
 ENV_SPEC="$(service_environment "$SERVICE_DIR" "$REGION" "$LLM_PROVIDER")"
 [ -n "$ENV_SPEC" ] && PRIMARY_CONTAINER="$PRIMARY_CONTAINER,$ENV_SPEC"
 
@@ -183,7 +188,15 @@ echo "==> Waiting for the service to become stable (up to ~10 minutes)"
 if aws ecs wait services-stable --region "$REGION" --cluster "$CLUSTER_NAME" --services "$APP_NAME"; then
   echo "    stable"
 else
-  echo "    not stable yet; it may still be provisioning. Check the ECS console before testing."
+  echo "    not stable yet; it may still be provisioning, or the new task may be failing to start."
+  echo "    Recent stopped tasks (empty is good):"
+  STOPPED="$(aws ecs list-tasks --region "$REGION" --cluster "$CLUSTER_NAME" --service-name "$APP_NAME" \
+    --desired-status STOPPED --query 'taskArns[0:3]' --output text 2>/dev/null || true)"
+  if [ -n "$STOPPED" ] && [ "$STOPPED" != "None" ]; then
+    # shellcheck disable=SC2086
+    aws ecs describe-tasks --region "$REGION" --cluster "$CLUSTER_NAME" --tasks $STOPPED \
+      --query 'tasks[].[stoppedAt,stoppedReason]' --output text 2>/dev/null | sed 's/^/      /' || true
+  fi
 fi
 
 echo ""
