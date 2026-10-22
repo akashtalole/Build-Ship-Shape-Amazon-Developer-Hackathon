@@ -24,8 +24,8 @@ run behind a URL. See its own README for installation instead.
 
 > **A note on how new this is:** ECS Express Mode is a very new AWS API surface, and its exact CLI response shape
 > wasn't consistently documented everywhere at the time these scripts were written. `deploy.sh` extracts the
-> service URL defensively (scanning the response for any field that looks like a URL, rather than assuming one
-> exact key name) and always prints where to find the real service in the AWS Console as a fallback. If the AWS
+> service URL defensively (the `endpoint` field the CLI reference documents, or any field that looks like a URL)
+> and always prints where to find the real service in the AWS Console as a fallback. If the AWS
 > CLI's behavior has since diverged from what's here, `aws ecs create-express-gateway-service help` is the source
 > of truth — please open an issue/PR if you hit a mismatch.
 
@@ -55,8 +55,9 @@ cd Build-Ship-Shape-Amazon-Developer-Hackathon
 ```
 
 Each `deploy.sh` run builds the service's Docker image, pushes it to a per-service ECR repository, and creates (or
-updates) an ECS Express Mode service for it, printing the assigned URL when done — typically 3-5 minutes per
-service, mostly Express Mode's own provisioning time (the ALB, target group, and auto scaling policy it creates).
+updates) an ECS Express Mode service for it, waits for the service to become stable, then prints the assigned URL
+— typically 3-5 minutes per service, mostly Express Mode's own provisioning time (the ALB, target group, and auto
+scaling policy it creates). The shared `hackathon-express` cluster is created on the first run.
 
 An optional second argument sets the AWS region (defaults to whatever `aws configure get region` returns, or
 `us-east-1`):
@@ -152,6 +153,6 @@ Each deployable service also has its own `Dockerfile` and `.dockerignore` (a sta
   identity can't create roles, ask an account admin to create both once (trust policies and policy ARNs are in
   `deploy/lib.sh`'s `ensure_role` calls) and rerun `deploy.sh` — it will detect and reuse the existing roles.
 - **Can't find the service URL in the terminal output** — `deploy.sh` does a best-effort scan of the CLI response
-  for anything URL-shaped (see the note at the top of this file on why). If it comes up empty, check the AWS
+  for the `endpoint` field or anything URL-shaped (see the note at the top of this file on why). If it comes up empty, check the AWS
   Console: ECS → Clusters → `hackathon-express` → Services → the service name, or run
   `aws ecs describe-services --cluster hackathon-express --services <service-name>` yourself.

@@ -98,13 +98,14 @@ EOF
 # JSON response. ECS Express Mode is a very new API (announced re:Invent
 # 2025) and its exact response field name for the assigned domain wasn't
 # consistently documented at the time this script was written, so this
-# scans for *any* key containing "url" (case-insensitive) rather than
-# hardcoding one field name that might not match your CLI version.
+# scans for an "endpoint" key (where the CLI reference documents it:
+# service.activeConfigurations[].ingressPaths[].endpoint) or any key
+# containing "url", rather than hardcoding one exact path.
 extract_url_field() {
   local json_file="$1"
   if command -v jq >/dev/null 2>&1; then
-    jq -r '.. | objects | to_entries[]? | select(.key | test("url"; "i")) | .value' "$json_file" 2>/dev/null | grep -v '^null$' | head -1
+    jq -r '.. | objects | to_entries[]? | select(.key | test("^endpoint$|url"; "i")) | .value | strings' "$json_file" 2>/dev/null | grep -v '^null$' | head -1 || true
   else
-    grep -oE '"[A-Za-z]*[Uu]rl"[[:space:]]*:[[:space:]]*"[^"]*"' "$json_file" | head -1 | sed -E 's/.*"([^"]*)"$/\1/'
+    grep -oE '"([A-Za-z]*[Uu]rl|endpoint)"[[:space:]]*:[[:space:]]*"[^"]*"' "$json_file" | head -1 | sed -E 's/.*"([^"]*)"$/\1/' || true
   fi
 }

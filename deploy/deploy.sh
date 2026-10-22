@@ -105,6 +105,13 @@ if [ -n "$TASK_ROLE_NAME" ]; then
 fi
 RESULT_JSON="$(mktemp)"
 
+echo "==> Ensuring ECS cluster '$CLUSTER_NAME' exists"
+if [ -z "$(aws ecs describe-clusters --region "$REGION" --clusters "$CLUSTER_NAME" \
+      --query "clusters[?status=='ACTIVE'].clusterName" --output text 2>/dev/null)" ]; then
+  aws ecs create-cluster --region "$REGION" --cluster-name "$CLUSTER_NAME" >/dev/null
+  echo "    created"
+fi
+
 # Express Mode services are still ordinary ECS services under the hood, so
 # `describe-services` is how we detect "does this already exist" — a fresh
 # deploy creates it, a redeploy updates it in place with the new image.
@@ -124,7 +131,6 @@ if [ "$EXISTING_ARN" = "None" ] || [ -z "$EXISTING_ARN" ] || [ "$EXISTING_ARN" =
     --primary-container "$PRIMARY_CONTAINER" \
     --health-check-path "/healthz" \
     --scaling-target "minTaskCount=1,maxTaskCount=1" \
-    --monitor-mode TEXT-ONLY \
     > "$RESULT_JSON"
 else
   echo "==> Service already exists — deploying the new image to it"
@@ -133,8 +139,14 @@ else
     --service-arn "$EXISTING_ARN" \
     ${TASK_ROLE_ARGS[@]+"${TASK_ROLE_ARGS[@]}"} \
     --primary-container "$PRIMARY_CONTAINER" \
-    --monitor-mode TEXT-ONLY \
     > "$RESULT_JSON"
+fi
+
+echo "==> Waiting for the service to become stable (up to ~10 minutes)"
+if aws ecs wait services-stable --region "$REGION" --cluster "$CLUSTER_NAME" --services "$APP_NAME"; then
+  echo "    stable"
+else
+  echo "    not stable yet; it may still be provisioning. Check the ECS console before testing."
 fi
 
 echo ""
@@ -142,8 +154,9 @@ echo "==> Deploy call finished. Full response saved to: $RESULT_JSON"
 
 SERVICE_URL="$(extract_url_field "$RESULT_JSON")"
 if [ -n "$SERVICE_URL" ]; then
+  case "$SERVICE_URL" in http*) ;; *) SERVICE_URL="https://$SERVICE_URL" ;; esac
   echo "==> Service URL (best-effort extraction — verify against the ECS console if this looks wrong):"
-  echo "    https://$SERVICE_URL"
+  echo "    $SERVICE_URL"
 else
   echo "==> Couldn't auto-extract a URL from the response (see $RESULT_JSON)."
   echo "    Find it in the AWS Console: ECS -> Clusters -> $CLUSTER_NAME -> Services -> $APP_NAME"

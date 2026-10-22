@@ -43,7 +43,7 @@ SERVICE_ARN="$(aws ecs describe-services --region "$REGION" --cluster "$CLUSTER_
 if [ "$SERVICE_ARN" != "None" ] && [ -n "$SERVICE_ARN" ] && [ "$SERVICE_ARN" != "null" ]; then
   echo "==> Deleting ECS Express service (this also removes its ALB target group, listener rule,"
   echo "    security group, and auto-scaling policy — usually a couple of minutes)"
-  aws ecs delete-express-gateway-service --region "$REGION" --service-arn "$SERVICE_ARN" --monitor-mode TEXT-ONLY
+  aws ecs delete-express-gateway-service --region "$REGION" --service-arn "$SERVICE_ARN" >/dev/null
 else
   echo "==> No ECS Express service named '$APP_NAME' found in cluster '$CLUSTER_NAME' — skipping"
 fi
