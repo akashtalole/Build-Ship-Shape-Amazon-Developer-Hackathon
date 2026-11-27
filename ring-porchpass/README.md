@@ -618,6 +618,8 @@ curl -X POST localhost:4444/neighborhood/subscribers -H "Content-Type: applicati
 curl localhost:4444/neighborhood/alerts   # the broadcast log, for observability
 ```
 
+## Swapping in the real Ring API
+
 Everything in `src/passService.ts` and `src/server.ts` is Ring-agnostic — it only depends on the `RingClient`
 interface (`getRecentEvents`, `emitEvent`) in `src/ringClient.ts`. To go from simulator to production:
 
