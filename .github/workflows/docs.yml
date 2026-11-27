@@ -10,6 +10,8 @@ on:
       - "requirements-docs.txt"
       - "hackathon-ideas/**"
       - "*/README.md"
+      - "*/FRICTION_LOG.md"
+      - "kiro/**"
       - "DEVPOST_SUBMISSION.md"
       - ".github/workflows/docs.yml"
   workflow_dispatch: {}

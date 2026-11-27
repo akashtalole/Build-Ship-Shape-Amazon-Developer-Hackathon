@@ -1,5 +1,5 @@
 site_name: Build, Ship, Shape — Amazon Developer Hackathon
-site_description: Six category implementations for the Build, Ship, Shape Amazon Developer Hackathon.
+site_description: Every solution built for the Build, Ship, Shape Amazon Developer Hackathon, with ideas, friction logs, deployment and tooling.
 site_url: https://akashtalole.github.io/Build-Ship-Shape-Amazon-Developer-Hackathon/
 repo_url: https://github.com/akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
 repo_name: akashtalole/Build-Ship-Shape-Amazon-Developer-Hackathon
@@ -24,6 +24,8 @@ theme:
     - navigation.tabs
     - navigation.sections
     - navigation.top
+    - navigation.indexes
+    - search.suggest
     - content.code.copy
     - toc.follow
 
@@ -37,16 +39,31 @@ nav:
       - Ring: ideas/ring.md
       - AWS Builder: ideas/aws-builder.md
       - Open Source: ideas/open-source.md
-  - Projects:
-      - HomeOps (Alexa+): projects/homeops.md
-      - PorchPass (Ring): projects/porchpass.md
-      - CourtSide (Fire TV): projects/courtside.md
-      - StudyLoop (Bee): projects/studyloop.md
-      - Model Router (AWS Builder): projects/model-router.md
-      - friction-log-toolkit (Open Source): projects/friction-log-toolkit.md
-  - Deployment: deploy.md
-  - Demo Video: demo.md
-  - Devpost Submission: devpost-submission.md
+  - Solutions:
+      - All solutions: projects/index.md
+      - HomeOps (Alexa+):
+          - Overview: projects/homeops/index.md
+          - Friction log: projects/homeops/friction-log.md
+      - PorchPass (Ring):
+          - Overview: projects/porchpass/index.md
+          - Friction log: projects/porchpass/friction-log.md
+      - CourtSide (Fire TV):
+          - Overview: projects/courtside/index.md
+          - Friction log: projects/courtside/friction-log.md
+      - StudyLoop (Bee):
+          - Overview: projects/studyloop/index.md
+          - Friction log: projects/studyloop/friction-log.md
+      - Model Router (AWS Builder):
+          - Overview: projects/model-router/index.md
+          - Friction log: projects/model-router/friction-log.md
+      - friction-log-toolkit (Open Source):
+          - Overview: projects/friction-log-toolkit/index.md
+          - Friction log: projects/friction-log-toolkit/friction-log.md
+  - Ship:
+      - Deploying to AWS: deploy.md
+      - Demo video: demo.md
+      - Devpost submission: devpost-submission.md
+  - Building with Kiro: kiro.md
 
 markdown_extensions:
   - admonition
@@ -55,6 +72,10 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+      # GitHub-style heading anchors, so links written for GitHub work on the site too.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
